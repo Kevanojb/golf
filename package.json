@@ -1,3 +1,5 @@
+"predeploy": "npm run build",
+"deploy": "gh-pages -d dist"
 {
   "name": "den-league",
   "private": true,
