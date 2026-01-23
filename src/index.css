@@ -1,14 +1,7 @@
 @tailwind base;
 @tailwind components;
-/* ===== Kill Vite root background so glass can work ===== */
-html, body, #root {
-    background: transparent !important;
-  }
-  
-  /* Force golf image as true page background */
-  body {
-    background: url("/bg-golf.jpg") center / cover no-repeat fixed !important;
-  }
-  @tailwind utilities;
+@tailwind utilities;
+
+
 
 
