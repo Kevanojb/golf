@@ -12270,7 +12270,8 @@ function _pushUnique(arr, val) {
                 teeName: (tee?.teeName || tee?.name || tee?.label || "").toString(),
                 teeGender: (tee?.gender || p?.gender || "M").toString(),
                 teeLabel: (p?.teeLabel || p?.tee || p?.tee_name || "").toString(),
-                teeSlope: _safeNum(tee?.slope ?? tee?.slopeRating ?? parsed?.courseSlope ?? parsed?.slope ?? NaN, NaN),
+                teeSlope: _safeNum(
+                teeSlope: _safeNum(tee?.slope ?? tee?.Slope ?? tee?.slopeRating ?? parsed?.courseSlope ?? parsed?.slope ?? NaN,NaN),
                 teeRating: _safeNum(tee?.rating ?? tee?.courseRating ?? parsed?.courseRating ?? parsed?.rating ?? NaN, NaN),
                 slope: _safeNum(tee?.slope ?? tee?.slopeRating ?? parsed?.courseSlope ?? parsed?.slope ?? NaN, NaN),
                 rating: _safeNum(tee?.rating ?? tee?.courseRating ?? parsed?.courseRating ?? parsed?.rating ?? NaN, NaN),
@@ -12278,7 +12279,6 @@ function _pushUnique(arr, val) {
                 siPerHole: Array.isArray(tee?.si) ? tee.si.slice(0,18) : Array.isArray(tee?.SI) ? tee.SI.slice(0,18) : [],
                 startExact: _safeNum(p.handicap ?? p.startExact ?? p.handicapIndex ?? p.hcap ?? p.hi ?? NaN, NaN),
                 gender: (p?.gender || tee?.gender || "M").toString(),
-                teeSlope: _safeNum(tee?.slope ?? tee?.Slope ?? tee?.slopeRating ?? NaN, NaN),
                 perHole: _perHoleArr.slice(0, 18),
                 parsArr: pars.slice(0, 18),
                 siArr: siArr.slice(0, 18),
