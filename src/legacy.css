@@ -1226,7 +1226,6 @@ html{ -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 }
 
 /* --- UPGRADED VISUAL LAYER: "Sports Broadcast" Mode --- */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;900&display=swap');
 
 :root {
   --bg-deep: #0f172a;
