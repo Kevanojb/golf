@@ -1,6 +1,23 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
+// League routing (GitHub Pages hash routes): #/den-society or #/winter-league
+const APP_LEAGUE_SLUG = (() => {
+  try {
+    const hash = (typeof window !== "undefined" && window.location) ? (window.location.hash || "") : "";
+    const h = String(hash).replace(/^#\/?/, "").trim();
+    if (h) return h.split("/")[0];
+    const path = (typeof window !== "undefined" && window.location) ? (window.location.pathname || "") : "";
+    const parts = String(path).split("/").filter(Boolean);
+    return parts[1] || parts[0] || "den-society";
+  } catch {
+    return "den-society";
+  }
+})();
+const APP_LEAGUE_NAME = (APP_LEAGUE_SLUG === "winter-league") ? "Winter League" : "Den Society";
+const APP_LEAGUE_DISPLAY = (/league/i.test(APP_LEAGUE_NAME)) ? APP_LEAGUE_NAME : `${APP_LEAGUE_NAME} League`;
+
+
 // =========================
 // VITE RUNTIME HELPERS (module-scope)
 // Some helpers were previously declared inside blocks which makes them block-scoped in ES modules.
@@ -2447,7 +2464,7 @@ function Header({ eventName, statusMsg, courseName, view, setView }) {
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-lg md:text-xl font-extrabold tracking-tight text-squab-900 truncate">
-              {LEAGUE_DISPLAY} — Ultimate Edition
+              {APP_LEAGUE_DISPLAY} — Ultimate Edition
             </h1>
             <div className="text-[11px] text-neutral-500 truncate">
               {eventName || "Untitled Event"}
@@ -2528,7 +2545,7 @@ function SeasonPicker({ seasonsDef, seasonYear, setSeasonYear }) {
 
     // Brand it as the current league unless it already includes it
     const baseLower = base.toLowerCase();
-    if (!baseLower.includes(LEAGUE_NAME.toLowerCase())) base = `${LEAGUE_DISPLAY} ${base}`.trim();
+    if (!baseLower.includes(LEAGUE_NAME.toLowerCase())) base = `${APP_LEAGUE_DISPLAY} ${base}`.trim();
 
     return base || id || "";
   };
@@ -9569,7 +9586,7 @@ const DEEP_GUIDE_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>${LEAGUE_DISPLAY} — Golfer’s Guide</title>
+  <title>${APP_LEAGUE_DISPLAY} — Golfer’s Guide</title>
 
   <style>
     :root{
@@ -9959,7 +9976,7 @@ const DEEP_GUIDE_HTML = `<!doctype html>
           </svg>
         </div>
         <div style="min-width:0">
-          <h1>${LEAGUE_DISPLAY} — Golfer’s Guide</h1>
+          <h1>${APP_LEAGUE_DISPLAY} — Golfer’s Guide</h1>
           <p>What it does • How to use it • How it actually drops your scores</p>
         </div>
       </div>
