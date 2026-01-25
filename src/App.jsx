@@ -11738,10 +11738,25 @@ const [user, setUser] = useState(null);
         const SUPA_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
         // Supabase config (Society Golf)
-const BUCKET = "den-events";
+function getRouteSlug() {
+  const h = (window.location.hash || "").replace(/^#\/?/, "");
+  if (h) return h.split("/")[0] || "den-society";
+  const parts = window.location.pathname.split("/").filter(Boolean);
+  // GitHub Pages base path: /den-society-vite/<slug>
+  return parts[1] || parts[0] || "den-society";
+}
+const ROUTE_SLUG = getRouteSlug();
+
+// Buckets (current setup: separate buckets per league)
+const BUCKET = ROUTE_SLUG === "winter-league" ? "winter_league" : "den-events";
+
 const STANDINGS_TABLE = "standings";
-const COMPETITION = "season";
-const PREFIX = "events"; // keep the same unless you store Society Golf files under a different folder
+
+// Default competition per league route (still overrideable in code later if needed)
+const COMPETITION = ROUTE_SLUG === "winter-league" ? "winter" : "season";
+
+// Storage prefix inside the bucket (empty = bucket root)
+const PREFIX = "";
 
 // Admin player visibility (hide / re-include players)
 const ADMIN_PW_OK_LS_KEY = "den_admin_pw_ok_v1";
@@ -11749,7 +11764,7 @@ const ADMIN_PASSWORD = (typeof window !== "undefined" && window.DEN_ADMIN_PASSWO
   ? String(window.DEN_ADMIN_PASSWORD)
   : "Society Golf";
 const VIS_LS_KEY = "den_hidden_players_v1";   // changed (optional but recommended)
-const ADMIN_VIS_PATH = `${PREFIX}/admin/player_visibility.json`;
+const ADMIN_VIS_PATH = PREFIX ? `${PREFIX}/admin/player_visibility.json` : `admin/player_visibility.json`;
 
 
 
