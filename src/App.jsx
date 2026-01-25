@@ -2446,9 +2446,7 @@ function Header({ eventName, statusMsg, courseName, view, setView }) {
       <div className="glass-card app-topbar shadow-md">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="text-lg md:text-xl font-extrabold tracking-tight text-squab-900 truncate">
-              Den Society League — Ultimate Edition
-            </h1>
+            <h1 className="text-lg md:text-xl font-extrabold tracking-tight text-squab-900 truncate">{LEAGUE_DISPLAY} — Ultimate Edition</h1>
             <div className="text-[11px] text-neutral-500 truncate">
               {eventName || "Untitled Event"}
             </div>
@@ -9569,7 +9567,7 @@ const DEEP_GUIDE_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Den Society League — Golfer’s Guide</title>
+  <title>${LEAGUE_DISPLAY} — Golfer’s Guide</title>
 
   <style>
     :root{
@@ -9959,7 +9957,7 @@ const DEEP_GUIDE_HTML = `<!doctype html>
           </svg>
         </div>
         <div style="min-width:0">
-          <h1>Den Society League — Golfer’s Guide</h1>
+          <h1>${LEAGUE_DISPLAY} — Golfer’s Guide</h1>
           <p>What it does • How to use it • How it actually drops your scores</p>
         </div>
       </div>
@@ -10568,7 +10566,7 @@ function GuideModePicker({ guideMode, setGuideMode }) {
 function GuideView({ setView }) {
   const [guideMode, setGuideMode] = React.useState(() => {
     try {
-      return localStorage.getItem(`${LEAGUE_SLUG}_guideMode_v1`) || "simple";
+      return localStorage.getItem("denGuideMode") || "simple";
     } catch (e) {
       return "simple";
     }
@@ -10576,7 +10574,7 @@ function GuideView({ setView }) {
 
   React.useEffect(() => {
     try {
-      localStorage.setItem(`${LEAGUE_SLUG}_guideMode_v1`, guideMode);
+      localStorage.setItem("denGuideMode", guideMode);
     } catch (e) {}
   }, [guideMode]);
 
@@ -11768,6 +11766,9 @@ const LEAGUE_CFG =
     ? { bucket: "winter_league", competition: "winter", title: "Winter League", prefix: "events" }
     : { bucket: "den-events", competition: "season", title: "Den Society League", prefix: "events" };
 
+const LEAGUE_NAME = LEAGUE_CFG.title;
+const LEAGUE_DISPLAY = LEAGUE_CFG.title;
+
 const BUCKET = LEAGUE_CFG.bucket;
 const STANDINGS_TABLE = "standings";
 const COMPETITION = LEAGUE_CFG.competition;
@@ -11784,27 +11785,6 @@ const ADMIN_VIS_PATH = `${PREFIX}/admin/player_visibility.json`;
 
 
         const [client, setClient] = useState(null);
-        // Small in-memory cache for downloaded CSVs (per session)
-        const csvCacheRef = useRef(new Map());
-
-        const getCsvTextCached = async (bucket, path) => {
-          const key = `${bucket}:${path}`;
-          const cached = csvCacheRef.current.get(key);
-          if (typeof cached === "string") return cached;
-
-          const r = await client.storage.from(bucket).download(path);
-          if (r.error) throw new Error(r.error.message || "Download failed");
-          const text = await r.data.text();
-
-          // Tiny cache cap (avoid runaway memory if lots of files)
-          if (csvCacheRef.current.size > 50) {
-            const firstKey = csvCacheRef.current.keys().next().value;
-            csvCacheRef.current.delete(firstKey);
-          }
-          csvCacheRef.current.set(key, text);
-          return text;
-        };
-
         const [statusMsg, setStatusMsg] = useState("Connecting…");
         const [sharedGroups, setSharedGroups] = useState([]);
         
@@ -11820,10 +11800,10 @@ const [qaLaunch, setQaLaunch] = React.useState(false);
 
 // Player Progress / Player Report / Q&A: independent "Next Handicap Preview" mode (UI only)
 const [reportNextHcapMode, setReportNextHcapMode] = React.useState(() => {
-  try { return localStorage.getItem(`${LEAGUE_SLUG}_reportNextHcapMode_v1`) || "whs"; } catch(e){ return "whs"; }
+  try { return localStorage.getItem("den_reportNextHcapMode_v1") || "whs"; } catch(e){ return "whs"; }
 });
 React.useEffect(() => {
-  try { localStorage.setItem(`${LEAGUE_SLUG}_reportNextHcapMode_v1`, reportNextHcapMode); } catch(e){}
+  try { localStorage.setItem("den_reportNextHcapMode_v1", reportNextHcapMode); } catch(e){}
 }, [reportNextHcapMode]);
 // "All" or number as string (e.g. "5")
 
@@ -13270,52 +13250,70 @@ async function fetchSeasons(c) {
 
 async function refreshShared(c) {
           c = c || client; if (!c) return;
-
-          // One storage list call. We DO NOT download CSVs here (downloads only happen when user selects an event).
           const r = await c.storage.from(BUCKET).list(PREFIX, { limit: 1000, sortBy: { column: "name", order: "asc" } });
           if (r.error) { toast("Storage error: " + r.error.message); return; }
 
+          // Build file list
           const files = (r.data || [])
-            .filter((x) => x?.name && !String(x.name).startsWith(".") && String(x.name).toLowerCase().endsWith(".csv"))
-            .map((x) => {
-              const name = String(x.name);
-              const path = PREFIX ? `${PREFIX}/${name}` : name;
-              const dateMs = _extractDateMsFromPath(path) || null;
-              return {
-                name,
-                path,
-                // Metadata filled lazily on selection
-                dateMs,
-                courseName: "",
-                format: "",
-              };
-            });
+            .filter((x) => x?.name && !x.name.startsWith(".") && /\.csv$/i.test(x.name))
+            .map((x) => ({ 
+              name: x.name.replace(/\.csv$/i, ""), 
+              file: x.name, 
+              path: `${PREFIX}/${x.name}`,
+              dateMs: null
+            }));
+
+          // IMPORTANT: Dates live inside the CSV content (e.g. "Game 1,Nov 12 2025").
+          // So we cheaply download each file and extract a date from the header section.
+          // (If you ever want to optimise, we can do a server-side manifest table instead.)
+          for (const f of files) {
+            try {
+              const dl = await c.storage.from(BUCKET).download(f.path);
+              if (dl.error) continue;
+              const text = await dl.data.text();
+
+              // Date: extracted from in-CSV header or filename
+              f.dateMs = _extractDateMsFromCsvText(text) || _extractDateMsFromPath(f.file) || null;
+
+              // Season mapping (date-range based; uses public.seasons ranges for this competition)
+              f.seasonId = f.dateMs ? (seasonIdForDateMs(f.dateMs, seasonsDef) || null) : null;
+
+              // Course: the CSV already contains it — parse just once here so the picker can show a nice name.
+              try {
+                const parsed = parseSquabbitCSV(text);
+                f.courseName = parsed?.courseName || parsed?.internalCourseName || "";
+                // Optional: if your parser exposes format, surface it too (safe fallback).
+                f.format = parsed?.format || parsed?.gameFormat || parsed?.formatName || "";
+              } catch (e) {
+                // Ignore parsing failures here — the actual load step still validates.
+                f.courseName = f.courseName || "";
+                f.format = f.format || "";
+              }
+            } catch (e) { /* ignore */ }
+          }
 
           setSharedGroups(groupEventsByYear(files));
         }
         async function loadShared(item) {
           if (!client) { alert("Supabase client not ready"); return; }
-          try {
-            const text = await getCsvTextCached(BUCKET, item.path);
-            let parsed;
-            try { parsed = parseSquabbitCSV(text); } catch (err) { alert(err?.message || "Failed to parse CSV."); return; }
-
-            setPlayers(parsed.players || []);
-            setSelectedPlayer(parsed.players[0]?.name || "");
-            setEventName(item.name);
-            setCurrentFile(null);
-
-            const dbCourseFound = await autoDetectAndLoadCourse(parsed.courseName || item.file);
-            if (!dbCourseFound) {
-              setCourseTees(parsed.courseTees || []);
-              setCourseName(parsed.courseName || "");
-            }
-
-            setView("event");
-            toast("Event loaded");
-          } catch (e) {
-            alert("Download failed: " + (e?.message || String(e)));
+          const r = await client.storage.from(BUCKET).download(item.path);
+          if (r.error) { alert("Download failed: " + r.error.message); return; }
+          const text = await r.data.text();
+          let parsed;
+          try { parsed = parseSquabbitCSV(text); } catch (err) { alert(err?.message || "Failed to parse CSV."); return; }
+          setPlayers(parsed.players || []);
+          setSelectedPlayer(parsed.players[0]?.name || "");
+          setEventName(item.name);
+          setCurrentFile(null);
+          
+          const dbCourseFound = await autoDetectAndLoadCourse(parsed.courseName || item.file);
+          if (!dbCourseFound) {
+             setCourseTees(parsed.courseTees || []);
+             setCourseName(parsed.courseName || "");
           }
+          
+          setView("event");
+          toast("Event loaded");
         }
 
 
