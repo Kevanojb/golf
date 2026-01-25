@@ -2447,7 +2447,7 @@ function Header({ eventName, statusMsg, courseName, view, setView }) {
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-lg md:text-xl font-extrabold tracking-tight text-squab-900 truncate">
-              Den Society League — Ultimate Edition
+              Golf Society League — Ultimate Edition
             </h1>
             <div className="text-[11px] text-neutral-500 truncate">
               {eventName || "Untitled Event"}
@@ -2507,7 +2507,7 @@ function SoloNav({ setView, left = null, title = null, right = null }) {
 
 
 function SeasonPicker({ seasonsDef, seasonYear, setSeasonYear }) {
-  // Build nice labels, especially for Den Society seasons that span two calendar years.
+  // Build nice labels, especially for Golf Society seasons that span two calendar years.
   const labelFor = (s) => {
     const raw = String((s && s.label) ? s.label : "").trim();
     const id = String(s?.season_id ?? "").trim();
@@ -2526,9 +2526,9 @@ function SeasonPicker({ seasonsDef, seasonYear, setSeasonYear }) {
       else base = id || "";
     }
 
-    // Brand it as Den Society League unless it already includes it
+    // Brand it as Golf Society League unless it already includes it
     const baseLower = base.toLowerCase();
-    if (!baseLower.includes('Den Society')) base = `Den Society League ${base}`.trim();
+    if (!baseLower.includes('Golf Society')) base = `Golf Society League ${base}`.trim();
 
     return base || id || "";
   };
@@ -9569,7 +9569,7 @@ const DEEP_GUIDE_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Den Society League — Golfer’s Guide</title>
+  <title>Golf Society League — Golfer’s Guide</title>
 
   <style>
     :root{
@@ -9939,7 +9939,7 @@ const DEEP_GUIDE_HTML = `<!doctype html>
 <!-- iPhone: run as a standalone (full-screen) web app when launched from Home Screen -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Den Society League">
+<meta name="apple-mobile-web-app-title" content="Golf Society League">
 
 <!-- PWA manifest + app icons -->
 <link rel="manifest" href="manifest.webmanifest">
@@ -9959,7 +9959,7 @@ const DEEP_GUIDE_HTML = `<!doctype html>
           </svg>
         </div>
         <div style="min-width:0">
-          <h1>Den Society League — Golfer’s Guide</h1>
+          <h1>Golf Society League — Golfer’s Guide</h1>
           <p>What it does • How to use it • How it actually drops your scores</p>
         </div>
       </div>
@@ -10588,7 +10588,7 @@ function GuideView({ setView }) {
       <GuideModePicker guideMode={guideMode} setGuideMode={setGuideMode} />
 <div className="rounded-2xl border border-squab-200 bg-white shadow-sm overflow-hidden">
           <iframe
-            title="Den Society League — In-depth guide"
+            title="Golf Society League — In-depth guide"
             className="w-full"
             style={{ height: "78vh" }}
             srcDoc={DEEP_GUIDE_HTML}
@@ -11768,7 +11768,7 @@ const PREFIX = "events";
 const ADMIN_PW_OK_LS_KEY = "den_admin_pw_ok_v1";
 const ADMIN_PASSWORD = (typeof window !== "undefined" && window.DEN_ADMIN_PASSWORD)
   ? String(window.DEN_ADMIN_PASSWORD)
-  : "Den Society League";
+  : "Golf Society League";
 const VIS_LS_KEY = "den_hidden_players_v1";   // changed (optional but recommended)
 const ADMIN_VIS_PATH = PREFIX ? `${PREFIX}/admin/player_visibility.json` : "admin/player_visibility.json";
 
@@ -12889,7 +12889,7 @@ setSeasonRounds(rounds);
         const [courseList, setCourseList] = useState([]);
         const [players, setPlayers] = useState([]);
         const [season, setSeason] = useState({});
-        const [eventName, setEventName] = useState("Den Society League");
+        const [eventName, setEventName] = useState("Golf Society League");
         const [courseTees, setCourseTees] = useState([]);
         const [courseName, setCourseName] = useState("");
         const [currentFile, setCurrentFile] = useState(null);
