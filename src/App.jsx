@@ -2446,7 +2446,9 @@ function Header({ eventName, statusMsg, courseName, view, setView }) {
       <div className="glass-card app-topbar shadow-md">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
-            <h1 className="text-lg md:text-xl font-extrabold tracking-tight text-squab-900 truncate">{LEAGUE_DISPLAY} — Ultimate Edition</h1>
+            <h1 className="text-lg md:text-xl font-extrabold tracking-tight text-squab-900 truncate">
+              Den Society League — Ultimate Edition
+            </h1>
             <div className="text-[11px] text-neutral-500 truncate">
               {eventName || "Untitled Event"}
             </div>
@@ -9567,7 +9569,7 @@ const DEEP_GUIDE_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>${LEAGUE_DISPLAY} — Golfer’s Guide</title>
+  <title>Den Society League — Golfer’s Guide</title>
 
   <style>
     :root{
@@ -9957,7 +9959,7 @@ const DEEP_GUIDE_HTML = `<!doctype html>
           </svg>
         </div>
         <div style="min-width:0">
-          <h1>${LEAGUE_DISPLAY} — Golfer’s Guide</h1>
+          <h1>Den Society League — Golfer’s Guide</h1>
           <p>What it does • How to use it • How it actually drops your scores</p>
         </div>
       </div>
@@ -11765,9 +11767,6 @@ const LEAGUE_CFG =
   LEAGUE_SLUG === "winter-league"
     ? { bucket: "winter_league", competition: "winter", title: "Winter League", prefix: "events" }
     : { bucket: "den-events", competition: "season", title: "Den Society League", prefix: "events" };
-
-const LEAGUE_NAME = LEAGUE_CFG.title;
-const LEAGUE_DISPLAY = LEAGUE_CFG.title;
 
 const BUCKET = LEAGUE_CFG.bucket;
 const STANDINGS_TABLE = "standings";
