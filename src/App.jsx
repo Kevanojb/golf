@@ -3378,20 +3378,48 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
 
 // Flatten season rounds into per-player history rows
 const seasonPlayerRows = [];
-const roundStats = []; // per-round field averages (for course/difficulty normalization)
+const roundStats = [];       // overall field averages (for "typical day" difficulty)
+const roundGroupStats = [];  // per-round averages per tee/gender group (for fair baselines)
+
+const _groupKeyFromPlayer = (p) => {
+  const tl = String(p?.teeLabel ?? p?.tee ?? p?.tee_name ?? p?.teeName ?? "").trim();
+  if (tl) return ("tee:" + tl.toLowerCase());
+  const g = String(p?.gender ?? p?.sex ?? "").trim().toUpperCase();
+  if (g === "F" || g === "W" || g === "FEMALE" || g === "WOMEN") return "gender:F";
+  return "gender:M";
+};
+
 seasonArr.forEach(sr => {
   const parsed = sr && sr.parsed ? sr.parsed : sr; // tolerate already-parsed shapes
   const players = (parsed && Array.isArray(parsed.players)) ? parsed.players : [];
   const dateMs = Number.isFinite(sr?.dateMs) ? sr.dateMs : (Number.isFinite(parsed?.dateMs) ? parsed.dateMs : null);
 
-  // Round field average Stableford points (used to normalize player results across "easy/hard" days)
-  const ptsList = players
-    .map(p => Number(p?.pts ?? p?.points ?? p?.stableford ?? p?.sf ?? p?.totalPoints ?? p?.netPoints))
-    .filter(n => Number.isFinite(n));
-  const roundAvg = ptsList.length ? (ptsList.reduce((a,b)=>a+b,0) / ptsList.length) : 36;
+  // Round averages: overall + per group (teeLabel preferred, else gender)
+  const ptsAll = [];
+  const ptsByGroup = new Map(); // groupKey -> number[]
+  for (const p of players) {
+    const pts = Number(p?.pts ?? p?.points ?? p?.stableford ?? p?.sf ?? p?.totalPoints ?? p?.netPoints);
+    if (!Number.isFinite(pts)) continue;
+    ptsAll.push(pts);
+    const gk = _groupKeyFromPlayer(p);
+    if (!ptsByGroup.has(gk)) ptsByGroup.set(gk, []);
+    ptsByGroup.get(gk).push(pts);
+  }
+
+  const roundAvg = ptsAll.length ? (ptsAll.reduce((a,b)=>a+b,0) / ptsAll.length) : 36;
+
+  // compute group averages for this round
+  const groupAvgByKey = new Map();
+  for (const [gk, arr] of ptsByGroup.entries()) {
+    const avg = arr.length ? (arr.reduce((a,b)=>a+b,0) / arr.length) : roundAvg;
+    groupAvgByKey.set(gk, avg);
+  }
 
   if (Number.isFinite(dateMs)) {
-    roundStats.push({ dateMs, roundAvg, n: ptsList.length });
+    roundStats.push({ dateMs, roundAvg, n: ptsAll.length });
+    for (const [gk, avg] of groupAvgByKey.entries()) {
+      roundGroupStats.push({ dateMs, groupKey: gk, groupAvg: avg, n: (ptsByGroup.get(gk)||[]).length });
+    }
   }
 
   players.forEach(p => {
@@ -3404,7 +3432,12 @@ seasonArr.forEach(sr => {
     // handicap at the time (exact HI)
     const hi = Number(p?.startExact ?? p?.index ?? p?.hi ?? p?.handicap ?? p?.exact ?? p?.hiExact);
 
-    seasonPlayerRows.push({ k, name: nm, pts, hi, dateMs, roundAvg });
+    const gender = String(p?.gender ?? p?.sex ?? "").trim().toUpperCase() || "M";
+    const teeLabel = String(p?.teeLabel ?? p?.tee ?? p?.tee_name ?? p?.teeName ?? "").trim();
+    const groupKey = _groupKeyFromPlayer(p);
+    const groupAvg = groupAvgByKey.get(groupKey) ?? roundAvg;
+
+    seasonPlayerRows.push({ k, name: nm, pts, hi, dateMs, roundAvg, gender, teeLabel, groupKey, groupAvg });
     leagueKeys.add(k);
   });
 });
@@ -3453,6 +3486,43 @@ for (let i=0;i<_rounds.length;i++){
 // baseline sigma: round-to-round swing in field scoring; keep it in a sensible band
 const leagueBaseSigma = Math.max(0.8, Math.min(4.0, (bVarW>0 ? Math.sqrt(bVarS/bVarW) : 1.6)));
 
+// ---- Group baselines (teeLabel preferred, else gender) ----
+// We treat "next game" as a draw from the historical mix of difficulty for each group.
+// This avoids comparing men/women (or tee sets) as if they played the same setup.
+const groupBaseline = new Map(); // groupKey -> { mu, sigma, nRounds }
+const groupRounds = new Map();   // groupKey -> [{dateMs, groupAvg}]
+for (const rg of roundGroupStats) {
+  if (!Number.isFinite(rg?.dateMs) || !Number.isFinite(rg?.groupAvg)) continue;
+  const gk = String(rg.groupKey || "");
+  if (!gk) continue;
+  if (!groupRounds.has(gk)) groupRounds.set(gk, []);
+  groupRounds.get(gk).push({ dateMs: rg.dateMs, avg: rg.groupAvg });
+}
+for (const [gk, arr] of groupRounds.entries()) {
+  arr.sort((a,b)=>a.dateMs-b.dateMs);
+  const last = arr.slice(-20);
+  const decayG = 0.9;
+
+  let w=0, s=0;
+  for (let i=0;i<last.length;i++){
+    const age=(last.length-1)-i;
+    const ww=Math.pow(decayG, age);
+    w += ww;
+    s += ww * last[i].avg;
+  }
+  const mu = (w>0 ? (s/w) : leagueBaseMu);
+
+  let vw=0, vs=0;
+  for (let i=0;i<last.length;i++){
+    const age=(last.length-1)-i;
+    const ww=Math.pow(decayG, age);
+    vw += ww;
+    vs += ww * Math.pow(last[i].avg - mu, 2);
+  }
+  const sigma = Math.max(0.6, Math.min(4.5, (vw>0 ? Math.sqrt(vs/vw) : leagueBaseSigma)));
+  groupBaseline.set(gk, { mu, sigma, nRounds: last.length });
+}
+
 // ---- Build per-player model rows ----
 const rows = Array.from(leagueKeys).map(k => {
   const cur = byKeyCurrent.get(k);
@@ -3460,17 +3530,19 @@ const rows = Array.from(leagueKeys).map(k => {
 
   const name = cur ? String(cur.name || "") : (hist.length ? String(hist[hist.length-1].name || "") : "");
 
-  // residual history = player points minus that round's field average (normalizes for easy/hard rounds)
+  // residual history = player points minus that round's GROUP average (teeLabel preferred, else gender)
+// This keeps men/women (and different tee sets) comparable without needing future course info.
   const resHist = hist
     .map(h => {
       const pts = Number(h.pts);
-      const ra = Number(h.roundAvg);
-      if (!Number.isFinite(pts) || !Number.isFinite(ra)) return null;
-      return { res: (pts - ra), pts, ra, dateMs: h.dateMs, hi: h.hi };
+      const ga = Number(h.groupAvg);
+      if (!Number.isFinite(pts) || !Number.isFinite(ga)) return null;
+      return { res: (pts - ga), pts, ga, dateMs: h.dateMs, hi: h.hi, groupKey: h.groupKey };
     })
     .filter(Boolean);
 
   const last12 = resHist.slice(-12); // chronological already
+ // chronological already
 
   // Exponentially weighted mean of residuals (recent form matters more)
   const decay = 0.85;
@@ -3537,15 +3609,24 @@ const rows = Array.from(leagueKeys).map(k => {
   // Handicap movement used to adjust expected points (≈ 1 pt per HI stroke)
   const deltaModelHI = nextExactNum - prevStartExact;
 
-  // Expected points: league baseline + personal residual + HI movement, clamped.
-  const expPts = clamp(leagueBaseMu + resMu + deltaModelHI, 18, 56);
+  // Expected points: GROUP baseline (tee/gender) + personal residual + HI movement, clamped.
+// (We don't know the future course yet, so we draw "next round difficulty" from historical group baselines.)
+  const playerGroupKey =
+    (last12.length ? String(last12[last12.length-1].groupKey || "") :
+      (hist.length ? String(hist[hist.length-1]?.groupKey || "") : "")) || "gender:M";
+
+  const gb = groupBaseline.get(playerGroupKey);
+  const groupMu = gb && Number.isFinite(Number(gb.mu)) ? Number(gb.mu) : leagueBaseMu;
+  const groupSigma = gb && Number.isFinite(Number(gb.sigma)) ? Number(gb.sigma) : leagueBaseSigma;
+
+  const expPts = clamp(groupMu + resMu + deltaModelHI, 18, 56);
 
   const deltaHI = nextExactNum - startExact;
 
   // Model params for display
   const formMu = expPts - 36;
   // total uncertainty combines "day difficulty" + player volatility
-  const totalSigma = Math.sqrt((leagueBaseSigma*leagueBaseSigma) + (resSigma*resSigma));
+  const totalSigma = Math.sqrt((groupSigma*groupSigma) + (resSigma*resSigma));
   const formSigma = Math.max(1.5, Math.min(9.0, totalSigma));
 
   return {
@@ -3559,10 +3640,12 @@ const rows = Array.from(leagueKeys).map(k => {
     formSigma,
     formTrend,
     // components used by the simulator
-    modelBaseMu: leagueBaseMu,
-    modelBaseSigma: leagueBaseSigma,
+    modelGroupKey: playerGroupKey,
+    modelGroupMu: groupMu,
+    modelGroupSigma: groupSigma,
     modelResMu: resMu,
     modelResSigma: resSigma,
+
     roundsUsed: n
   };
 }).filter(r => r && r.name);
@@ -3620,10 +3703,7 @@ const rows = Array.from(leagueKeys).map(k => {
             const top3 = new Array(rows.length).fill(0);
             const top4 = new Array(rows.length).fill(0);
 
-            const baseMu = (rows[0] && Number.isFinite(Number(rows[0].modelBaseMu))) ? Number(rows[0].modelBaseMu) : 36;
-const baseSigma = (rows[0] && Number.isFinite(Number(rows[0].modelBaseSigma))) ? Number(rows[0].modelBaseSigma) : 1.6;
-
-// Precompute per-player mean components + individual sigma
+            // Precompute per-player mean components + individual sigma
 const addMu = rows.map(r => {
   const rm = Number.isFinite(Number(r.modelResMu)) ? Number(r.modelResMu) : 0;
   const dh = Number.isFinite(Number(r.deltaModelHI)) ? Number(r.deltaModelHI) : 0;
@@ -3633,13 +3713,33 @@ const indSig = rows.map(r => {
   const s = Number.isFinite(Number(r.modelResSigma)) ? Number(r.modelResSigma) : 4.0;
   return Math.max(1.0, Math.min(8.0, s));
 });
+
+// Build unique group keys + their baselines
+const groupKeys = Array.from(new Set(rows.map(r => String(r.modelGroupKey || "gender:M"))));
+const groupMuMap = {};
+const groupSigmaMap = {};
+for (const gk of groupKeys) {
+  // pick first row in that group (they all carry same group baseline)
+  const rr = rows.find(r => String(r.modelGroupKey || "gender:M") === gk);
+  const mu = rr && Number.isFinite(Number(rr.modelGroupMu)) ? Number(rr.modelGroupMu) : 36;
+  const sg = rr && Number.isFinite(Number(rr.modelGroupSigma)) ? Number(rr.modelGroupSigma) : 1.6;
+  groupMuMap[gk] = mu;
+  groupSigmaMap[gk] = sg;
+}
+
 for (let s = 0; s < sims; s++){
+
               // simulate points for each player
-              // Shared "day difficulty" draw (correlates all players a bit)
-              const dayBase = baseMu + randn()*baseSigma;
+              // Group-specific "day difficulty" draws (men/women or tee sets), correlated within each group
+              const dayByGroup = {};
+              for (const gk of groupKeys) {
+                dayByGroup[gk] = groupMuMap[gk] + randn()*groupSigmaMap[gk];
+              }
 
               const simPts = rows.map((r,i) => {
-                const p = dayBase + addMu[i] + randn()*indSig[i];
+                const gk = String(r.modelGroupKey || "gender:M");
+                const base = (gk in dayByGroup) ? dayByGroup[gk] : (groupMuMap["gender:M"] ?? 36);
+                const p = base + addMu[i] + randn()*indSig[i];
                 // clamp to plausible stableford range
                 return Math.max(0, Math.min(60, p));
               });
