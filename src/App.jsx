@@ -2447,7 +2447,7 @@ function Header({ eventName, statusMsg, courseName, view, setView }) {
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <h1 className="text-lg md:text-xl font-extrabold tracking-tight text-squab-900 truncate">
-              Golf Society League — Ultimate Edition
+              Den Society League — Ultimate Edition
             </h1>
             <div className="text-[11px] text-neutral-500 truncate">
               {eventName || "Untitled Event"}
@@ -2507,7 +2507,7 @@ function SoloNav({ setView, left = null, title = null, right = null }) {
 
 
 function SeasonPicker({ seasonsDef, seasonYear, setSeasonYear }) {
-  // Build nice labels, especially for Golf Society seasons that span two calendar years.
+  // Build nice labels, especially for Den Society seasons that span two calendar years.
   const labelFor = (s) => {
     const raw = String((s && s.label) ? s.label : "").trim();
     const id = String(s?.season_id ?? "").trim();
@@ -2526,9 +2526,9 @@ function SeasonPicker({ seasonsDef, seasonYear, setSeasonYear }) {
       else base = id || "";
     }
 
-    // Brand it as Golf Society League unless it already includes it
+    // Brand it as Den Society League unless it already includes it
     const baseLower = base.toLowerCase();
-    if (!baseLower.includes('Golf Society')) base = `Golf Society League ${base}`.trim();
+    if (!baseLower.includes('Den Society')) base = `Den Society League ${base}`.trim();
 
     return base || id || "";
   };
@@ -3378,10 +3378,21 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
 
 // Flatten season rounds into per-player history rows
 const seasonPlayerRows = [];
+const roundStats = []; // per-round field averages (for course/difficulty normalization)
 seasonArr.forEach(sr => {
   const parsed = sr && sr.parsed ? sr.parsed : sr; // tolerate already-parsed shapes
   const players = (parsed && Array.isArray(parsed.players)) ? parsed.players : [];
   const dateMs = Number.isFinite(sr?.dateMs) ? sr.dateMs : (Number.isFinite(parsed?.dateMs) ? parsed.dateMs : null);
+
+  // Round field average Stableford points (used to normalize player results across "easy/hard" days)
+  const ptsList = players
+    .map(p => Number(p?.pts ?? p?.points ?? p?.stableford ?? p?.sf ?? p?.totalPoints ?? p?.netPoints))
+    .filter(n => Number.isFinite(n));
+  const roundAvg = ptsList.length ? (ptsList.reduce((a,b)=>a+b,0) / ptsList.length) : 36;
+
+  if (Number.isFinite(dateMs)) {
+    roundStats.push({ dateMs, roundAvg, n: ptsList.length });
+  }
 
   players.forEach(p => {
     const nm = String(p?.name || p?.player || p?.playerName || "").trim();
@@ -3393,11 +3404,10 @@ seasonArr.forEach(sr => {
     // handicap at the time (exact HI)
     const hi = Number(p?.startExact ?? p?.index ?? p?.hi ?? p?.handicap ?? p?.exact ?? p?.hiExact);
 
-    seasonPlayerRows.push({ k, name: nm, pts, hi, dateMs });
+    seasonPlayerRows.push({ k, name: nm, pts, hi, dateMs, roundAvg });
     leagueKeys.add(k);
   });
 });
-
 // Ensure current-round players are included even if season is empty
 byKeyCurrent.forEach((_, k) => leagueKeys.add(k));
 
@@ -3416,34 +3426,97 @@ for (const arr of histByKey.values()) {
   });
 }
 
+// ---- League baseline (captures "course/day difficulty") ----
+const _rounds = roundStats
+  .filter(r => Number.isFinite(r?.dateMs) && Number.isFinite(r?.roundAvg))
+  .sort((a,b)=>a.dateMs-b.dateMs)
+  .slice(-20);
+
+// exponentially weighted mean/variance for round average points
+const baseDecay = 0.9;
+let bW = 0, bS = 0;
+for (let i=0;i<_rounds.length;i++){
+  const age = (_rounds.length-1)-i;
+  const w = Math.pow(baseDecay, age);
+  bW += w;
+  bS += w * _rounds[i].roundAvg;
+}
+const leagueBaseMu = (bW>0 ? (bS/bW) : 36);
+
+let bVarW = 0, bVarS = 0;
+for (let i=0;i<_rounds.length;i++){
+  const age = (_rounds.length-1)-i;
+  const w = Math.pow(baseDecay, age);
+  bVarW += w;
+  bVarS += w * Math.pow(_rounds[i].roundAvg - leagueBaseMu, 2);
+}
+// baseline sigma: round-to-round swing in field scoring; keep it in a sensible band
+const leagueBaseSigma = Math.max(0.8, Math.min(4.0, (bVarW>0 ? Math.sqrt(bVarS/bVarW) : 1.6)));
+
+// ---- Build per-player model rows ----
 const rows = Array.from(leagueKeys).map(k => {
   const cur = byKeyCurrent.get(k);
   const hist = histByKey.get(k) || [];
 
   const name = cur ? String(cur.name || "") : (hist.length ? String(hist[hist.length-1].name || "") : "");
 
-  // pull up to last 12 point totals (chronological)
-  const ptsHist = hist.map(h => Number(h.pts)).filter(n => Number.isFinite(n));
-  const last12 = ptsHist.slice(-12);
+  // residual history = player points minus that round's field average (normalizes for easy/hard rounds)
+  const resHist = hist
+    .map(h => {
+      const pts = Number(h.pts);
+      const ra = Number(h.roundAvg);
+      if (!Number.isFinite(pts) || !Number.isFinite(ra)) return null;
+      return { res: (pts - ra), pts, ra, dateMs: h.dateMs, hi: h.hi };
+    })
+    .filter(Boolean);
 
-  // exponentially weighted mean of points
+  const last12 = resHist.slice(-12); // chronological already
+
+  // Exponentially weighted mean of residuals (recent form matters more)
   const decay = 0.85;
-  let wsum = 0, psum = 0;
+  let wsum = 0, rsum = 0;
   for (let i=0;i<last12.length;i++){
     const age = (last12.length-1)-i;
     const w = Math.pow(decay, age);
     wsum += w;
-    psum += w * last12[i];
+    rsum += w * last12[i].res;
   }
-  const meanPts = wsum>0 ? (psum/wsum) : (cur ? Number(cur.pts||cur.points||cur.PTS||36) : 36);
+  const rawResMu = wsum>0 ? (rsum/wsum) : 0;
 
-  // volatility from history, default 4
-  let varSum = 0, nVar = 0;
+  // Small-sample shrinkage toward 0 (league-average) so newcomers don't get silly odds
+  const n = last12.length;
+  const shrink = n / (n + 6); // 0..1
+  const resMu = rawResMu * shrink;
+
+  // Weighted residual sigma (with a gentle prior)
+  let vW = 0, vS = 0;
   for (let i=0;i<last12.length;i++){
-    varSum += Math.pow(last12[i]-meanPts, 2);
-    nVar++;
+    const age = (last12.length-1)-i;
+    const w = Math.pow(decay, age);
+    vW += w;
+    vS += w * Math.pow(last12[i].res - rawResMu, 2);
   }
-  const sigma = nVar>1 ? Math.sqrt(varSum/(nVar-1)) : 4.0;
+  const rawResSigma = (vW>0 ? Math.sqrt(vS/vW) : 3.8);
+  const resSigma = Math.max(1.2, Math.min(7.5, (rawResSigma*(0.6+0.4*shrink)) + (1-shrink)*3.0));
+
+  // Trend (points per round) from weighted linear regression on residuals
+  let formTrend = 0;
+  if (n >= 3) {
+    let sw=0, sx=0, sy=0, sxx=0, sxy=0;
+    for (let i=0;i<n;i++){
+      const age = (n-1)-i;
+      const w = Math.pow(decay, age);
+      const x = i;           // 0..n-1 (older -> smaller i)
+      const y = last12[i].res;
+      sw += w; sx += w*x; sy += w*y; sxx += w*x*x; sxy += w*x*y;
+    }
+    const denom = (sw*sxx - sx*sx);
+    if (Math.abs(denom) > 1e-9) {
+      formTrend = (sw*sxy - sx*sy)/denom; // residual points per round
+      // clamp trend to avoid silly extrapolation
+      formTrend = Math.max(-2.5, Math.min(2.5, formTrend));
+    }
+  }
 
   // start handicap: prefer current row's startExact, else last known from history
   const lastHist = hist.length ? hist[hist.length-1] : null;
@@ -3464,27 +3537,36 @@ const rows = Array.from(leagueKeys).map(k => {
   // Handicap movement used to adjust expected points (≈ 1 pt per HI stroke)
   const deltaModelHI = nextExactNum - prevStartExact;
 
-  // Expected points: baseline from form mean, plus HI movement, then clamp to plausible range.
-  const expPts = clamp(meanPts + deltaModelHI, 20, 54);
-
+  // Expected points: league baseline + personal residual + HI movement, clamped.
+  const expPts = clamp(leagueBaseMu + resMu + deltaModelHI, 18, 56);
 
   const deltaHI = nextExactNum - startExact;
 
-  // Model params
+  // Model params for display
   const formMu = expPts - 36;
-  const formSigma = Math.max(1.5, Math.min(8.0, sigma));
+  // total uncertainty combines "day difficulty" + player volatility
+  const totalSigma = Math.sqrt((leagueBaseSigma*leagueBaseSigma) + (resSigma*resSigma));
+  const formSigma = Math.max(1.5, Math.min(9.0, totalSigma));
 
   return {
     name,
     startExact,
     nextExactNum,
     deltaHI,
+    deltaModelHI,
     expPts,
     formMu,
     formSigma,
-    roundsUsed: last12.length
+    formTrend,
+    // components used by the simulator
+    modelBaseMu: leagueBaseMu,
+    modelBaseSigma: leagueBaseSigma,
+    modelResMu: resMu,
+    modelResSigma: resSigma,
+    roundsUsed: n
   };
 }).filter(r => r && r.name);
+
 
 
             // Deterministic PRNG (seeded from current filtered data + next handicap mode)
@@ -3538,22 +3620,26 @@ const rows = Array.from(leagueKeys).map(k => {
             const top3 = new Array(rows.length).fill(0);
             const top4 = new Array(rows.length).fill(0);
 
-            const exp = rows.map(r => {
-              const base = (Number.isFinite(Number(r.expPts)) ? Number(r.expPts) : 36);
-              const startHI = (Number.isFinite(Number(r.startExact)) ? Number(r.startExact) : 0);
-              const nextRaw = (Number.isFinite(Number(r.nextExactNum)) ? Number(r.nextExactNum) : startHI);
-              const nextHI = Math.max(0, Math.min(36, nextRaw));
-              const deltaHI = nextHI - startHI;
-              // Stableford is net: ~1 point per stroke. Apply delta directly, then clamp to plausible range.
-              const adj = base + deltaHI;
-              return Math.max(20, Math.min(50, adj));
-            });
-            const sig = rows.map(r => (Number.isFinite(Number(r.formSigma)) ? Math.max(1.0, Number(r.formSigma)) : 4.0));
+            const baseMu = (rows[0] && Number.isFinite(Number(rows[0].modelBaseMu))) ? Number(rows[0].modelBaseMu) : 36;
+const baseSigma = (rows[0] && Number.isFinite(Number(rows[0].modelBaseSigma))) ? Number(rows[0].modelBaseSigma) : 1.6;
 
-            for (let s = 0; s < sims; s++){
+// Precompute per-player mean components + individual sigma
+const addMu = rows.map(r => {
+  const rm = Number.isFinite(Number(r.modelResMu)) ? Number(r.modelResMu) : 0;
+  const dh = Number.isFinite(Number(r.deltaModelHI)) ? Number(r.deltaModelHI) : 0;
+  return rm + dh;
+});
+const indSig = rows.map(r => {
+  const s = Number.isFinite(Number(r.modelResSigma)) ? Number(r.modelResSigma) : 4.0;
+  return Math.max(1.0, Math.min(8.0, s));
+});
+for (let s = 0; s < sims; s++){
               // simulate points for each player
+              // Shared "day difficulty" draw (correlates all players a bit)
+              const dayBase = baseMu + randn()*baseSigma;
+
               const simPts = rows.map((r,i) => {
-                const p = exp[i] + randn()*sig[i];
+                const p = dayBase + addMu[i] + randn()*indSig[i];
                 // clamp to plausible stableford range
                 return Math.max(0, Math.min(60, p));
               });
@@ -3590,7 +3676,7 @@ const rows = Array.from(leagueKeys).map(k => {
                 winPct: w,
                 top3Pct: t3,
                 top4Pct: t4,
-                expPts: exp[i],
+                expPts: (Number.isFinite(Number(r.expPts)) ? Number(r.expPts) : Math.max(18, Math.min(56, baseMu + addMu[i]))),
                 muAdj,
                 trend: tr,
                 trendTag,
@@ -9569,7 +9655,7 @@ const DEEP_GUIDE_HTML = `<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <title>Golf Society League — Golfer’s Guide</title>
+  <title>Den Society League — Golfer’s Guide</title>
 
   <style>
     :root{
@@ -9939,7 +10025,7 @@ const DEEP_GUIDE_HTML = `<!doctype html>
 <!-- iPhone: run as a standalone (full-screen) web app when launched from Home Screen -->
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Golf Society League">
+<meta name="apple-mobile-web-app-title" content="Den Society League">
 
 <!-- PWA manifest + app icons -->
 <link rel="manifest" href="manifest.webmanifest">
@@ -9959,7 +10045,7 @@ const DEEP_GUIDE_HTML = `<!doctype html>
           </svg>
         </div>
         <div style="min-width:0">
-          <h1>Golf Society League — Golfer’s Guide</h1>
+          <h1>Den Society League — Golfer’s Guide</h1>
           <p>What it does • How to use it • How it actually drops your scores</p>
         </div>
       </div>
@@ -10588,7 +10674,7 @@ function GuideView({ setView }) {
       <GuideModePicker guideMode={guideMode} setGuideMode={setGuideMode} />
 <div className="rounded-2xl border border-squab-200 bg-white shadow-sm overflow-hidden">
           <iframe
-            title="Golf Society League — In-depth guide"
+            title="Den Society League — In-depth guide"
             className="w-full"
             style={{ height: "78vh" }}
             srcDoc={DEEP_GUIDE_HTML}
@@ -11742,35 +11828,19 @@ const [user, setUser] = useState(null);
         const SUPA_URL = import.meta.env.VITE_SUPABASE_URL;
         const SUPA_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-        // Supabase config (multi-league via URL route)
-function getLeagueSlug() {
-  const h = (window.location.hash || "").replace(/^#\/?/, "");
-  if (h) return h.split("/")[0];
-  const parts = window.location.pathname.split("/").filter(Boolean);
-  // GH Pages base path: /den-society-vite/<slug>
-  return parts[1] || parts[0] || "den-society";
-}
-const LEAGUE_SLUG = getLeagueSlug();
-
-// Storage bucket per league (current setup: separate buckets)
-const BUCKET = LEAGUE_SLUG === "winter-league" ? "winter_league" : "den-events";
-
+        // Supabase config (Den Society LEAGUE)
+const BUCKET = "den-events";
 const STANDINGS_TABLE = "standings";
-
-// Default competition per league (still used by the existing tables)
-const COMPETITION = LEAGUE_SLUG === "winter-league" ? "winter" : "season";
-
-// Storage prefix for CSVs inside bucket.
-// Your CSVs live under an 'events' folder inside each bucket.
-const PREFIX = "events";
+const COMPETITION = "season";
+const PREFIX = "events"; // keep the same unless you store Den Society files under a different folder
 
 // Admin player visibility (hide / re-include players)
 const ADMIN_PW_OK_LS_KEY = "den_admin_pw_ok_v1";
 const ADMIN_PASSWORD = (typeof window !== "undefined" && window.DEN_ADMIN_PASSWORD)
   ? String(window.DEN_ADMIN_PASSWORD)
-  : "Golf Society League";
+  : "Den Society League";
 const VIS_LS_KEY = "den_hidden_players_v1";   // changed (optional but recommended)
-const ADMIN_VIS_PATH = PREFIX ? `${PREFIX}/admin/player_visibility.json` : "admin/player_visibility.json";
+const ADMIN_VIS_PATH = `${PREFIX}/admin/player_visibility.json`;
 
 
 
@@ -12889,7 +12959,7 @@ setSeasonRounds(rounds);
         const [courseList, setCourseList] = useState([]);
         const [players, setPlayers] = useState([]);
         const [season, setSeason] = useState({});
-        const [eventName, setEventName] = useState("Golf Society League");
+        const [eventName, setEventName] = useState("Den Society League");
         const [courseTees, setCourseTees] = useState([]);
         const [courseName, setCourseName] = useState("");
         const [currentFile, setCurrentFile] = useState(null);
