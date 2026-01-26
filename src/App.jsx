@@ -2009,7 +2009,7 @@ function readStablefordPerHole(row) {
             players.push({
               name,
               handicap: hcap,
-              gender: g || "",
+              gender: g || "M",
               teeLabel: tee || ""
             });
           }
@@ -2040,7 +2040,7 @@ function readStablefordPerHole(row) {
             if (!cell) continue;
             if (looksLikeTeeLabel(cell) && !teeLabelMap[nm]) teeLabelMap[nm] = cell;
             const cellLower = cell.toLowerCase();
-            if (/women|ladies|red/.test(cellLower)) genderMap[nm] = "F";
+            if (/women|ladies/.test(cellLower)) genderMap[nm] = "F";
           }
           if (genderMap[nm] == null) genderMap[nm] = "M";
         }
@@ -3449,7 +3449,7 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
 }
 
    // --- EVENT SCREEN (WITH CALCULATOR) ---
-   function EventScreen({ computed, setView, courseSlope, setCourseSlope, courseRating, setCourseRating, startHcapMode, setStartHcapMode, nextHcapMode, setNextHcapMode , seasonRoundsFiltered}) {
+   function EventScreen({ computed, setView, courseSlope, setCourseSlope, courseRating, setCourseRating, startHcapMode, setStartHcapMode, nextHcapMode, setNextHcapMode, seasonRoundsFiltered, seasonRoundsAll }) {
           
 
           const [showModelInternals, setShowModelInternals] = useState(false);
@@ -3457,7 +3457,8 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
           // ---- Next Event Winner Odds (Deterministic Monte Carlo, Stableford points) ----
           const winnerOdds = useMemo(() => {
             const currentRows = (Array.isArray(computed) ? computed : []).filter(r => r && r.name);
-            const seasonArr = Array.isArray(seasonRoundsFiltered) ? seasonRoundsFiltered : [];
+            const seasonArr = Array.isArray(seasonRoundsAll) ? seasonRoundsAll : (Array.isArray(seasonRoundsFiltered) ? seasonRoundsFiltered : []);
+            // NOTE: odds use full season history (seasonRoundsAll) to avoid tiny sample sizes; filters only affect on-screen leaderboard.
             // League roster = anyone who has appeared in season rounds, plus anyone in the current round
             const byKeyCurrent = new Map();
             currentRows.forEach(r => {
@@ -3468,40 +3469,39 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
 
 // Flatten season rounds into per-player history rows
 const seasonPlayerRows = [];
-const roundStats = []; // per-round field averages & dispersion (for normalization)
-
-// Helpers
-const _num = (v) => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
-};
-const mean = (arr) => arr.length ? (arr.reduce((a,b)=>a+b,0) / arr.length) : null;
-const stdev = (arr, mu) => {
-  if (arr.length < 2) return null;
-  const m = Number.isFinite(mu) ? mu : mean(arr);
-  if (!Number.isFinite(m)) return null;
-  const v = arr.reduce((s,x)=> s + Math.pow(x - m, 2), 0) / (arr.length - 1);
-  return Math.sqrt(v);
-};
-
+const roundStats = []; // per-round field averages (for course/difficulty normalization)
 seasonArr.forEach(sr => {
   const parsed = sr && sr.parsed ? sr.parsed : sr; // tolerate already-parsed shapes
   const players = (parsed && Array.isArray(parsed.players)) ? parsed.players : [];
   const dateMs = Number.isFinite(sr?.dateMs) ? sr.dateMs : (Number.isFinite(parsed?.dateMs) ? parsed.dateMs : null);
 
-  // Pull stableford points for the round
+  // Round field average Stableford points (used to normalize player results across "easy/hard" days)
   const ptsList = players
-    .map(p => _num(p?.pts ?? p?.points ?? p?.stableford ?? p?.sf ?? p?.totalPoints ?? p?.netPoints))
-    .filter(n => n !== null);
+    .map(p => Number(p?.pts ?? p?.points ?? p?.stableford ?? p?.sf ?? p?.totalPoints ?? p?.netPoints))
+    .filter(n => Number.isFinite(n));
+  const roundAvg = ptsList.length ? (ptsList.reduce((a,b)=>a+b,0) / ptsList.length) : 36;
 
-  const roundAvg = (ptsList.length ? mean(ptsList) : 36);
-  // Within-round dispersion (how "spread out" the field was on the day)
-  const roundStdRaw = stdev(ptsList, roundAvg);
-  // sensible fallback band
-  const roundStd = Math.max(1.6, Math.min(8.0, (roundStdRaw ?? 4.2)));
+  // Build group averages for this round (teeLabel preferred, else gender)
+  const groupSums = new Map();
+  const groupCounts = new Map();
+  for (const pp of players) {
+    const gPts = Number(pp?.pts ?? pp?.points ?? pp?.stableford ?? pp?.sf ?? pp?.totalPoints ?? pp?.netPoints);
+    if (!Number.isFinite(gPts)) continue;
+    const teeLabel = String(pp?.teeLabel ?? pp?.tee ?? pp?.tee_name ?? pp?.teeName ?? "").toLowerCase().trim();
+    const genderRaw = String(pp?.gender ?? pp?.sex ?? "").toUpperCase();
+    const gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : "M";
+    const groupKey = teeLabel || gender;
+    groupSums.set(groupKey, (groupSums.get(groupKey) || 0) + gPts);
+    groupCounts.set(groupKey, (groupCounts.get(groupKey) || 0) + 1);
+  }
+  const groupAvgByKey = new Map();
+  for (const [k, sum] of groupSums.entries()) {
+    const c = groupCounts.get(k) || 1;
+    groupAvgByKey.set(k, sum / c);
+  }
 
   if (Number.isFinite(dateMs)) {
-    roundStats.push({ dateMs, roundAvg, roundStd, n: ptsList.length });
+    roundStats.push({ dateMs, roundAvg, n: ptsList.length });
   }
 
   players.forEach(p => {
@@ -3509,24 +3509,21 @@ seasonArr.forEach(sr => {
     const k = normalizeName(nm);
     if (!k) return;
 
-    const pts = _num(p?.pts ?? p?.points ?? p?.stableford ?? p?.sf ?? p?.totalPoints ?? p?.netPoints);
-    if (pts === null) return;
+    // stableford points (try common keys)
+    const pts = Number(p?.pts ?? p?.points ?? p?.stableford ?? p?.sf ?? p?.totalPoints ?? p?.netPoints);
+    // handicap at the time (exact HI)
+    const hi = Number(p?.startExact ?? p?.index ?? p?.hi ?? p?.handicap ?? p?.exact ?? p?.hiExact);
 
-    // handicap at the time (exact HI) – used only for optional next-HI shift
-    const hi = _num(p?.startExact ?? p?.index ?? p?.hi ?? p?.handicap ?? p?.exact ?? p?.hiExact);
+    const teeLabel = String(p?.teeLabel ?? p?.tee ?? p?.tee_name ?? p?.teeName ?? "").toLowerCase().trim();
+    const genderRaw = String(p?.gender ?? p?.sex ?? "").toUpperCase();
+    const gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : "M";
+    const groupKey = teeLabel || gender;
+    const groupAvg = groupAvgByKey.get(groupKey) ?? roundAvg;
 
-    // keep tee/gender only as labels for debugging; NOT used in modelling
-    const teeLabel = String(p?.teeLabel ?? p?.tee ?? p?.tee_name ?? p?.teeName ?? "").trim();
-    // gender intentionally ignored for odds modelling (Stableford/handicap should already normalise)
-    seasonPlayerRows.push({
-      k, name: nm, pts, hi, dateMs,
-      roundAvg, roundStd,
-      teeLabel
-    });
+    seasonPlayerRows.push({ k, name: nm, pts, hi, dateMs, roundAvg, gender, teeLabel, groupKey, groupAvg });
     leagueKeys.add(k);
   });
 });
-
 // Ensure current-round players are included even if season is empty
 byKeyCurrent.forEach((_, k) => leagueKeys.add(k));
 
@@ -3549,7 +3546,7 @@ for (const arr of histByKey.values()) {
 const _rounds = roundStats
   .filter(r => Number.isFinite(r?.dateMs) && Number.isFinite(r?.roundAvg))
   .sort((a,b)=>a.dateMs-b.dateMs)
-  .slice(-30);
+  .slice(-20);
 
 // exponentially weighted mean/variance for round average points
 const baseDecay = 0.9;
@@ -3572,17 +3569,6 @@ for (let i=0;i<_rounds.length;i++){
 // baseline sigma: round-to-round swing in field scoring; keep it in a sensible band
 const leagueBaseSigma = Math.max(0.8, Math.min(4.0, (bVarW>0 ? Math.sqrt(bVarS/bVarW) : 1.6)));
 
-// Typical within-round points dispersion (used to convert z-scores back into points)
-let sW = 0, sS = 0;
-for (let i=0;i<_rounds.length;i++){
-  const age = (_rounds.length-1)-i;
-  const w = Math.pow(baseDecay, age);
-  const rs = Number.isFinite(_rounds[i].roundStd) ? _rounds[i].roundStd : 4.2;
-  sW += w;
-  sS += w * rs;
-}
-const leagueWithinSigma = Math.max(2.0, Math.min(7.0, (sW>0 ? (sS/sW) : 4.2)));
-
 // ---- Build per-player model rows ----
 const rows = Array.from(leagueKeys).map(k => {
   const cur = byKeyCurrent.get(k);
@@ -3590,70 +3576,61 @@ const rows = Array.from(leagueKeys).map(k => {
 
   const name = cur ? String(cur.name || "") : (hist.length ? String(hist[hist.length-1].name || "") : "");
 
-  // z-score history vs field each day:
-  // z = (playerPts - fieldAvgPts) / fieldStdDevPts
-  const zHist = hist
+  // residual history = player points minus that round's field average (normalizes for easy/hard rounds)
+  const resHist = hist
     .map(h => {
       const pts = Number(h.pts);
-      const ra = Number(h.roundAvg);
-      const rs = Number(h.roundStd);
-      if (!Number.isFinite(pts) || !Number.isFinite(ra) || !Number.isFinite(rs) || rs <= 0) return null;
-      return {
-        z: (pts - ra) / rs,
-        pts, ra, rs,
-        dateMs: h.dateMs,
-        hi: h.hi,
-        gender: h.gender,
-        teeLabel: h.teeLabel
-      };
+      const ra = Number(h.groupAvg ?? h.roundAvg);
+      if (!Number.isFinite(pts) || !Number.isFinite(ra)) return null;
+      return { res: (pts - ra), pts, ra, dateMs: h.dateMs, hi: h.hi, groupKey: h.groupKey, gender: h.gender, teeLabel: h.teeLabel };
     })
     .filter(Boolean);
 
-  const last12 = zHist.slice(-12); // chronological already
+  const last12 = resHist.slice(-12); // chronological already
 
-  // Exponentially weighted mean of z (recent form matters more)
+  // Exponentially weighted mean of residuals (recent form matters more)
   const decay = 0.85;
-  let wsum = 0, zsum = 0;
+  let wsum = 0, rsum = 0;
   for (let i=0;i<last12.length;i++){
     const age = (last12.length-1)-i;
     const w = Math.pow(decay, age);
     wsum += w;
-    zsum += w * last12[i].z;
+    rsum += w * last12[i].res;
   }
-  const rawZMu = wsum>0 ? (zsum/wsum) : 0;
+  const rawResMu = wsum>0 ? (rsum/wsum) : 0;
 
   // Small-sample shrinkage toward 0 (league-average) so newcomers don't get silly odds
   const n = last12.length;
   const shrink = n / (n + 6); // 0..1
-  const zMu = rawZMu * shrink;
+  const resMu = rawResMu * shrink;
 
-  // Weighted z sigma (with a gentle prior)
+  // Weighted residual sigma (with a gentle prior)
   let vW = 0, vS = 0;
   for (let i=0;i<last12.length;i++){
     const age = (last12.length-1)-i;
     const w = Math.pow(decay, age);
     vW += w;
-    vS += w * Math.pow(last12[i].z - rawZMu, 2);
+    vS += w * Math.pow(last12[i].res - rawResMu, 2);
   }
-  const rawZSigma = (vW>0 ? Math.sqrt(vS/vW) : 1.0);
-  // prior for z volatility: ~1.0
-  const zSigma = Math.max(0.45, Math.min(2.5, (rawZSigma*(0.7+0.3*shrink)) + (1-shrink)*1.0));
+  const rawResSigma = (vW>0 ? Math.sqrt(vS/vW) : 3.8);
+  const resSigma = Math.max(1.2, Math.min(7.5, (rawResSigma*(0.6+0.4*shrink)) + (1-shrink)*3.0));
 
-  // Trend from weighted linear regression on z (per round)
+  // Trend (points per round) from weighted linear regression on residuals
   let formTrend = 0;
   if (n >= 3) {
     let sw=0, sx=0, sy=0, sxx=0, sxy=0;
     for (let i=0;i<n;i++){
       const age = (n-1)-i;
       const w = Math.pow(decay, age);
-      const x = i;
-      const y = last12[i].z;
+      const x = i;           // 0..n-1 (older -> smaller i)
+      const y = last12[i].res;
       sw += w; sx += w*x; sy += w*y; sxx += w*x*x; sxy += w*x*y;
     }
     const denom = (sw*sxx - sx*sx);
     if (Math.abs(denom) > 1e-9) {
-      formTrend = (sw*sxy - sx*sy)/denom;
-      formTrend = Math.max(-0.6, Math.min(0.6, formTrend)); // z per round
+      formTrend = (sw*sxy - sx*sy)/denom; // residual points per round
+      // clamp trend to avoid silly extrapolation
+      formTrend = Math.max(-2.5, Math.min(2.5, formTrend));
     }
   }
 
@@ -3668,21 +3645,23 @@ const rows = Array.from(leagueKeys).map(k => {
     : prevStartExact;
   const nextExactNum = clamp(nextExactRaw, 0, 36);
 
+  // For NEXT-round forecasting:
+  // - In No change mode, we tee off on the current index (prevStartExact).
+  // - In WHS Diff / Legacy Formula, we tee off on the computed NEXT handicap.
   const startExact = (String(nextHcapMode || "").toLowerCase() === "nochange") ? prevStartExact : nextExactNum;
 
   // Handicap movement used to adjust expected points (≈ 1 pt per HI stroke)
   const deltaModelHI = nextExactNum - prevStartExact;
 
-  // Convert z back into expected points using typical within-round dispersion
-  const resMuPts = zMu * leagueWithinSigma;
-  const expPts = clamp(leagueBaseMu + resMuPts + deltaModelHI, 18, 56);
+  // Expected points: league baseline + personal residual + HI movement, clamped.
+  const expPts = clamp(leagueBaseMu + resMu + deltaModelHI, 18, 56);
 
   const deltaHI = nextExactNum - startExact;
 
-  // Display params
+  // Model params for display
   const formMu = expPts - 36;
-  const resSigmaPts = zSigma * leagueWithinSigma;
-  const totalSigma = Math.sqrt((leagueBaseSigma*leagueBaseSigma) + (resSigmaPts*resSigmaPts));
+  // total uncertainty combines "day difficulty" + player volatility
+  const totalSigma = Math.sqrt((leagueBaseSigma*leagueBaseSigma) + (resSigma*resSigma));
   const formSigma = Math.max(1.5, Math.min(9.0, totalSigma));
 
   return {
@@ -3694,12 +3673,12 @@ const rows = Array.from(leagueKeys).map(k => {
     expPts,
     formMu,
     formSigma,
-    formTrend: formTrend * leagueWithinSigma, // convert to points/round for display
+    formTrend,
     // components used by the simulator
     modelBaseMu: leagueBaseMu,
     modelBaseSigma: leagueBaseSigma,
-    modelResMu: resMuPts,
-    modelResSigma: resSigmaPts,
+    modelResMu: resMu,
+    modelResSigma: resSigma,
     roundsUsed: n
   };
 }).filter(r => r && r.name);
@@ -3842,24 +3821,51 @@ for (let s = 0; s < sims; s++){
               : "Low";
 
 
-            // ---- DEBUG HOOK (temporary): inspect odds inputs in browser console ----
+            // ---- DEBUG HOOK: inspect model + inputs in browser console ----
             try {
+              const groups = Array.from(
+                new Set(seasonPlayerRows.map(r => String(r.groupKey || "").toLowerCase()).filter(Boolean))
+              ).sort();
+
+              // keep existing debug payload if already set elsewhere
+              const prev = (typeof window !== "undefined" && window.__ODDS_DEBUG && typeof window.__ODDS_DEBUG === "object")
+                ? window.__ODDS_DEBUG
+                : {};
+
               window.__ODDS_DEBUG = {
+                ...prev,
                 ts: Date.now(),
                 leagueBaseMu,
                 leagueBaseSigma,
-                leagueWithinSigma,
-                sample: seasonPlayerRows.slice(0, 60).map(r => ({
+                leagueWithinSigma: (rows && rows.length)
+                  ? Math.sqrt(rows.reduce((a,r)=>a + Math.pow(Number(r.formSigma||0),2), 0) / Math.max(1, rows.length))
+                  : null,
+                groups,
+                // raw per-player per-round rows (unfiltered season history)
+                sample: seasonPlayerRows.slice(-120).map(r => ({
                   name: r.name,
                   pts: r.pts,
                   roundAvg: r.roundAvg,
-                  roundStd: r.roundStd,
+                  roundStd: null,
                   teeLabel: r.teeLabel,
                   dateMs: r.dateMs,
+                  gender: r.gender,
+                  groupKey: r.groupKey,
+                  groupAvg: r.groupAvg,
+                  hi: r.hi,
                 })),
+                // model output snapshot (what the odds table should be showing)
+                model: {
+                  sims,
+                  confidence,
+                  c4,
+                  gap,
+                  rows: rowsByWin.slice(0, 60),
+                  top4: rowsByTop4.slice(0, 4),
+                }
               };
             } catch (e) {
-              window.__ODDS_DEBUG = { ts: Date.now(), error: String(e) };
+              try { window.__ODDS_DEBUG = { error: String(e) }; } catch {}
             }
             // ---- END DEBUG ----
             return {
@@ -3870,7 +3876,7 @@ for (let s = 0; s < sims; s++){
               c4,
               gap,
             };
-          }, [computed, nextHcapMode, seasonRoundsFiltered]);
+          }, [computed, nextHcapMode, seasonRoundsAll, seasonRoundsFiltered]);
 return (
             <section className="content-card p-4 md:p-6">
               <Breadcrumbs items={[{ label: "Round Leaderboard" }]} />
@@ -14102,7 +14108,7 @@ return (
   />
 )}
 {view === "past" && <PastEvents sharedGroups={sharedGroups} loadShared={loadShared} setView={setView} />}
-              {view === "event" && <EventScreen computed={computedFiltered} setView={setView} courseSlope={courseSlope} setCourseSlope={setCourseSlope} courseRating={courseRating} setCourseRating={setCourseRating} startHcapMode={startHcapMode} setStartHcapMode={setStartHcapMode} nextHcapMode={nextHcapMode} setNextHcapMode={setNextHcapMode}  seasonRoundsFiltered={seasonRoundsFiltered} />}
+              {view === "event" && <EventScreen computed={computedFiltered} setView={setView} courseSlope={courseSlope} setCourseSlope={setCourseSlope} courseRating={courseRating} setCourseRating={setCourseRating} startHcapMode={startHcapMode} setStartHcapMode={setStartHcapMode} nextHcapMode={nextHcapMode} setNextHcapMode={setNextHcapMode} seasonRoundsFiltered={seasonRoundsFiltered} seasonRoundsAll={seasonRounds} />}
               {view === "banter" && <BanterStats computed={computedFiltered} setView={setView} />}
               {view === "guide" && <GuideView setView={setView} />}
               {view === "mirror_read" && <MirrorReadView setView={setView} />}
