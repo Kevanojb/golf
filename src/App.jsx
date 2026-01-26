@@ -3449,7 +3449,7 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
 }
 
    // --- EVENT SCREEN (WITH CALCULATOR) ---
-   function EventScreen({ computed, setView, courseSlope, setCourseSlope, courseRating, setCourseRating, startHcapMode, setStartHcapMode, nextHcapMode, setNextHcapMode, seasonRoundsFiltered, seasonRoundsAll }) {
+   function EventScreen({ computed, setView, courseSlope, setCourseSlope, courseRating, setCourseRating, startHcapMode, setStartHcapMode, nextHcapMode, setNextHcapMode, seasonRoundsFiltered, seasonRoundsAll, seasonModelAll }) {
           
 
           const [showModelInternals, setShowModelInternals] = useState(false);
@@ -3457,7 +3457,7 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
           // ---- Next Event Winner Odds (Deterministic Monte Carlo, Stableford points) ----
           const winnerOdds = useMemo(() => {
             const currentRows = (Array.isArray(computed) ? computed : []).filter(r => r && r.name);
-            const seasonArr = Array.isArray(seasonRoundsAll) ? seasonRoundsAll : (Array.isArray(seasonRoundsFiltered) ? seasonRoundsFiltered : []);
+            // season history is derived below (prefer seasonModelAll; fall back to seasonRounds*)
             // NOTE: odds use full season history (seasonRoundsAll) to avoid tiny sample sizes; filters only affect on-screen leaderboard.
             // League roster = anyone who has appeared in season rounds, plus anyone in the current round
             const byKeyCurrent = new Map();
@@ -3467,67 +3467,131 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
             });
             const leagueKeys = new Set();
 
-// Flatten season rounds into per-player history rows
+// Flatten season history into per-player history rows
 const seasonPlayerRows = [];
 const roundStats = []; // per-round field averages (for course/difficulty normalization)
-seasonArr.forEach(sr => {
-  const parsed = sr && sr.parsed ? sr.parsed : sr; // tolerate already-parsed shapes
-  const players = (parsed && Array.isArray(parsed.players)) ? parsed.players : [];
-  const dateMs = Number.isFinite(sr?.dateMs) ? sr.dateMs : (Number.isFinite(parsed?.dateMs) ? parsed.dateMs : null);
-  const file = String(sr?.file ?? parsed?.file ?? "");
 
-  // Round field average Stableford points (used to normalize player results across "easy/hard" days)
-  const ptsList = players
-    .map(p => Number(p?.pts ?? p?.points ?? p?.stableford ?? p?.sf ?? p?.totalPoints ?? p?.netPoints))
-    .filter(n => Number.isFinite(n));
-  const roundAvg = ptsList.length ? (ptsList.reduce((a,b)=>a+b,0) / ptsList.length) : 36;
-
-  // Build group averages for this round (teeLabel preferred, else gender)
-  const groupSums = new Map();
-  const groupCounts = new Map();
-  for (const pp of players) {
-    const gPts = Number(pp?.pts ?? pp?.points ?? pp?.stableford ?? pp?.sf ?? pp?.totalPoints ?? pp?.netPoints);
-    if (!Number.isFinite(gPts)) continue;
-    const teeLabel = String(pp?.teeLabel ?? pp?.tee ?? pp?.tee_name ?? pp?.teeName ?? "").toLowerCase().trim();
-    const genderRaw = String(pp?.gender ?? pp?.sex ?? "").toUpperCase();
-    const gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : "M";
-    const groupKey = teeLabel || gender;
-    groupSums.set(groupKey, (groupSums.get(groupKey) || 0) + gPts);
-    groupCounts.set(groupKey, (groupCounts.get(groupKey) || 0) + 1);
+const _pushPts = (obj) => {
+  // stableford points (try common keys; fall back to summing per-hole points)
+  let pts = Number(obj?.pts ?? obj?.points ?? obj?.stableford ?? obj?.sf ?? obj?.totalPoints ?? obj?.netPoints);
+  if (!Number.isFinite(pts) && Array.isArray(obj?.perHole)) {
+    try { pts = obj.perHole.reduce((a,b)=>a + (Number(b)||0), 0); } catch (e) { /* ignore */ }
   }
-  const groupAvgByKey = new Map();
-  for (const [k, sum] of groupSums.entries()) {
-    const c = groupCounts.get(k) || 1;
-    groupAvgByKey.set(k, sum / c);
-  }
+  return pts;
+};
 
-  if (Number.isFinite(dateMs)) {
-    roundStats.push({ dateMs, roundAvg, n: ptsList.length, file });
-  }
+// Prefer seasonModelAll (same dataset Player Progress is using). Fall back to raw season rounds if needed.
+if (seasonModelAll && Array.isArray(seasonModelAll.players) && seasonModelAll.players.length) {
+  // Build a per-round file bucket so we can compute round and group averages
+  const byFile = new Map(); // fileKey -> { pts: [], byGroup: Map(groupKey -> pts[]) , dateMs }
+  const entries = []; // flat { k, name, pts, hi, dateMs, gender, teeLabel, groupKey, file }
 
-  players.forEach(p => {
-    const nm = String(p?.name || p?.player || p?.playerName || "").trim();
+  for (const p of (seasonModelAll.players || [])) {
+    const nm = String(p?.name || "").trim();
     const k = normalizeName(nm);
-    if (!k) return;
+    if (!k) continue;
 
-	    // stableford points (try common keys; fall back to summing per-hole points)
-	    let pts = Number(p?.pts ?? p?.points ?? p?.stableford ?? p?.sf ?? p?.totalPoints ?? p?.netPoints);
-	    if (!Number.isFinite(pts) && Array.isArray(p?.perHole)) {
-	      try { pts = p.perHole.reduce((a,b)=>a + (Number(b)||0), 0); } catch (e) { /* ignore */ }
-	    }
-    // handicap at the time (exact HI)
-    const hi = Number(p?.startExact ?? p?.index ?? p?.hi ?? p?.handicap ?? p?.exact ?? p?.hiExact);
+    const series = Array.isArray(p?.series) ? p.series : [];
+    for (const s of series) {
+      const pts = _pushPts(s);
+      if (!Number.isFinite(pts)) continue;
 
-    const teeLabel = String(p?.teeLabel ?? p?.tee ?? p?.tee_name ?? p?.teeName ?? "").toLowerCase().trim();
-    const genderRaw = String(p?.gender ?? p?.sex ?? "").toUpperCase();
-    const gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : "M";
-    const groupKey = teeLabel || gender;
-    const groupAvg = groupAvgByKey.get(groupKey) ?? roundAvg;
+      const dateMs = Number.isFinite(Number(s?.dateMs)) ? Number(s.dateMs) : null;
+      const file = String(s?.file ?? "");
+      const teeLabel = String(s?.teeLabel ?? s?.tee ?? s?.tee_name ?? s?.teeName ?? "").toLowerCase().trim();
+      const genderRaw = String(s?.gender ?? s?.sex ?? p?.gender ?? p?.sex ?? "").toUpperCase();
+      const gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : "M";
+      const groupKey = teeLabel || gender;
 
-    seasonPlayerRows.push({ k, name: nm, pts, hi, dateMs, roundAvg, gender, teeLabel, groupKey, groupAvg, file });
-    leagueKeys.add(k);
+      const hi = Number(s?.hi ?? s?.startExact ?? s?.index ?? s?.handicap ?? s?.exact ?? p?.hi ?? p?.startExact);
+
+      entries.push({ k, name: nm, pts, hi, dateMs, gender, teeLabel, groupKey, file });
+      leagueKeys.add(k);
+
+      if (file) {
+        if (!byFile.has(file)) byFile.set(file, { pts: [], byGroup: new Map(), dateMs });
+        const b = byFile.get(file);
+        b.pts.push(pts);
+        if (Number.isFinite(dateMs) && !Number.isFinite(Number(b.dateMs))) b.dateMs = dateMs;
+        if (!b.byGroup.has(groupKey)) b.byGroup.set(groupKey, []);
+        b.byGroup.get(groupKey).push(pts);
+      }
+    }
+  }
+
+  // Compute per-round averages
+  const roundAvgByFile = new Map();
+  const groupAvgByFileGroup = new Map(); // file|groupKey -> avg
+  for (const [file, b] of byFile.entries()) {
+    const ra = b.pts.length ? (b.pts.reduce((a,c)=>a+c,0)/b.pts.length) : 36;
+    roundAvgByFile.set(file, ra);
+    roundStats.push({ dateMs: Number.isFinite(Number(b.dateMs)) ? Number(b.dateMs) : null, roundAvg: ra, n: b.pts.length, file });
+
+    for (const [gk, arr] of b.byGroup.entries()) {
+      const ga = arr.length ? (arr.reduce((a,c)=>a+c,0)/arr.length) : ra;
+      groupAvgByFileGroup.set(file + "|" + gk, ga);
+    }
+  }
+
+  // Attach round/group averages and push into seasonPlayerRows
+  for (const e of entries) {
+    const ra = e.file ? (roundAvgByFile.get(e.file) ?? 36) : 36;
+    const ga = e.file ? (groupAvgByFileGroup.get(e.file + "|" + e.groupKey) ?? ra) : ra;
+    seasonPlayerRows.push({ ...e, roundAvg: ra, groupAvg: ga });
+  }
+
+} else {
+  // Fallback: derive from raw season rounds array
+  const seasonArr = Array.isArray(seasonRoundsAll) ? seasonRoundsAll : (Array.isArray(seasonRoundsFiltered) ? seasonRoundsFiltered : []);
+  seasonArr.forEach(sr => {
+    const parsed = sr && sr.parsed ? sr.parsed : sr; // tolerate already-parsed shapes
+    const players = (parsed && Array.isArray(parsed.players)) ? parsed.players : [];
+    const dateMs = Number.isFinite(sr?.dateMs) ? sr.dateMs : (Number.isFinite(parsed?.dateMs) ? parsed.dateMs : null);
+    const file = String(sr?.file ?? parsed?.file ?? "");
+
+    const ptsList = players.map(p => _pushPts(p)).filter(Number.isFinite);
+    const roundAvg = ptsList.length ? (ptsList.reduce((a,b)=>a+b,0) / ptsList.length) : 36;
+
+    const groupSums = new Map();
+    const groupCounts = new Map();
+    for (const pp of players) {
+      const gPts = _pushPts(pp);
+      if (!Number.isFinite(gPts)) continue;
+      const teeLabel = String(pp?.teeLabel ?? pp?.tee ?? pp?.tee_name ?? pp?.teeName ?? "").toLowerCase().trim();
+      const genderRaw = String(pp?.gender ?? pp?.sex ?? "").toUpperCase();
+      const gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : "M";
+      const groupKey = teeLabel || gender;
+      groupSums.set(groupKey, (groupSums.get(groupKey) || 0) + gPts);
+      groupCounts.set(groupKey, (groupCounts.get(groupKey) || 0) + 1);
+    }
+    const groupAvgByKey = new Map();
+    for (const [k, sum] of groupSums.entries()) {
+      const c = groupCounts.get(k) || 1;
+      groupAvgByKey.set(k, sum / c);
+    }
+
+    if (Number.isFinite(dateMs)) roundStats.push({ dateMs, roundAvg, n: ptsList.length, file });
+
+    players.forEach(p => {
+      const nm = String(p?.name || p?.player || p?.playerName || "").trim();
+      const k = normalizeName(nm);
+      if (!k) return;
+
+      const pts = _pushPts(p);
+      const hi = Number(p?.startExact ?? p?.index ?? p?.hi ?? p?.handicap ?? p?.exact ?? p?.hiExact);
+
+      const teeLabel = String(p?.teeLabel ?? p?.tee ?? p?.tee_name ?? p?.teeName ?? "").toLowerCase().trim();
+      const genderRaw = String(p?.gender ?? p?.sex ?? "").toUpperCase();
+      const gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : "M";
+      const groupKey = teeLabel || gender;
+      const groupAvg = groupAvgByKey.get(groupKey) ?? roundAvg;
+
+      seasonPlayerRows.push({ k, name: nm, pts, hi, dateMs, roundAvg, gender, teeLabel, groupKey, groupAvg, file });
+      leagueKeys.add(k);
+    });
   });
-});
+}
+
 // Ensure current-round players are included even if season is empty
 byKeyCurrent.forEach((_, k) => leagueKeys.add(k));
 
@@ -3932,8 +3996,8 @@ for (let s = 0; s < sims; s++){
               window.__ODDS_DEBUG = {
                 ...prev,
                 ts: Date.now(),
-                seasonRoundsCount: seasonArr.length,
-                seasonRoundDates: Array.from(new Set(seasonArr.map(r => (Number.isFinite(Number(r?.dateMs)) ? new Date(Number(r.dateMs)).toISOString().slice(0,10) : (r?.parsed?.dateMs ? new Date(Number(r.parsed.dateMs)).toISOString().slice(0,10) : null))).filter(Boolean))).sort(),
+                seasonRoundsCount: (Array.isArray(roundStats) ? roundStats.length : 0),
+                seasonRoundDates: (() => { try { const ds = (Array.isArray(roundStats)?roundStats:[]).map(r=>Number(r?.dateMs)).filter(Number.isFinite).map(ms=>new Date(ms).toISOString().slice(0,10)); return Array.from(new Set(ds)).sort(); } catch(e){ return []; } })(),
                 seasonPlayerRowsCount: seasonPlayerRows.length,
 
                 leagueBaseMu,
@@ -14224,7 +14288,7 @@ return (
   />
 )}
 {view === "past" && <PastEvents sharedGroups={sharedGroups} loadShared={loadShared} setView={setView} />}
-              {view === "event" && <EventScreen computed={computedFiltered} setView={setView} courseSlope={courseSlope} setCourseSlope={setCourseSlope} courseRating={courseRating} setCourseRating={setCourseRating} startHcapMode={startHcapMode} setStartHcapMode={setStartHcapMode} nextHcapMode={nextHcapMode} setNextHcapMode={setNextHcapMode} seasonRoundsFiltered={seasonRoundsFiltered} seasonRoundsAll={seasonRoundsInSeasonAll} />}
+              {view === "event" && <EventScreen computed={computedFiltered} setView={setView} courseSlope={courseSlope} setCourseSlope={setCourseSlope} courseRating={courseRating} setCourseRating={setCourseRating} startHcapMode={startHcapMode} setStartHcapMode={setStartHcapMode} nextHcapMode={nextHcapMode} setNextHcapMode={setNextHcapMode} seasonRoundsFiltered={seasonRoundsFiltered} seasonRoundsAll={seasonRoundsInSeasonAll} seasonModelAll={seasonModelAll} />}
               {view === "banter" && <BanterStats computed={computedFiltered} setView={setView} />}
               {view === "guide" && <GuideView setView={setView} />}
               {view === "mirror_read" && <MirrorReadView setView={setView} />}
