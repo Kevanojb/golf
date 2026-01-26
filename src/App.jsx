@@ -3188,7 +3188,9 @@ function PastEvents({ sharedGroups, loadShared, setView }) {
   }, [sharedGroups]);
 
  // slug -> [urls]
-  const inflightRef = React.useRef(new Map());   // slug -> Promise
+  const inflightRef = React.useRef(new Map());
+  const loggedSlugRef = React.useRef(new Set());
+  // slug -> Promise
 
   function _normSlugFromCourseName(raw) {
     return (raw || "")
@@ -3204,7 +3206,7 @@ function PastEvents({ sharedGroups, loadShared, setView }) {
 
   async function _getPhotoUrlsForSlug(slug) {
     const key = (slug || "").trim();
-    if (!key) return null;
+    if (!key) return [];
 
     const cache = photoCacheRef.current;
     if (cache.has(key)) return cache.get(key);
@@ -3214,24 +3216,38 @@ function PastEvents({ sharedGroups, loadShared, setView }) {
 
     const p = (async () => {
       try {
-        if (!window.__supabase_client__) return null;
-        const client = window.__supabase_client__;
+        if (!window.__supabase_client__) {
+          cache.set(key, []);
+          return [];
+        }
 
+        const client = window.__supabase_client__;
         const { data, error } = await client
           .from("courses")
           .select("photo_urls")
           .eq("slug", key)
           .maybeSingle();
 
-        if (error) return null;
-        const urls = Array.isArray(data?.photo_urls) ? data.photo_urls : null;
+        if (error) {
+          cache.set(key, []);
+          return [];
+        }
+
+        const urls = Array.isArray(data?.photo_urls) ? data.photo_urls : [];
         cache.set(key, urls);
         return urls;
       } catch {
-        return null;
+        cache.set(key, []);
+        return [];
       } finally {
         inflight.delete(key);
       }
+    })();
+
+    inflight.set(key, p);
+    return await p;
+  }
+
     })();
 
     inflight.set(key, p);
@@ -3282,7 +3298,10 @@ function PastEvents({ sharedGroups, loadShared, setView }) {
 
               // Try course photos from Supabase (non-blocking): derive slug from course string and fetch photo_urls.
               const slugGuess = _normSlugFromCourseName(course);
-              console.log("COURSE:", course, "=> SLUG IT SEARCHES:", slugGuess);
+              if (slugGuess && !loggedSlugRef.current.has(slugGuess)) {
+                loggedSlugRef.current.add(slugGuess);
+                console.log("COURSE:", course, "=> SLUG IT SEARCHES:", slugGuess);
+              }
               const cached = photoCacheRef.current.get(slugGuess);
               const picked = _pickFromUrls(cached, seed);
               if (picked) {
