@@ -12521,7 +12521,7 @@ function _pushUnique(arr, val) {
                 parsPerHole: Array.isArray(tee?.pars) ? tee.pars.slice(0,18) : Array.isArray(tee?.par) ? tee.par.slice(0,18) : [],
                 siPerHole: Array.isArray(tee?.si) ? tee.si.slice(0,18) : Array.isArray(tee?.SI) ? tee.SI.slice(0,18) : [],
                 startExact: _safeNum(p.handicap ?? p.startExact ?? p.handicapIndex ?? p.hcap ?? p.hi ?? NaN, NaN),
-                gender: (p?.gender || tee?.gender || "M").toString(),
+                gender: (p?.gender ?? "").toString(),
                 perHole: _perHoleArr.slice(0, 18),
                 parsArr: pars.slice(0, 18),
                 siArr: siArr.slice(0, 18),
