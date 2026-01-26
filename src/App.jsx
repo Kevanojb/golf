@@ -3762,7 +3762,6 @@ const expPts = clamp(leagueBaseMu + resAtStartHI, 18, 56);
     startExact,
     nextExactNum,
     deltaHI,
-    deltaModelHI,
     expPts,
     formMu,
     formSigma,
@@ -3771,7 +3770,7 @@ const expPts = clamp(leagueBaseMu + resAtStartHI, 18, 56);
     modelBaseMu: leagueBaseMu,
     modelBaseSigma: leagueBaseSigma,
                 leagueHiSlope,
-    modelResMu: resMu,
+    modelResMu: resAtStartHI,
     modelResSigma: resSigma,
     roundsUsed: n
   };
@@ -3835,9 +3834,9 @@ const baseSigma = (rows[0] && Number.isFinite(Number(rows[0].modelBaseSigma))) ?
 
 // Precompute per-player mean components + individual sigma
 const addMu = rows.map(r => {
+  // modelResMu is already the predicted residual at the player's start HI
   const rm = Number.isFinite(Number(r.modelResMu)) ? Number(r.modelResMu) : 0;
-  const dh = Number.isFinite(Number(r.deltaModelHI)) ? Number(r.deltaModelHI) : 0;
-  return rm + dh;
+  return rm;
 });
 const indSig = rows.map(r => {
   const s = Number.isFinite(Number(r.modelResSigma)) ? Number(r.modelResSigma) : 4.0;
