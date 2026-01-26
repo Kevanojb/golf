@@ -2040,7 +2040,7 @@ function readStablefordPerHole(row) {
             if (!cell) continue;
             if (looksLikeTeeLabel(cell) && !teeLabelMap[nm]) teeLabelMap[nm] = cell;
             const cellLower = cell.toLowerCase();
-            if (/women|ladies/.test(cellLower)) genderMap[nm] = "F";
+            if (/women|ladies|\bred\b/.test(cellLower)) genderMap[nm] = "F";
           }
           // Leave unset unless we see explicit women/ladies markers; default applied later
           
@@ -2051,7 +2051,7 @@ function readStablefordPerHole(row) {
           if (!p.teeLabel && teeLabelMap[p.name]) p.teeLabel = teeLabelMap[p.name];
           // If tee label clearly indicates women/ladies, force gender = F
           const tl = String(p.teeLabel || "").toLowerCase();
-          if (/women|ladies/.test(tl)) p.gender = "F";
+          if (/women|ladies|\bred\b|\bladies\b/.test(tl)) p.gender = "F";
           if (!p.gender) p.gender = "M";
         }
 
@@ -3936,7 +3936,7 @@ return (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {(winnerOdds.top4 || []).map((p) => (
                         <span key={p.name} className="pill-mini subtle">
-                          {p.name} · <span className="font-mono">{p.top4Pct.toFixed(1)}%</span>
+                          {p.name} · <span className="font-mono">{(Number.isFinite(p.top4Pct)?p.top4Pct:(Number.isFinite(p.winProb)?p.winProb*100:0)).toFixed(1)}%</span>
                         </span>
                       ))}
                     </div>
@@ -3984,7 +3984,7 @@ return (
                           <td className="py-2 px-3 font-bold text-neutral-900">{r.name}</td>
                           <td className="py-2 px-3 text-right font-black text-neutral-900">{r.winPct.toFixed(1)}%</td>
                           <td className="py-2 px-3 text-right font-bold text-neutral-700">{r.top3Pct.toFixed(1)}%</td>
-                          <td className="py-2 px-3 text-right font-bold text-neutral-700">{r.top4Pct.toFixed(1)}%</td>
+                          <td className="py-2 px-3 text-right font-bold text-neutral-700">{(Number.isFinite(r.top4Pct)?r.top4Pct:(Number.isFinite(r.winProb)?r.winProb*100:0)).toFixed(1)}%</td>
                           <td className="py-2 px-3 text-right font-mono font-bold text-neutral-800">{r.expPts.toFixed(1)}</td>
                           <td className="py-2 px-3 text-right font-mono text-neutral-700">{r.usedSimilar ? r.similarRounds : `${r.similarRounds} (fb)`}</td>
                           <td className="py-2 px-3 text-right">
@@ -15503,4 +15503,3 @@ function _line(key, goodText, badText, neutralText){
 
 
 export default App;
-
