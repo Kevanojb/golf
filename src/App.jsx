@@ -2009,7 +2009,7 @@ function readStablefordPerHole(row) {
             players.push({
               name,
               handicap: hcap,
-              gender: g || "",
+              gender: g || "M",
               teeLabel: tee || ""
             });
           }
@@ -2040,19 +2040,14 @@ function readStablefordPerHole(row) {
             if (!cell) continue;
             if (looksLikeTeeLabel(cell) && !teeLabelMap[nm]) teeLabelMap[nm] = cell;
             const cellLower = cell.toLowerCase();
-            if (/women|ladies|\bred\b/.test(cellLower)) genderMap[nm] = "F";
+            if (/women|ladies/.test(cellLower)) genderMap[nm] = "F";
           }
-          // Leave unset unless we see explicit women/ladies markers; default applied later
-          
+          if (genderMap[nm] == null) genderMap[nm] = "M";
         }
 
         for (const p of players) {
-          if ((!p.gender || p.gender === "") && genderMap[p.name]) p.gender = genderMap[p.name];
+          if (!p.gender && genderMap[p.name]) p.gender = genderMap[p.name];
           if (!p.teeLabel && teeLabelMap[p.name]) p.teeLabel = teeLabelMap[p.name];
-          // If tee label clearly indicates women/ladies, force gender = F
-          const tl = String(p.teeLabel || "").toLowerCase();
-          if (/women|ladies|\bred\b|\bladies\b/.test(tl)) p.gender = "F";
-          if (!p.gender) p.gender = "M";
         }
 
 
@@ -3460,500 +3455,403 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
           const [showModelInternals, setShowModelInternals] = useState(false);
 
           // ---- Next Event Winner Odds (Deterministic Monte Carlo, Stableford points) ----
-          
-const winnerOdds = useMemo(() => {
-  // Keep a stable debug object so console calls never throw
-  try {
-    if (typeof window !== "undefined" && !window.__ODDS_DEBUG) {
-      window.__ODDS_DEBUG = { groups: [], sample: [], ts: Date.now() };
-    }
-  } catch {}
+          const winnerOdds = useMemo(() => {
+            const currentRows = (Array.isArray(computed) ? computed : []).filter(r => r && r.name);
+            const seasonArr = Array.isArray(seasonRoundsFiltered) ? seasonRoundsFiltered : [];
+            // League roster = anyone who has appeared in season rounds, plus anyone in the current round
+            const byKeyCurrent = new Map();
+            currentRows.forEach(r => {
+              const k = normalizeName(String(r.name||""));
+              if (k) byKeyCurrent.set(k, r);
+            });
+            const leagueKeys = new Set();
 
-  const currentRows = (Array.isArray(computed) ? computed : []).filter(r => r && r.name);
-  const seasonArr = Array.isArray(seasonRoundsFiltered) ? seasonRoundsFiltered : [];
+// Flatten season rounds into per-player history rows
+const seasonPlayerRows = [];
+const roundStats = []; // per-round field averages (for course/difficulty normalization)
+seasonArr.forEach(sr => {
+  const parsed = sr && sr.parsed ? sr.parsed : sr; // tolerate already-parsed shapes
+  const players = (parsed && Array.isArray(parsed.players)) ? parsed.players : [];
+  const dateMs = Number.isFinite(sr?.dateMs) ? sr.dateMs : (Number.isFinite(parsed?.dateMs) ? parsed.dateMs : null);
 
-  const byKeyCurrent = new Map();
-  currentRows.forEach(r => {
-    const k = normalizeName(String(r.name || ""));
-    if (k) byKeyCurrent.set(k, r);
+  // Round field average Stableford points (used to normalize player results across "easy/hard" days)
+  const ptsList = players
+    .map(p => Number(p?.pts ?? p?.points ?? p?.stableford ?? p?.sf ?? p?.totalPoints ?? p?.netPoints))
+    .filter(n => Number.isFinite(n));
+  const roundAvg = ptsList.length ? (ptsList.reduce((a,b)=>a+b,0) / ptsList.length) : 36;
+
+  // Build group averages for this round (teeLabel preferred, else gender)
+  const groupSums = new Map();
+  const groupCounts = new Map();
+  for (const pp of players) {
+    const gPts = Number(pp?.pts ?? pp?.points ?? pp?.stableford ?? pp?.sf ?? pp?.totalPoints ?? pp?.netPoints);
+    if (!Number.isFinite(gPts)) continue;
+    const teeLabel = String(pp?.teeLabel ?? pp?.tee ?? pp?.tee_name ?? pp?.teeName ?? "").toLowerCase().trim();
+    const genderRaw = String(pp?.gender ?? pp?.sex ?? "").toUpperCase();
+    const gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : "M";
+    const groupKey = teeLabel || gender;
+    groupSums.set(groupKey, (groupSums.get(groupKey) || 0) + gPts);
+    groupCounts.set(groupKey, (groupCounts.get(groupKey) || 0) + 1);
+  }
+  const groupAvgByKey = new Map();
+  for (const [k, sum] of groupSums.entries()) {
+    const c = groupCounts.get(k) || 1;
+    groupAvgByKey.set(k, sum / c);
+  }
+
+  if (Number.isFinite(dateMs)) {
+    roundStats.push({ dateMs, roundAvg, n: ptsList.length });
+  }
+
+  players.forEach(p => {
+    const nm = String(p?.name || p?.player || p?.playerName || "").trim();
+    const k = normalizeName(nm);
+    if (!k) return;
+
+    // stableford points (try common keys)
+    const pts = Number(p?.pts ?? p?.points ?? p?.stableford ?? p?.sf ?? p?.totalPoints ?? p?.netPoints);
+    // handicap at the time (exact HI)
+    const hi = Number(p?.startExact ?? p?.index ?? p?.hi ?? p?.handicap ?? p?.exact ?? p?.hiExact);
+
+    const teeLabel = String(p?.teeLabel ?? p?.tee ?? p?.tee_name ?? p?.teeName ?? "").toLowerCase().trim();
+    const genderRaw = String(p?.gender ?? p?.sex ?? "").toUpperCase();
+    const gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : "M";
+    const groupKey = teeLabel || gender;
+    const groupAvg = groupAvgByKey.get(groupKey) ?? roundAvg;
+
+    seasonPlayerRows.push({ k, name: nm, pts, hi, dateMs, roundAvg, gender, teeLabel, groupKey, groupAvg });
+    leagueKeys.add(k);
   });
+});
+// Ensure current-round players are included even if season is empty
+byKeyCurrent.forEach((_, k) => leagueKeys.add(k));
 
-  const leagueKeys = new Set();
-
-  // ---------- helpers ----------
-  const sumNums = (arr) => (Array.isArray(arr) ? arr.reduce((a, v) => a + (Number.isFinite(+v) ? +v : 0), 0) : 0);
-  const stdDev = (arr) => {
-    const xs = (Array.isArray(arr) ? arr.map(Number).filter(Number.isFinite) : []);
-    if (xs.length < 2) return 0;
-    const m = xs.reduce((a,b)=>a+b,0) / xs.length;
-    const v = xs.reduce((a,b)=>a + (b-m)*(b-m), 0) / (xs.length - 1);
-    return Math.sqrt(Math.max(0, v));
-  };
-  const normKey = (s) => String(s || "").toLowerCase().trim();
-  const inferGenderFromTee = (teeLabel) => {
-    const t = String(teeLabel || "").toLowerCase();
-    // Prefer explicit words / structured labels over colour.
-    if (t.includes("women") || t.includes("ladies") || t.includes("lady") || t.includes("womens")) return "F";
-    if (t.includes("men") || t.includes("gents") || t.includes("mens")) return "M";
-
-    // Common structured labels like "55 women's tee" / "61 men's tee"
-    if (/\b\d+\s*w(omen)?\b/.test(t)) return "F";
-    if (/\b\d+\s*m(en)?\b/.test(t)) return "M";
-
-    // Colour is ambiguous across courses; only "red" is reliably ladies in most UK cards.
-    if (t.includes("red")) return "F";
-
-    return null;
-  };
-  const normalSample = (mu, sigma) => {
-    // Box–Muller
-    const u1 = Math.max(1e-12, Math.random());
-    const u2 = Math.max(1e-12, Math.random());
-    const z = Math.sqrt(-2.0 * Math.log(u1)) * Math.cos(2.0 * Math.PI * u2);
-    return mu + z * sigma;
-  };
-
-  // ---------- flatten season rounds into scorecard-driven history rows ----------
-  const seasonPlayerRows = [];
-  const roundStats = []; // {dateMs, roundAvgPts, n}
-
-  seasonArr.forEach(sr => {
-    const parsed = sr && sr.parsed ? sr.parsed : sr;
-    const players = (parsed && Array.isArray(parsed.players)) ? parsed.players : [];
-    const dateMs = Number.isFinite(sr?.dateMs) ? sr.dateMs : (Number.isFinite(parsed?.dateMs) ? parsed.dateMs : null);
-
-    // Build per-round averages by tee (teeLabel) — this is the only “cohort” that matters for Stableford performance
-    const groupSums = new Map();
-    const groupCounts = new Map();
-
-    // Also compute overall round average (fallback)
-    const ptsList = [];
-
-    for (const pp of players) {
-      const teeLabel = normKey(pp?.teeLabel ?? pp?.tee ?? pp?.tee_name ?? pp?.teeName ?? "");
-      const groupKey = teeLabel || "all";
-
-      // Prefer per-hole points if present; otherwise fall back to total points fields
-      const perHolePts = Array.isArray(pp?.perHole) ? pp.perHole.map(Number) : (Array.isArray(pp?.holePts) ? pp.holePts.map(Number) : null);
-      const pts = Number.isFinite(+pp?.pts ?? +pp?.points ?? +pp?.stableford ?? +pp?.sf ?? +pp?.totalPoints ?? +pp?.netPoints)
-        ? Number(pp?.pts ?? pp?.points ?? pp?.stableford ?? pp?.sf ?? pp?.totalPoints ?? pp?.netPoints)
-        : (perHolePts ? sumNums(perHolePts) : NaN);
-
-      if (Number.isFinite(pts)) {
-        ptsList.push(pts);
-        groupSums.set(groupKey, (groupSums.get(groupKey) || 0) + pts);
-        groupCounts.set(groupKey, (groupCounts.get(groupKey) || 0) + 1);
-      }
-    }
-
-    const roundAvgPts = ptsList.length ? (ptsList.reduce((a,b)=>a+b,0) / ptsList.length) : 36;
-    const groupAvgByKey = new Map();
-    for (const [k, sum] of groupSums.entries()) {
-      const c = groupCounts.get(k) || 1;
-      groupAvgByKey.set(k, sum / c);
-    }
-
-    if (Number.isFinite(dateMs)) {
-      roundStats.push({ dateMs, roundAvgPts, n: ptsList.length });
-    }
-
-    // Per-player rows, enriched from scorecard arrays (per-hole points, gross, par, SI)
-    players.forEach(p => {
-      const nm = String(p?.name || p?.player || p?.playerName || "").trim();
-      const k = normalizeName(nm);
-      if (!k) return;
-
-      const teeLabel = normKey(p?.teeLabel ?? p?.tee ?? p?.tee_name ?? p?.teeName ?? "");
-      const groupKey = teeLabel || "all";
-
-      const perHolePts = Array.isArray(p?.perHole) ? p.perHole.map(Number) : (Array.isArray(p?.holePts) ? p.holePts.map(Number) : null);
-      const pts = Number.isFinite(+p?.pts ?? +p?.points ?? +p?.stableford ?? +p?.sf ?? +p?.totalPoints ?? +p?.netPoints)
-        ? Number(p?.pts ?? p?.points ?? p?.stableford ?? p?.sf ?? p?.totalPoints ?? p?.netPoints)
-        : (perHolePts ? sumNums(perHolePts) : NaN);
-
-      const grossPH = Array.isArray(p?.grossPerHole) ? p.grossPerHole.map(Number)
-        : (Array.isArray(p?.gross) ? p.gross.map(Number)
-        : (Array.isArray(p?.holeGross) ? p.holeGross.map(Number) : null));
-
-      const pars = Array.isArray(p?.pars) ? p.pars.map(Number)
-        : (Array.isArray(parsed?.pars) ? parsed.pars.map(Number) : (Array.isArray(p?.parByHole) ? p.parByHole.map(Number) : null));
-
-      const sis = Array.isArray(p?.sis) ? p.sis.map(Number)
-        : (Array.isArray(parsed?.sis) ? parsed.sis.map(Number) : (Array.isArray(p?.siByHole) ? p.siByHole.map(Number) : null));
-
-      const vsPar = (grossPH && pars && grossPH.length && pars.length)
-        ? (sumNums(grossPH) - sumNums(pars))
-        : NaN;
-
-      let toughPts = NaN, easyPts = NaN;
-      if (perHolePts && sis && perHolePts.length === sis.length) {
-        let t = 0, e = 0, tN = 0, eN = 0;
-        for (let i=0;i<sis.length;i++){
-          const si = Number(sis[i]);
-          const hp = Number(perHolePts[i]);
-          if (!Number.isFinite(si) || !Number.isFinite(hp)) continue;
-          if (si <= 6) { t += hp; tN++; }
-          if (si >= 13) { e += hp; eN++; }
-        }
-        toughPts = tN ? t : NaN;
-        easyPts = eN ? e : NaN;
-      }
-
-      const cons = perHolePts ? stdDev(perHolePts) : NaN;
-
-      const hi = Number(p?.startExact ?? p?.index ?? p?.hi ?? p?.handicap ?? p?.exact ?? p?.hiExact);
-      const genderRaw = String(p?.gender ?? p?.sex ?? "").toUpperCase();
-      let gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F"
-                 : (genderRaw === "M" || genderRaw === "MALE" || genderRaw === "G" || genderRaw === "MEN") ? "M"
-                 : (inferGenderFromTee(teeLabel) || null);
-
-      const groupAvg = groupAvgByKey.get(groupKey) ?? roundAvgPts;
-
-      seasonPlayerRows.push({
-        k, name: nm,
-        pts, hi,
-        dateMs, roundAvgPts,
-        teeLabel, groupKey,
-        groupAvg,
-        vsPar, toughPts, easyPts,
-        cons,
-        gender
-      });
-
-      leagueKeys.add(k);
-    });
+// Build per-player lookup for history
+const histByKey = new Map();
+for (const r of seasonPlayerRows) {
+  if (!histByKey.has(r.k)) histByKey.set(r.k, []);
+  histByKey.get(r.k).push(r);
+}
+// sort each history chronologically
+for (const arr of histByKey.values()) {
+  arr.sort((a,b) => {
+    const da = Number.isFinite(a.dateMs) ? a.dateMs : -Infinity;
+    const db = Number.isFinite(b.dateMs) ? b.dateMs : -Infinity;
+    return da - db;
   });
+}
 
-  // Ensure current-round players are included even if season is empty
-  byKeyCurrent.forEach((_, k) => leagueKeys.add(k));
+// ---- League baseline (captures "course/day difficulty") ----
+const _rounds = roundStats
+  .filter(r => Number.isFinite(r?.dateMs) && Number.isFinite(r?.roundAvg))
+  .sort((a,b)=>a.dateMs-b.dateMs)
+  .slice(-20);
 
-  // history by player
-  const histByKey = new Map();
-  for (const r of seasonPlayerRows) {
-    if (!histByKey.has(r.k)) histByKey.set(r.k, []);
-    histByKey.get(r.k).push(r);
+// exponentially weighted mean/variance for round average points
+const baseDecay = 0.9;
+let bW = 0, bS = 0;
+for (let i=0;i<_rounds.length;i++){
+  const age = (_rounds.length-1)-i;
+  const w = Math.pow(baseDecay, age);
+  bW += w;
+  bS += w * _rounds[i].roundAvg;
+}
+const leagueBaseMu = (bW>0 ? (bS/bW) : 36);
+
+let bVarW = 0, bVarS = 0;
+for (let i=0;i<_rounds.length;i++){
+  const age = (_rounds.length-1)-i;
+  const w = Math.pow(baseDecay, age);
+  bVarW += w;
+  bVarS += w * Math.pow(_rounds[i].roundAvg - leagueBaseMu, 2);
+}
+// baseline sigma: round-to-round swing in field scoring; keep it in a sensible band
+const leagueBaseSigma = Math.max(0.8, Math.min(4.0, (bVarW>0 ? Math.sqrt(bVarS/bVarW) : 1.6)));
+
+// ---- Build per-player model rows ----
+const rows = Array.from(leagueKeys).map(k => {
+  const cur = byKeyCurrent.get(k);
+  const hist = histByKey.get(k) || [];
+
+  const name = cur ? String(cur.name || "") : (hist.length ? String(hist[hist.length-1].name || "") : "");
+
+  // residual history = player points minus that round's field average (normalizes for easy/hard rounds)
+  const resHist = hist
+    .map(h => {
+      const pts = Number(h.pts);
+      const ra = Number(h.groupAvg ?? h.roundAvg);
+      if (!Number.isFinite(pts) || !Number.isFinite(ra)) return null;
+      return { res: (pts - ra), pts, ra, dateMs: h.dateMs, hi: h.hi, groupKey: h.groupKey, gender: h.gender, teeLabel: h.teeLabel };
+    })
+    .filter(Boolean);
+
+  const last12 = resHist.slice(-12); // chronological already
+
+  // Exponentially weighted mean of residuals (recent form matters more)
+  const decay = 0.85;
+  let wsum = 0, rsum = 0;
+  for (let i=0;i<last12.length;i++){
+    const age = (last12.length-1)-i;
+    const w = Math.pow(decay, age);
+    wsum += w;
+    rsum += w * last12[i].res;
   }
-  for (const arr of histByKey.values()) {
-    arr.sort((a,b) => (Number.isFinite(a.dateMs)?a.dateMs:0) - (Number.isFinite(b.dateMs)?b.dateMs:0));
+  const rawResMu = wsum>0 ? (rsum/wsum) : 0;
+
+  // Small-sample shrinkage toward 0 (league-average) so newcomers don't get silly odds
+  const n = last12.length;
+  const shrink = n / (n + 6); // 0..1
+  const resMu = rawResMu * shrink;
+
+  // Weighted residual sigma (with a gentle prior)
+  let vW = 0, vS = 0;
+  for (let i=0;i<last12.length;i++){
+    const age = (last12.length-1)-i;
+    const w = Math.pow(decay, age);
+    vW += w;
+    vS += w * Math.pow(last12[i].res - rawResMu, 2);
   }
+  const rawResSigma = (vW>0 ? Math.sqrt(vS/vW) : 3.8);
+  const resSigma = Math.max(1.2, Math.min(7.5, (rawResSigma*(0.6+0.4*shrink)) + (1-shrink)*3.0));
 
-  // ---------- league baseline (difficulty normalization) ----------
-  const _rounds = roundStats
-    .filter(r => Number.isFinite(r?.dateMs) && Number.isFinite(r?.roundAvgPts))
-    .sort((a,b)=>a.dateMs-b.dateMs)
-    .slice(-20);
-
-  const baseDecay = 0.9;
-  let bW = 0, bS = 0;
-  for (let i=0;i<_rounds.length;i++){
-    const age = (_rounds.length-1)-i;
-    const w = Math.pow(baseDecay, age);
-    bW += w;
-    bS += w * _rounds[i].roundAvgPts;
-  }
-  const leagueBaseMu = (bW > 0 ? (bS / bW) : 36);
-
-  let bVarW = 0, bVarS = 0;
-  for (let i=0;i<_rounds.length;i++){
-    const age = (_rounds.length-1)-i;
-    const w = Math.pow(baseDecay, age);
-    bVarW += w;
-    const d = _rounds[i].roundAvgPts - leagueBaseMu;
-    bVarS += w * d * d;
-  }
-  const leagueBaseSigma = Math.sqrt(Math.max(1, (bVarW > 0 ? (bVarS / bVarW) : 9))); // sane floor
-
-  // ---------- player model ----------
-  const maxHist = 12;
-  const playerModels = []; // {k, name, mu, sigma, groupKey}
-
-  // Feature weights (simple, interpretable)
-  const W_FORM = 1.0;        // normalized pts vs group avg
-  const W_TOUGH = 0.08;      // reward tough-hole scoring
-  const W_EASY = 0.03;       // slight reward on easy holes
-  const W_VSPAR = -0.05;     // lower gross vs par correlates (negative is good)
-  const W_CONS = -0.35;      // lower volatility is good (std dev)
-
-  for (const k of leagueKeys) {
-    const cur = byKeyCurrent.get(k);
-    const displayName = String(cur?.name || (histByKey.get(k)?.[0]?.name) || "").trim() || k;
-
-    const histAll = histByKey.get(k) || [];
-    const hist = histAll.slice(-maxHist);
-
-    // If no history, assume average player
-    if (!hist.length) {
-      playerModels.push({
-        k,
-        name: displayName,
-        mu: leagueBaseMu,
-        sigma: leagueBaseSigma * 1.15,
-        groupKey: "all"
-      });
-      continue;
-    }
-
-    // Recency weights
-    const decay = 0.85;
-    let wSum = 0;
-
-    let adjSum = 0;     // normalized pts vs groupAvg
-    let toughSum = 0;   // centered to round averages
-    let easySum = 0;
-    let vsParSum = 0;
-    let consSum = 0;
-
-    const residuals = [];
-
-    for (let i=0;i<hist.length;i++) {
-      const age = (hist.length-1)-i;
+  // Trend (points per round) from weighted linear regression on residuals
+  let formTrend = 0;
+  if (n >= 3) {
+    let sw=0, sx=0, sy=0, sxx=0, sxy=0;
+    for (let i=0;i<n;i++){
+      const age = (n-1)-i;
       const w = Math.pow(decay, age);
-      wSum += w;
-
-      const r = hist[i];
-
-      // Scorecard-driven: pts, groupAvg always from actual round data
-      const pts = Number(r.pts);
-      const groupAvg = Number(r.groupAvg);
-      const adj = (Number.isFinite(pts) && Number.isFinite(groupAvg)) ? (pts - groupAvg) : 0;
-
-      const tough = Number.isFinite(r.toughPts) ? r.toughPts : 0;
-      const easy = Number.isFinite(r.easyPts) ? r.easyPts : 0;
-      const vsPar = Number.isFinite(r.vsPar) ? r.vsPar : 0;
-      const cons = Number.isFinite(r.cons) ? r.cons : 0;
-
-      adjSum += w * adj;
-      toughSum += w * tough;
-      easySum += w * easy;
-      vsParSum += w * vsPar;
-      consSum += w * cons;
-
-      residuals.push(adj);
+      const x = i;           // 0..n-1 (older -> smaller i)
+      const y = last12[i].res;
+      sw += w; sx += w*x; sy += w*y; sxx += w*x*x; sxy += w*x*y;
     }
-
-    const adjMu = (wSum>0 ? adjSum / wSum : 0);
-    const toughMu = (wSum>0 ? toughSum / wSum : 0);
-    const easyMu = (wSum>0 ? easySum / wSum : 0);
-    const vsParMu = (wSum>0 ? vsParSum / wSum : 0);
-    const consMu = (wSum>0 ? consSum / wSum : 0);
-
-    // projected points for next round:
-    // baseline difficulty + player delta + feature adjustments
-    const mu =
-      leagueBaseMu
-      + W_FORM * adjMu
-      + W_TOUGH * toughMu
-      + W_EASY * easyMu
-      + W_VSPAR * vsParMu
-      + W_CONS * consMu;
-
-    // volatility from residuals + league sigma
-    const resSigma = stdDev(residuals);
-    const sigma = Math.max(1.5, Math.sqrt(leagueBaseSigma*leagueBaseSigma + resSigma*resSigma));
-
-    // For grouping/debug we prefer teeLabel from most recent round, not gender
-    const groupKey = hist[hist.length-1].groupKey || "all";
-
-    playerModels.push({ k, name: displayName, mu, sigma, groupKey });
+    const denom = (sw*sxx - sx*sx);
+    if (Math.abs(denom) > 1e-9) {
+      formTrend = (sw*sxy - sx*sy)/denom; // residual points per round
+      // clamp trend to avoid silly extrapolation
+      formTrend = Math.max(-2.5, Math.min(2.5, formTrend));
+    }
   }
 
-  // ---------- deterministic-ish Monte Carlo winner odds (scorecard-driven) ----------
-    // NOTE: We build "history" ONLY from scorecard-derived rounds (seasonPlayerRows),
-    // not from the course/tees database.
-    // We also (optionally) adjust expected net points by projected Next HI change.
+  // start handicap: prefer current row's startExact, else last known from history
+  const lastHist = hist.length ? hist[hist.length-1] : null;
+  const startExactRaw = cur ? Number(cur.startExact ?? cur.index ?? cur.hi ?? 0)
+    : Number(lastHist?.hi ?? 0);
+  const prevStartExact = clamp(startExactRaw, 0, 36);
 
-    // who won *this* round (for DEN next HI calc)
-    const isWinnerByKey = new Map();
-    if (Array.isArray(currentRows) && currentRows.length) {
-      const bestPts = Math.max(
-        ...currentRows.map((r) => (Number.isFinite(+r?.pts) ? +r.pts : -Infinity))
-      );
-      currentRows.forEach((r) => {
-        const k = normalizeKey(r?.name);
-        if (!k) return;
-        if (+r?.pts === bestPts) isWinnerByKey.set(k, true);
-      });
-    }
+  // next handicap: if played current round, use that computed nextExactNum; otherwise no change
+  const nextExactRaw = cur ? Number(cur.nextExactNum ?? cur.nextExact ?? cur.nextExactRaw ?? cur.nextExactDisplay ?? prevStartExact)
+    : prevStartExact;
+  const nextExactNum = clamp(nextExactRaw, 0, 36);
 
-    // convert history into simple gaussian models per player
-    const playerModels = [];
-    for (const [k, hist] of byPlayer.entries()) {
-      if (!hist?.length) continue;
+  // For NEXT-round forecasting:
+  // - In No change mode, we tee off on the current index (prevStartExact).
+  // - In WHS Diff / Legacy Formula, we tee off on the computed NEXT handicap.
+  const startExact = (String(nextHcapMode || "").toLowerCase() === "nochange") ? prevStartExact : nextExactNum;
 
-      // last n rounds (latest first already)
-      const n = Math.min(hist.length, Math.max(1, Math.floor(oddsRoundsLimit)));
-      const slice = hist.slice(0, n);
+  // Handicap movement used to adjust expected points (≈ 1 pt per HI stroke)
+  const deltaModelHI = nextExactNum - prevStartExact;
 
-      const ptsArr = slice.map((h) => +h.pts).filter((v) => Number.isFinite(v));
-      if (!ptsArr.length) continue;
+  // Expected points: league baseline + personal residual + HI movement, clamped.
+  const expPts = clamp(leagueBaseMu + resMu + deltaModelHI, 18, 56);
 
-      const muPts = mean(ptsArr);
-      const sdPts = stddev(ptsArr) || 1.0;
+  const deltaHI = nextExactNum - startExact;
 
-      // simple "difficulty" + "course variance" modifiers
-      const toughArr = slice.map((h) => +h.toughPts).filter((v) => Number.isFinite(v));
-      const consArr = slice.map((h) => +h.consBetter).filter((v) => Number.isFinite(v));
-
-      const toughBonus = toughArr.length ? mean(toughArr) * 0.15 : 0;
-      const consPenalty = consArr.length ? mean(consArr) * 0.75 : 0;
-
-      // base expected points (net stableford) from scorecards
-      let expectedPts = muPts + toughBonus - consPenalty;
-
-      // project next HI (only if we have enough data)
-      const cur = byKeyCurrent.get(k);
-      const startExact = Number.isFinite(+cur?.startExact)
-        ? +cur.startExact
-        : Number.isFinite(+cur?.exact)
-          ? +cur.exact
-          : Number.isFinite(+cur?.hi)
-            ? +cur.hi
-            : null;
-
-      const gender = cur?.gender || slice.find((h) => h.gender)?.gender || null;
-
-      let nextHi = startExact;
-      if (nextHcapMode !== "off" && Number.isFinite(startExact)) {
-        const isWinner = !!isWinnerByKey.get(k);
-        if (nextHcapMode === "den") {
-          // uses today's points/back9 to project HI change
-          const ptsToday = Number.isFinite(+cur?.pts) ? +cur.pts : null;
-          const back9Today = Number.isFinite(+cur?.back9) ? +cur.back9 : null;
-          if (Number.isFinite(ptsToday)) {
-            nextHi = computeNewExactHandicap(startExact, gender || "M", ptsToday, back9Today, isWinner);
-          }
-        } else if (nextHcapMode === "whs") {
-          // We can only do a *light* WHS-ish projection without full CR/Slope + hole-by-hole.
-          // Fallback to DEN projection if we at least have points for today.
-          const ptsToday = Number.isFinite(+cur?.pts) ? +cur.pts : null;
-          const back9Today = Number.isFinite(+cur?.back9) ? +cur.back9 : null;
-          if (Number.isFinite(ptsToday)) {
-            nextHi = computeNewExactHandicap(startExact, gender || "M", ptsToday, back9Today, isWinner);
-          }
-        }
-      }
-
-      // handicap change affects net points expectation (roughly 1 HI ~ 1 stroke ~ 1 stableford point)
-      if (nextHcapMode !== "off" && Number.isFinite(startExact) && Number.isFinite(nextHi)) {
-        const delta = nextHi - startExact; // +ve => more strokes => expected net points go up
-        expectedPts += delta;
-      }
-
-      // volatility: blend within-player sd with "consistency" signal
-      const sigma = clamp(sdPts * (0.9 + Math.abs(consPenalty) * 0.15), 0.75, 7.5);
-
-      playerModels.push({
-        k,
-        name: slice[0]?.name || (cur?.name ?? k),
-        mu: expectedPts,
-        sigma,
-        rounds: slice.length,
-        volatility: sigma,
-        nextHi: Number.isFinite(nextHi) ? nextHi : null,
-        groupKey: slice[0]?.groupKey || cur?.groupKey || "all",
-      });
-    }
-
-    // deterministic RNG for repeatability per event key
-    const rng = mulberry32(hash32(seedKey + "|" + String(simCount)));
-
-    const winCounts = new Map();
-    const top3Counts = new Map();
-    const top4Counts = new Map();
-
-    for (let i = 0; i < simCount; i++) {
-      const sims = playerModels.map((p) => ({
-        k: p.k,
-        pts: p.mu + p.sigma * randn(rng),
-      }));
-      sims.sort((a, b) => b.pts - a.pts);
-
-      if (sims[0]) winCounts.set(sims[0].k, (winCounts.get(sims[0].k) || 0) + 1);
-      for (let j = 0; j < sims.length; j++) {
-        const k = sims[j].k;
-        if (j < 3) top3Counts.set(k, (top3Counts.get(k) || 0) + 1);
-        if (j < 4) top4Counts.set(k, (top4Counts.get(k) || 0) + 1);
-      }
-    }
-
-
-    let odds = playerModels
-    .map(p => ({
-      ...p,
-      winProb: (winCounts.get(p.k) || 0) / simCount,
-      top3Pct: ((top3Counts.get(p.k) || 0) / simCount) * 100,
-      top4Pct: ((top4Counts.get(p.k) || 0) / simCount) * 100,
-    }))
-    .sort((a,b)=>b.winProb-a.winProb);
-
-  // If anything went sideways (data not ready yet), fall back to current leaderboard so UI never goes blank
-  if (!odds.length) {
-    const fallback = (Array.isArray(currentRows) ? currentRows : [])
-      .filter(r => r && r.name)
-      .map(r => ({
-        k: normalizeName(String(r.name || "")),
-        name: String(r.name || "").trim(),
-        winProb: 0,
-        groupKey: String(r.teeLabel || r.tee || "all") || "all",
-        mu: leagueBaseMu,
-        sigma: leagueBaseSigma
-      }))
-      .filter(p => p.k && p.name);
-
-    const denom = fallback.length || 1;
-    fallback.forEach(p => (p.winProb = 1 / denom));
-    odds = fallback;
-  }
-
-  // Confidence: concentration + gap between #3/#4 (simple heuristic)
-  const top4 = odds.slice(0,4);
-  const top4Sum = top4.reduce((a,b)=>a+b.winProb,0);
-  const gap = (top4[2] && top4[3]) ? (top4[2].winProb - top4[3].winProb) : 0;
-  const confidence = (top4Sum > 1.5 && gap > 0.03) ? "High"
-                    : (top4Sum > 1.25 && gap > 0.015) ? "Medium"
-                    : "Low";
-
-  // Debug for you
-  try {
-    if (typeof window !== "undefined") {
-      const dbg = (window.__ODDS_DEBUG = window.__ODDS_DEBUG || {});
-      dbg.groups = Array.from(new Set(seasonPlayerRows.map(r => r.groupKey))).sort();
-      dbg.sample = seasonPlayerRows.slice(-50); // last 50 rows for inspection
-      dbg.oddsTop = (odds || []).slice(0, 25).map(p => ({
-        name: p.name,
-        winProb: p.winProb,
-        top3Pct: p.top3Pct,
-        top4Pct: p.top4Pct,
-        mu: p.mu,
-        sigma: p.sigma,
-        nextHi: p.nextHi,
-        groupKey: p.groupKey,
-        rounds: p.rounds
-      }));
-      dbg.meta = {
-        simCount,
-        playerModels: playerModels.length,
-        seasonRows: seasonPlayerRows.length,
-        confidence,
-        c4: top4Sum,
-        gap
-      };
-      dbg.ts = Date.now();
-    }
-  } catch {}
+  // Model params for display
+  const formMu = expPts - 36;
+  // total uncertainty combines "day difficulty" + player volatility
+  const totalSigma = Math.sqrt((leagueBaseSigma*leagueBaseSigma) + (resSigma*resSigma));
+  const formSigma = Math.max(1.5, Math.min(9.0, totalSigma));
 
   return {
-    sims: simCount,
-    leagueBaseMu,
-    leagueBaseSigma,
-    confidence,
-    gap,
-    c4: top4Sum,
-    odds,
-    top4,
-    rows: odds,
+    name,
+    startExact,
+    nextExactNum,
+    deltaHI,
+    deltaModelHI,
+    expPts,
+    formMu,
+    formSigma,
+    formTrend,
+    // components used by the simulator
+    modelBaseMu: leagueBaseMu,
+    modelBaseSigma: leagueBaseSigma,
+    modelResMu: resMu,
+    modelResSigma: resSigma,
+    roundsUsed: n
   };
-}, [computed, nextHcapMode, seasonRoundsFiltered]);
+}).filter(r => r && r.name);
+
+
+
+            // Deterministic PRNG (seeded from current filtered data + next handicap mode)
+            const _seedStr = JSON.stringify({
+              mode: nextHcapMode,
+              rows: rows.map(r => ({
+                n: String(r.name||""),
+                mu: Number(r.formMu||0),
+                tr: Number(r.formTrend||0),
+                sg: Number(r.formSigma||0),
+                ex: Number(r.expPts||36),
+                st: Number(r.startExact||0),
+                nx: Number(r.nextExactNum||r.startExact||0),
+              }))
+            });
+
+            const xmur3 = (str) => {
+              let h = 1779033703 ^ str.length;
+              for (let i = 0; i < str.length; i++) {
+                h = Math.imul(h ^ str.charCodeAt(i), 3432918353);
+                h = (h << 13) | (h >>> 19);
+              }
+              return () => {
+                h = Math.imul(h ^ (h >>> 16), 2246822507);
+                h = Math.imul(h ^ (h >>> 13), 3266489909);
+                h ^= h >>> 16;
+                return h >>> 0;
+              };
+            };
+
+            const mulberry32 = (a) => () => {
+              let t = a += 0x6D2B79F5;
+              t = Math.imul(t ^ (t >>> 15), t | 1);
+              t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+              return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+            };
+
+            const seed = xmur3(_seedStr)();
+            const rand = mulberry32(seed);
+
+            // helper: normal random (Box–Muller) using seeded RNG
+            const randn = () => {
+              let u = 0, v = 0;
+              while (u === 0) u = rand();
+              while (v === 0) v = rand();
+              return Math.sqrt(-2.0 * Math.log(u)) * Math.cos(2.0 * Math.PI * v);
+            };
+
+            const sims = 8000;
+            const win = new Array(rows.length).fill(0);
+            const top3 = new Array(rows.length).fill(0);
+            const top4 = new Array(rows.length).fill(0);
+
+            const baseMu = (rows[0] && Number.isFinite(Number(rows[0].modelBaseMu))) ? Number(rows[0].modelBaseMu) : 36;
+const baseSigma = (rows[0] && Number.isFinite(Number(rows[0].modelBaseSigma))) ? Number(rows[0].modelBaseSigma) : 1.6;
+
+// Precompute per-player mean components + individual sigma
+const addMu = rows.map(r => {
+  const rm = Number.isFinite(Number(r.modelResMu)) ? Number(r.modelResMu) : 0;
+  const dh = Number.isFinite(Number(r.deltaModelHI)) ? Number(r.deltaModelHI) : 0;
+  return rm + dh;
+});
+const indSig = rows.map(r => {
+  const s = Number.isFinite(Number(r.modelResSigma)) ? Number(r.modelResSigma) : 4.0;
+  return Math.max(1.0, Math.min(8.0, s));
+});
+for (let s = 0; s < sims; s++){
+              // simulate points for each player
+              // Shared "day difficulty" draw (correlates all players a bit)
+              const dayBase = baseMu + randn()*baseSigma;
+
+              const simPts = rows.map((r,i) => {
+                const p = dayBase + addMu[i] + randn()*indSig[i];
+                // clamp to plausible stableford range
+                return Math.max(0, Math.min(60, p));
+              });
+
+              // rank by points desc; deterministic tie-breaker from seeded RNG
+              const order = simPts.map((p,i)=>({i,p, t:rand()}))
+                .sort((a,b)=> (b.p - a.p) || (a.t - b.t));
+
+              if (order.length){
+                win[order[0].i]++;
+                for (let k=0;k<Math.min(3,order.length);k++) top3[order[k].i]++;
+                for (let k=0;k<Math.min(4,order.length);k++) top4[order[k].i]++;
+              }
+            }
+
+            const out = rows.map((r,i)=>{
+              const w = (win[i]/sims)*100;
+              const t3 = (top3[i]/sims)*100;
+              const t4 = (top4[i]/sims)*100;
+              const muAdj = Number.isFinite(Number(r.formMu)) ? Number(r.formMu) : 0;
+              const tr = Number.isFinite(Number(r.formTrend)) ? Number(r.formTrend) : 0;
+              const sigma = Number.isFinite(Number(r.formSigma)) ? Number(r.formSigma) : 4.0;
+              const tag = sigma <= 2.2 ? "Steady" : sigma <= 3.6 ? "Normal" : "Volatile";
+              const trendTag = tr >= 0.25 ? "↑" : tr <= -0.25 ? "↓" : "→";
+              const startHI = (Number.isFinite(Number(r.startExact)) ? Number(r.startExact) : 0);
+              const nextRaw = (Number.isFinite(Number(r.nextExactNum)) ? Number(r.nextExactNum) : startHI);
+              const nextHI = Math.max(0, Math.min(36, nextRaw));
+              const deltaHI = nextHI - startHI;
+              return {
+                name: r.name,
+                startHI,
+                deltaHI,
+                nextHI,
+                winPct: w,
+                top3Pct: t3,
+                top4Pct: t4,
+                expPts: (Number.isFinite(Number(r.expPts)) ? Number(r.expPts) : Math.max(18, Math.min(56, baseMu + addMu[i]))),
+                muAdj,
+                trend: tr,
+                trendTag,
+                sigma,
+                tag,
+                nextDisplay: (r.nextDisplay ?? (Number.isFinite(nextHI) ? nextHI.toFixed(1) : "—")),
+                nextDisplayNum: nextHI,
+                roundsUsed: Number.isFinite(Number(r.oddsRoundsUsed)) ? Number(r.oddsRoundsUsed) : (Number.isFinite(Number(r.formN)) ? Number(r.formN) : 0),
+                similarRounds: Number.isFinite(Number(r.oddsSimilarRounds)) ? Number(r.oddsSimilarRounds) : 0,
+                usedSimilar: !!r.oddsUsedSimilar
+              };
+            });
+
+            // Two useful orderings:
+            // 1) by win% (classic favourite list)
+            const rowsByWin = [...out].sort((a,b)=>b.winPct-a.winPct);
+            // 2) by Top-4% (contender list)
+            const rowsByTop4 = [...out].sort((a,b)=>b.top4Pct-a.top4Pct);
+
+            const p = rowsByTop4.map(r => r.top4Pct/100);
+            const c4 = (p[0]||0) + (p[1]||0) + (p[2]||0) + (p[3]||0);
+            const gap = (p[3]||0) - (p[4]||0);
+
+            const confidence = (c4 >= 2.35 && gap >= 0.06) ? "High"
+              : (c4 >= 2.10 && gap >= 0.03) ? "Medium"
+              : "Low";
+
+
+            // ---- DEBUG HOOK (temporary): inspect grouping in browser console ----
+            try {
+              const groups = Array.from(
+                new Set(seasonPlayerRows.map(r => String(r.groupKey || "").toLowerCase()).filter(Boolean))
+              ).sort();
+
+              window.__ODDS_DEBUG = {
+                groups,
+                sample: seasonPlayerRows.slice(0, 40).map(r => ({
+                  name: r.name,
+                  pts: r.pts,
+                  gender: r.gender,
+                  teeLabel: r.teeLabel,
+                  groupKey: r.groupKey,
+                  groupAvg: r.groupAvg,
+                  roundAvg: r.roundAvg,
+                  dateMs: r.dateMs,
+                })),
+              };
+            } catch (e) {
+              window.__ODDS_DEBUG = { error: String(e) };
+            }
+            // ---- END DEBUG ----
+            return {
+              sims,
+              rows: rowsByWin,
+              top4: rowsByTop4.slice(0,4),
+              confidence,
+              c4,
+              gap,
+            };
+          }, [computed, nextHcapMode, seasonRoundsFiltered]);
 return (
             <section className="content-card p-4 md:p-6">
               <Breadcrumbs items={[{ label: "Round Leaderboard" }]} />
@@ -4093,7 +3991,7 @@ return (
                     <div className="mt-2 flex flex-wrap gap-2">
                       {(winnerOdds.top4 || []).map((p) => (
                         <span key={p.name} className="pill-mini subtle">
-                          {p.name} · <span className="font-mono">{(Number.isFinite(p.top4Pct)?p.top4Pct:(Number.isFinite(p.winProb)?p.winProb*100:0)).toFixed(1)}%</span>
+                          {p.name} · <span className="font-mono">{p.top4Pct.toFixed(1)}%</span>
                         </span>
                       ))}
                     </div>
@@ -4141,7 +4039,7 @@ return (
                           <td className="py-2 px-3 font-bold text-neutral-900">{r.name}</td>
                           <td className="py-2 px-3 text-right font-black text-neutral-900">{r.winPct.toFixed(1)}%</td>
                           <td className="py-2 px-3 text-right font-bold text-neutral-700">{r.top3Pct.toFixed(1)}%</td>
-                          <td className="py-2 px-3 text-right font-bold text-neutral-700">{(Number.isFinite(r.top4Pct)?r.top4Pct:(Number.isFinite(r.winProb)?r.winProb*100:0)).toFixed(1)}%</td>
+                          <td className="py-2 px-3 text-right font-bold text-neutral-700">{r.top4Pct.toFixed(1)}%</td>
                           <td className="py-2 px-3 text-right font-mono font-bold text-neutral-800">{r.expPts.toFixed(1)}</td>
                           <td className="py-2 px-3 text-right font-mono text-neutral-700">{r.usedSimilar ? r.similarRounds : `${r.similarRounds} (fb)`}</td>
                           <td className="py-2 px-3 text-right">
