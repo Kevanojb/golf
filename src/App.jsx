@@ -3517,13 +3517,11 @@ seasonArr.forEach(sr => {
 
     // keep tee/gender only as labels for debugging; NOT used in modelling
     const teeLabel = String(p?.teeLabel ?? p?.tee ?? p?.tee_name ?? p?.teeName ?? "").trim();
-    const genderRaw = String(p?.gender ?? p?.sex ?? "").toUpperCase();
-    const gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : (genderRaw ? "M" : "");
-
+    // gender intentionally ignored for odds modelling (Stableford/handicap should already normalise)
     seasonPlayerRows.push({
       k, name: nm, pts, hi, dateMs,
       roundAvg, roundStd,
-      gender, teeLabel
+      teeLabel
     });
     leagueKeys.add(k);
   });
@@ -3857,7 +3855,6 @@ for (let s = 0; s < sims; s++){
                   roundAvg: r.roundAvg,
                   roundStd: r.roundStd,
                   teeLabel: r.teeLabel,
-                  gender: r.gender,
                   dateMs: r.dateMs,
                 })),
               };
