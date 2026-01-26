@@ -3493,8 +3493,13 @@ seasonArr.forEach(sr => {
     if (!Number.isFinite(gPts)) continue;
     const teeLabel = String(pp?.teeLabel ?? pp?.tee ?? pp?.tee_name ?? pp?.teeName ?? "").toLowerCase().trim();
     const genderRaw = String(pp?.gender ?? pp?.sex ?? "").toUpperCase();
-    const gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : "M";
-    const groupKey = p.teeLabel || "all";
+    let gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : "M";
+    if (!genderRaw) {
+      // Infer gender from tee label when CSV doesn’t supply it
+      if (teeLabel.includes("women") || teeLabel.includes("ladies") || teeLabel.includes("lady") || teeLabel.includes("red")) gender = "F";
+      else if (teeLabel.includes("men") || teeLabel.includes("gents") || teeLabel.includes("gent") || teeLabel.includes("white") || teeLabel.includes("yellow") || teeLabel.includes("blue")) gender = "M";
+    }
+    const groupKey = teeLabel || gender;
     groupSums.set(groupKey, (groupSums.get(groupKey) || 0) + gPts);
     groupCounts.set(groupKey, (groupCounts.get(groupKey) || 0) + 1);
   }
@@ -3520,8 +3525,13 @@ seasonArr.forEach(sr => {
 
     const teeLabel = String(p?.teeLabel ?? p?.tee ?? p?.tee_name ?? p?.teeName ?? "").toLowerCase().trim();
     const genderRaw = String(p?.gender ?? p?.sex ?? "").toUpperCase();
-    const gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : "M";
-    const groupKey = p.teeLabel || "all";
+    let gender = (genderRaw === "F" || genderRaw === "FEMALE" || genderRaw === "W" || genderRaw === "WOMEN") ? "F" : "M";
+    if (!genderRaw) {
+      // Infer gender from tee label when CSV doesn’t supply it
+      if (teeLabel.includes("women") || teeLabel.includes("ladies") || teeLabel.includes("lady") || teeLabel.includes("red")) gender = "F";
+      else if (teeLabel.includes("men") || teeLabel.includes("gents") || teeLabel.includes("gent") || teeLabel.includes("white") || teeLabel.includes("yellow") || teeLabel.includes("blue")) gender = "M";
+    }
+    const groupKey = teeLabel || gender;
     const groupAvg = groupAvgByKey.get(groupKey) ?? roundAvg;
 
     seasonPlayerRows.push({ k, name: nm, pts, hi, dateMs, roundAvg, gender, teeLabel, groupKey, groupAvg });
