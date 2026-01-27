@@ -14479,7 +14479,7 @@ if (!user) {
             open={loginOpen}
             busy={loginBusy}
             onClose={() => setLoginOpen(false)}
-            onSignIn={async (email, password) => {
+            onSubmit={async (email, password) => {
               if (!client) return;
               setLoginBusy(true);
               try {
