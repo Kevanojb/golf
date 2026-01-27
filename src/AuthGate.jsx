@@ -4,7 +4,13 @@ import { createClient } from "@supabase/supabase-js";
 const SUPA_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPA_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
+// localStorage key for last selected society
 const LS_ACTIVE_SOCIETY = "den_active_society_id_v1";
+
+// IMPORTANT: your GitHub Pages base
+const GH_PAGES_BASE = "/den-society-vite/";
+const SITE_ORIGIN = "https://kevanojb.github.io";
+const SITE_URL = `${SITE_ORIGIN}${GH_PAGES_BASE}`; // "https://kevanojb.github.io/den-society-vite/"
 
 function CenterCard({ children }) {
   return (
@@ -28,7 +34,7 @@ export default function AuthGate() {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
-        detectSessionInUrl: true, // IMPORTANT for magic links
+        detectSessionInUrl: true, // <-- REQUIRED for magic links
       },
     })
   );
@@ -51,25 +57,13 @@ export default function AuthGate() {
     }
   });
 
-  // 0) If env missing, show a friendly error (prevents "supabaseUrl is required" mystery)
+  // 0) hard fail early if env is missing (prevents silent "undefined" chaos)
   const envOk = Boolean(SUPA_URL && SUPA_KEY);
-  if (!envOk) {
-    return (
-      <CenterCard>
-        <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Den Society</div>
-        <div className="text-2xl font-black text-neutral-900 mt-1">Config missing</div>
-        <div className="text-sm text-neutral-600 mt-2">
-          Your build didn’t receive <code>VITE_SUPABASE_URL</code> / <code>VITE_SUPABASE_ANON_KEY</code>.
-        </div>
-        <div className="mt-3 text-sm rounded-xl px-3 py-2 bg-rose-50 border border-rose-200 text-rose-900">
-          Fix your GitHub Action to pass the secrets into <code>npm run build</code>.
-        </div>
-      </CenterCard>
-    );
-  }
 
   // 1) session tracking
   React.useEffect(() => {
+    if (!envOk) return;
+
     client.auth.getSession().then(({ data }) => setSession(data?.session || null));
     const { data: sub } = client.auth.onAuthStateChange((_evt, s) => setSession(s || null));
     return () => {
@@ -77,19 +71,12 @@ export default function AuthGate() {
         sub?.subscription?.unsubscribe?.();
       } catch {}
     };
-  }, [client]);
+  }, [client, envOk]);
 
-  // 1b) Clean token junk out of the URL after login
+  // 2) load memberships + societies
   React.useEffect(() => {
-    if (!session) return;
-    const h = window.location.hash || "";
-    if (h.includes("access_token") || h.includes("refresh_token") || h.includes("type=magiclink")) {
-      history.replaceState(null, "", window.location.pathname + window.location.search);
-    }
-  }, [session]);
+    if (!envOk) return;
 
-  // 2) load memberships + societies (does NOT depend on activeSocietyId)
-  React.useEffect(() => {
     let cancelled = false;
 
     async function loadTenant() {
@@ -104,6 +91,7 @@ export default function AuthGate() {
         .eq("user_id", session.user.id);
 
       if (cancelled) return;
+
       if (m.error) {
         setMsg(m.error.message);
         setTenantLoading(false);
@@ -123,6 +111,7 @@ export default function AuthGate() {
       const s = await client.from("societies").select("id, name, slug").in("id", ids);
 
       if (cancelled) return;
+
       if (s.error) {
         setMsg(s.error.message);
         setTenantLoading(false);
@@ -146,7 +135,8 @@ export default function AuthGate() {
       cancelled = true;
       setTenantLoading(false);
     };
-  }, [client, session?.user?.id]); // NOTE: activeSocietyId intentionally NOT here
+    // NOTE: activeSocietyId intentionally NOT in deps to avoid loops
+  }, [client, envOk, session?.user?.id]);
 
   // 3) persist selection
   React.useEffect(() => {
@@ -158,6 +148,12 @@ export default function AuthGate() {
   async function sendMagicLink(e) {
     e.preventDefault();
     setMsg("");
+
+    if (!envOk) {
+      setMsg("Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY in the deployed build.");
+      return;
+    }
+
     const em = (email || "").trim();
     if (!em) {
       setMsg("Enter your email.");
@@ -166,12 +162,17 @@ export default function AuthGate() {
 
     setBusy(true);
     try {
-      // DO NOT include hash here
-      const redirectTo = `${window.location.origin}${window.location.pathname}`;
+      // FORCE GitHub Pages URL (prevents localhost redirects)
+      const redirectTo = SITE_URL;
+
       const { error } = await client.auth.signInWithOtp({
         email: em,
-        options: { emailRedirectTo: redirectTo },
+        options: {
+          emailRedirectTo: redirectTo,
+          shouldCreateUser: true,
+        },
       });
+
       if (error) throw error;
       setMsg("Magic link sent ✓ Check your email");
     } catch (ex) {
@@ -185,19 +186,34 @@ export default function AuthGate() {
     try {
       await client.auth.signOut();
     } catch {}
-    try {
-      localStorage.removeItem(LS_ACTIVE_SOCIETY);
-    } catch {}
-    setActiveSocietyId("");
-    setMemberships([]);
-    setSocieties([]);
+  }
+
+  // If env missing, show a clear screen (otherwise you chase ghosts)
+  if (!envOk) {
+    return (
+      <CenterCard>
+        <div className="text-xs font-black tracking-widest uppercase text-neutral-400">
+          Den Society
+        </div>
+        <div className="text-xl font-black text-neutral-900 mt-1">Config missing</div>
+        <div className="text-sm text-neutral-700 mt-2">
+          Your deployed build doesn’t have Supabase env vars.
+        </div>
+        <div className="mt-3 rounded-2xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
+          VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are undefined in the deployed site.
+          Fix the GitHub Action env injection.
+        </div>
+      </CenterCard>
+    );
   }
 
   // 4) not signed in => show magic link screen
   if (!session?.user) {
     return (
       <CenterCard>
-        <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Den Society</div>
+        <div className="text-xs font-black tracking-widest uppercase text-neutral-400">
+          Den Society
+        </div>
         <div className="text-2xl font-black text-neutral-900 mt-1">Sign in</div>
         <div className="text-sm text-neutral-600 mt-2">We’ll email you a magic link.</div>
 
@@ -239,13 +255,16 @@ export default function AuthGate() {
   }
 
   // 5) signed in but no access
-  if (memberships && memberships.length === 0 && !tenantLoading) {
+  if (memberships && memberships.length === 0) {
     return (
       <CenterCard>
-        <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Signed in as</div>
+        <div className="text-xs font-black tracking-widest uppercase text-neutral-400">
+          Signed in as
+        </div>
         <div className="text-lg font-black text-neutral-900 mt-1">{session.user.email}</div>
         <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          You don’t have access to any societies yet. Ask an admin to add you to the memberships table.
+          You don’t have access to any societies yet. Ask an admin to add you to the memberships
+          table.
         </div>
         <button
           className="mt-4 w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
@@ -258,7 +277,7 @@ export default function AuthGate() {
     );
   }
 
-  // 6) Block App render until we have a society (and tenant finished loading)
+  // 6) Block App render until we have a society
   if (tenantLoading || !activeSocietyId) {
     return (
       <CenterCard>
@@ -300,7 +319,9 @@ export default function AuthGate() {
       {memberships.length > 1 ? (
         <div className="fixed inset-0 z-50 bg-black/40 p-4 flex items-end sm:items-center justify-center">
           <div className="w-full max-w-md rounded-3xl bg-white border border-neutral-200 shadow-xl p-4">
-            <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Choose society</div>
+            <div className="text-xs font-black tracking-widest uppercase text-neutral-400">
+              Choose society
+            </div>
             <div className="text-lg font-black text-neutral-900 mt-1">{session.user.email}</div>
 
             <div className="mt-3 space-y-2">
