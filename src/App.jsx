@@ -2777,7 +2777,39 @@ function Home({
 
   return (
     <section id="player-report-top" className="content-card" style={{ padding: 14 }}>
-      <div className="hm-stage">
+      
+      <style>{`
+        /* Mobile menu CTA consistency (Home screen) */
+        .hm-cta-row{ display:flex; flex-direction:column; gap:10px; align-items:stretch; margin-top:12px; }
+        .hm-cta{ width:100%; justify-content:center; }
+        .hm-stats{ font-size:12px; line-height:1.35; opacity:.92; }
+
+        /* Make the smaller card action buttons behave like the main CTA on mobile */
+        .hm-card-action{ display:flex; align-items:center; gap:10px; }
+        .hm-linkbtn{ display:inline-flex; align-items:center; justify-content:center; white-space:nowrap; }
+        @media (max-width: 640px){
+          .hm-cta-row{ gap:12px; }
+          .hm-cta{ width:100%; }
+          .hm-card-inner{ display:flex; flex-direction:column; gap:12px; }
+          .hm-card-action{ width:100%; }
+          .hm-linkbtn{
+            width:100%;
+            padding:14px 16px;
+            border-radius:18px;
+            font-weight:900;
+            letter-spacing:-0.01em;
+            background: linear-gradient(180deg, rgba(255,212,75,1) 0%, rgba(245,166,35,1) 100%);
+            color: rgba(23,17,0,0.96);
+            box-shadow: 0 10px 24px rgba(0,0,0,0.18);
+          }
+          .hm-pill{ display:none; }
+        }
+        @media (min-width: 641px){
+          .hm-cta-row{ flex-direction:row; align-items:center; justify-content:space-between; gap:12px; }
+          .hm-cta{ width:auto; }
+        }
+      `}</style>
+<div className="hm-stage">
         <div className="hm-grid">
 
           {/* HERO */}
@@ -2794,11 +2826,12 @@ function Home({
 
 
                 <div className="hm-cta-row">
-                  <div className="hm-stats">{statsText}</div>
                   <button className="hm-cta" onClick={() => setView("past")}>
                     <span className="hm-arrow">→</span>
                     <span>Enter Game Explorer</span>
                   </button>
+                  <div className="hm-stats">{statsText}</div>
+                  
                 </div>
 
 
