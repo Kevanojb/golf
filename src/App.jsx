@@ -2774,6 +2774,101 @@ function EventNav({ setView, hasEvent = true }) {
   return <SoloNav setView={setView} left={left} />;
 }
 
+// =========================
+// HOME HERO SCORECARD (static decorative)
+// Requested: Chart Hills, Ben Hogan, total strokes 59, impressive Stableford total
+// =========================
+const HOME_HERO_SCORECARD = {
+  player: "Ben Hogan",
+  course: "Chart Hills",
+  // 18-hole strokes that sum to 59 (front 29, back 30)
+  strokes: [3,3,3,3,3,3,3,4,4,  3,3,3,3,3,3,4,4,4],
+  // Stableford points per hole that sum to 54 (front 27, back 27)
+  stableford: [4,4,3,3,3,3,3,2,2,  4,4,3,3,3,3,2,2,3],
+  // Decorative par row (not used for any calculations here)
+  par: [4,4,3,5,4,4,3,4,5,  4,4,3,5,4,4,3,4,5],
+};
+
+function MiniScorecardHero({ data = HOME_HERO_SCORECARD }) {
+  const sum = (arr) => (arr || []).reduce((a, b) => a + (Number(b) || 0), 0);
+  const frontSt = sum(data.strokes.slice(0, 9));
+  const backSt  = sum(data.strokes.slice(9));
+  const totalSt = frontSt + backSt;
+
+  const frontSf = sum(data.stableford.slice(0, 9));
+  const backSf  = sum(data.stableford.slice(9));
+  const totalSf = frontSf + backSf;
+
+  const cell = {
+    border: "1px solid rgba(255,255,255,0.16)",
+    borderRadius: 10,
+    padding: "8px 6px",
+    textAlign: "center",
+    background: "rgba(255,255,255,0.06)",
+    backdropFilter: "blur(6px)",
+  };
+
+  const small = { fontSize: 10, opacity: 0.72, lineHeight: 1.1 };
+  const big = { fontSize: 14, fontWeight: 900, lineHeight: 1.05 };
+  const pts = { fontSize: 11, fontWeight: 900, marginTop: 4, opacity: 0.95 };
+
+  return (
+    <div className="hm-scorecard-hero" style={{
+      width: "100%",
+      borderRadius: 18,
+      padding: 14,
+      background: "rgba(0,0,0,0.16)",
+      border: "1px solid rgba(255,255,255,0.16)",
+      boxShadow: "0 18px 40px rgba(0,0,0,0.24)",
+    }}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12, marginBottom: 10 }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={small}>Course</div>
+          <div style={{ fontSize: 18, fontWeight: 950, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {data.course}
+          </div>
+        </div>
+        <div style={{ textAlign: "right" }}>
+          <div style={small}>Player</div>
+          <div style={{ fontSize: 18, fontWeight: 950 }}>{data.player}</div>
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(9, 1fr)", gap: 8 }}>
+        {Array.from({ length: 18 }).map((_, i) => (
+          <div key={i} style={cell}>
+            <div style={small}>{i + 1}</div>
+            <div style={big}>{data.strokes[i]}</div>
+            <div style={pts}>{data.stableford[i]} pts</div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10, marginTop: 12 }}>
+        <div style={cell}>
+          <div style={small}>Front 9</div>
+          <div style={{ fontWeight: 950, fontSize: 16 }}>{frontSt}</div>
+          <div style={pts}>{frontSf} pts</div>
+        </div>
+        <div style={cell}>
+          <div style={small}>Back 9</div>
+          <div style={{ fontWeight: 950, fontSize: 16 }}>{backSt}</div>
+          <div style={pts}>{backSf} pts</div>
+        </div>
+        <div style={cell}>
+          <div style={small}>Total</div>
+          <div style={{ fontWeight: 950, fontSize: 16 }}>{totalSt}</div>
+          <div style={pts}>{totalSf} pts</div>
+        </div>
+      </div>
+
+      <div style={{ marginTop: 10, fontSize: 11, opacity: 0.78 }}>
+        *Decorative hero scorecard (59 strokes). Stableford shown for vibe.
+      </div>
+    </div>
+  );
+}
+
 function Home({
   setView,
   fileInputRef,
@@ -2788,8 +2883,7 @@ function Home({
   handleLogout,
   openPlayersAdmin,
   visiblePlayersCount,
-  totalPlayersCount,,
-  courseName,
+  totalPlayersCount,
 }) {
   const signedIn = !!user;
   const isAdmin = !!(user && (user.is_admin || user.role === "admin"));
@@ -2818,47 +2912,6 @@ function Home({
       ? `${rounds} rounds analyzed \u00b7 ${formats || 0} formats \u00b7 ${holes || 0} holes explored`
       : `Explore trends, surprises, and scoring patterns`;
 
-  // Home "scorecard preview" (right side of hero) — uses current event leaderboard if available
-  const courseTitleShort = String(courseName || "Chart Hills").replace(/\s+golf\s+club\s*$/i, "").trim() || "Chart Hills";
-
-  const leaderRow = useMemo(() => {
-    const arr = Array.isArray(computed) ? computed : (Array.isArray(computed?.rows) ? computed.rows : []);
-    if (!arr || !arr.length) return null;
-    // Ensure sorted by points descending (fallback to original ordering)
-    const sorted = [...arr].sort((a,b) => (Number(b.points)||0) - (Number(a.points)||0));
-    return sorted[0] || null;
-  }, [computed]);
-
-  const sc = useMemo(() => {
-    if (!leaderRow) return null;
-    const strokes = Array.isArray(leaderRow.imputedGrossPerHole) ? leaderRow.imputedGrossPerHole
-                  : Array.isArray(leaderRow.grossPerHole) ? leaderRow.grossPerHole
-                  : null;
-    const ptsPH = Array.isArray(leaderRow.perHole) ? leaderRow.perHole
-                : Array.isArray(leaderRow.pointsPerHole) ? leaderRow.pointsPerHole
-                : null;
-
-    const sArr = strokes ? strokes.map(v => (Number.isFinite(Number(v)) ? Number(v) : null)) : makeBlank(18, null);
-    const pArr = ptsPH ? ptsPH.map(v => (Number.isFinite(Number(v)) ? Number(v) : null)) : makeBlank(18, null);
-
-    const totalStrokes = sArr.reduce((acc,v)=>acc + (Number.isFinite(v)?v:0),0) || null;
-    const totalPts = Number.isFinite(Number(leaderRow.points)) ? Number(leaderRow.points) : (pArr.reduce((a,v)=>a+(Number.isFinite(v)?v:0),0) || null);
-
-    const cell = (holeIdx) => ({
-      hole: holeIdx+1,
-      s: sArr[holeIdx],
-      p: pArr[holeIdx]
-    });
-
-    return {
-      name: leaderRow.name || "Leader",
-      totalStrokes,
-      totalPts,
-      front: Array.from({length:9}, (_,i)=>cell(i)),
-      back: Array.from({length:9}, (_,i)=>cell(i+9)),
-    };
-  }, [leaderRow]);
-
   return (
     <section id="player-report-top" className="content-card" style={{ padding: 14 }}>
       
@@ -2867,46 +2920,6 @@ function Home({
         .hm-cta-row{ display:flex; flex-direction:column; gap:10px; align-items:stretch; margin-top:12px; }
         .hm-cta{ width:100%; justify-content:center; }
         .hm-stats{ font-size:12px; line-height:1.35; opacity:.92; }
-
-        
-        /* Scorecard preview (Home hero right) */
-        .hm-scorecard{
-          width:100%;
-          max-width: 360px;
-          border-radius: 18px;
-          padding: 14px 14px 12px;
-          background: rgba(255,255,255,0.12);
-          border: 1px solid rgba(255,255,255,0.18);
-          box-shadow: 0 18px 44px rgba(0,0,0,0.22);
-          backdrop-filter: blur(10px);
-        }
-        .hm-sc-head{ display:flex; align-items:flex-start; justify-content:space-between; gap:10px; }
-        .hm-sc-title{ font-weight: 900; font-size: 13px; letter-spacing: -0.01em; color: rgba(255,255,255,0.95); }
-        .hm-sc-sub{ font-size: 11px; color: rgba(255,255,255,0.78); margin-top:2px; }
-        .hm-sc-badge{ font-size:10px; font-weight:900; padding:6px 10px; border-radius:999px; background: rgba(0,0,0,0.35); color: rgba(255,255,255,0.9); border:1px solid rgba(255,255,255,0.15); }
-        .hm-sc-grid{ margin-top:10px; display:grid; gap:10px; }
-        .hm-sc-nine{ display:grid; grid-template-columns: repeat(9, minmax(0, 1fr)); gap:6px; }
-        .hm-sc-hole{
-          border-radius: 12px;
-          padding: 7px 6px 6px;
-          background: rgba(0,0,0,0.26);
-          border: 1px solid rgba(255,255,255,0.12);
-          text-align:center;
-        }
-        .hm-sc-hn{ font-size:10px; font-weight:900; color: rgba(255,255,255,0.75); margin-bottom:4px; }
-        .hm-sc-s{ font-size:13px; font-weight:900; color: rgba(255,255,255,0.95); line-height:1.05; }
-        .hm-sc-p{ font-size:10px; font-weight:800; color: rgba(255,255,255,0.75); margin-top:2px; }
-        .hm-sc-totals{ margin-top:10px; display:flex; justify-content:space-between; gap:10px; }
-        .hm-sc-t{ flex:1; border-radius: 14px; padding:10px 12px; background: rgba(0,0,0,0.22); border:1px solid rgba(255,255,255,0.12); }
-        .hm-sc-t b{ color: rgba(255,255,255,0.95); }
-        .hm-sc-t small{ display:block; margin-top:2px; color: rgba(255,255,255,0.72); font-weight:800; }
-
-        @media (max-width: 640px){
-          .hm-scorecard{ max-width: 100%; }
-          .hm-sc-nine{ gap:7px; }
-          .hm-sc-hole{ padding: 9px 7px 8px; }
-          .hm-sc-s{ font-size: 14px; }
-        }
 
         /* Make the smaller card action buttons behave like the main CTA on mobile */
         .hm-card-action{ display:flex; align-items:center; gap:10px; }
@@ -2981,50 +2994,7 @@ function Home({
               </div>
 
               <div className="hm-hero-right">
-                <div className="hm-scorecard" aria-label="Scorecard preview">
-                  <div className="hm-sc-head">
-                    <div style={{ minWidth: 0 }}>
-                      <div className="hm-sc-title">{courseTitleShort}</div>
-                      <div className="hm-sc-sub">{sc ? sc.name : "Upload an event to see a scorecard preview"}</div>
-                    </div>
-                    <div className="hm-sc-badge">Stableford</div>
-                  </div>
-
-                  {sc && (
-                    <div className="hm-sc-grid">
-                      <div className="hm-sc-nine" aria-label="Front 9 scorecard">
-                        {sc.front.map((c) => (
-                          <div key={`f-${c.hole}`} className="hm-sc-hole">
-                            <div className="hm-sc-hn">{c.hole}</div>
-                            <div className="hm-sc-s">{Number.isFinite(c.s) ? c.s : "—"}</div>
-                            <div className="hm-sc-p">{Number.isFinite(c.p) ? `${c.p} pts` : " "}</div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="hm-sc-nine" aria-label="Back 9 scorecard">
-                        {sc.back.map((c) => (
-                          <div key={`b-${c.hole}`} className="hm-sc-hole">
-                            <div className="hm-sc-hn">{c.hole}</div>
-                            <div className="hm-sc-s">{Number.isFinite(c.s) ? c.s : "—"}</div>
-                            <div className="hm-sc-p">{Number.isFinite(c.p) ? `${c.p} pts` : " "}</div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="hm-sc-totals">
-                        <div className="hm-sc-t">
-                          <b>{sc.totalStrokes ?? "—"}</b>
-                          <small>Total strokes</small>
-                        </div>
-                        <div className="hm-sc-t">
-                          <b>{sc.totalPts ?? "—"}</b>
-                          <small>Total Stableford</small>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
+                <MiniScorecardHero />
               </div>
             </div>
           </div>
@@ -14480,7 +14450,7 @@ return (
                 🧭
               </button>
 {view === "home" && (
-                <Home runSeasonAnalysis={loadAllGamesAndBuildPlayerModel} setView={setView} fileInputRef={fileInputRef} importLocalCSV={importLocalCSV} computed={computedFiltered} addEventToSeason={addEventToSeason} removeEventFromSeason={removeEventFromSeason} clearSeason={clearSeason} user={user} handleLogin={handleLogin} handleLogout={handleLogout} openPlayersAdmin={requestPlayersAdmin} visiblePlayersCount={(seasonModel?.players||[]).length} totalPlayersCount={(adminPlayerRoster||[]).length} courseName={courseName} />
+                <Home runSeasonAnalysis={loadAllGamesAndBuildPlayerModel} setView={setView} fileInputRef={fileInputRef} importLocalCSV={importLocalCSV} computed={computedFiltered} addEventToSeason={addEventToSeason} removeEventFromSeason={removeEventFromSeason} clearSeason={clearSeason} user={user} handleLogin={handleLogin} handleLogout={handleLogout} openPlayersAdmin={requestPlayersAdmin} visiblePlayersCount={(seasonModel?.players||[]).length} totalPlayersCount={(adminPlayerRoster||[]).length} />
               )}
 
 
