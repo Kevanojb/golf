@@ -2850,58 +2850,22 @@ function Home({
           .hm-cta-row{ flex-direction:row; align-items:center; justify-content:space-between; gap:12px; }
           .hm-cta{ width:auto; }
         }
-      
-        /* Home hero score overlay on the mini stack */
-        .hm-mini-stack{ position:relative; }
-        .hm-scoreOverlay{
-          position:absolute;
-          inset: 10px 10px 10px 10px;
-          display:flex;
-          flex-direction:column;
-          justify-content:space-between;
-          pointer-events:none;
-          color: rgba(255,255,255,0.96);
-          text-shadow: 0 2px 10px rgba(0,0,0,0.55);
+      `}</style>
+
+      {/* Scorecard stack: print course/name/totals INSIDE the top sheet artwork */}
+      <style>{`
+        /* Top sheet (front) gets the branded header + totals. Back sheets keep the subtle grid look. */
+        .hm-sheet.s1{
+          background-image:
+            url("data:image/svg+xml;charset=utf-8,%3Csvg%20xmlns%3D%22http%3A//www.w3.org/2000/svg%22%20width%3D%22640%22%20height%3D%22360%22%20viewBox%3D%220%200%20640%20360%22%3E%0A%3Crect%20width%3D%22640%22%20height%3D%22360%22%20rx%3D%2212%22%20ry%3D%2212%22%20fill%3D%22rgba%28255%2C255%2C255%2C0.0%29%22/%3E%0A%3Crect%20x%3D%220%22%20y%3D%220%22%20width%3D%22640%22%20height%3D%2256%22%20fill%3D%22rgba%2816%2C185%2C129%2C0.18%29%22/%3E%0A%3Ctext%20x%3D%2218%22%20y%3D%2226%22%20font-size%3D%2216%22%20font-family%3D%22Arial%22%20font-weight%3D%22900%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.70%29%22%3EChart%20Hills%3C/text%3E%0A%3Ctext%20x%3D%22622%22%20y%3D%2226%22%20font-size%3D%2216%22%20font-family%3D%22Arial%22%20font-weight%3D%22900%22%20text-anchor%3D%22end%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.70%29%22%3EBen%20Hogan%3C/text%3E%0A%3Ctext%20x%3D%2218%22%20y%3D%2246%22%20font-size%3D%2212%22%20font-family%3D%22Arial%22%20font-weight%3D%22700%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.55%29%22%3EStrokes%3A%2059%20%20%C2%B7%20%20Stableford%3A%2054%3C/text%3E%0A%3Cg%3E%0A%3Ctext%20x%3D%2260%22%20y%3D%2292%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E6%3C/text%3E%3Ctext%20x%3D%22116%22%20y%3D%2292%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E7%3C/text%3E%3Ctext%20x%3D%22172%22%20y%3D%2292%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E8%3C/text%3E%3Ctext%20x%3D%22228%22%20y%3D%2292%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E9%3C/text%3E%3Ctext%20x%3D%22284%22%20y%3D%2292%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E1%3C/text%3E%3Ctext%20x%3D%22340%22%20y%3D%2292%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E2%3C/text%3E%3Ctext%20x%3D%22396%22%20y%3D%2292%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E3%3C/text%3E%3Ctext%20x%3D%22452%22%20y%3D%2292%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E4%3C/text%3E%3Ctext%20x%3D%22508%22%20y%3D%2292%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E5%3C/text%3E%3Ctext%20x%3D%2260%22%20y%3D%22144%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E9%3C/text%3E%3Ctext%20x%3D%22116%22%20y%3D%22144%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E1%3C/text%3E%3Ctext%20x%3D%22172%22%20y%3D%22144%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E2%3C/text%3E%3Ctext%20x%3D%22228%22%20y%3D%22144%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E3%3C/text%3E%3Ctext%20x%3D%22284%22%20y%3D%22144%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E4%3C/text%3E%3Ctext%20x%3D%22340%22%20y%3D%22144%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E5%3C/text%3E%3Ctext%20x%3D%22396%22%20y%3D%22144%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E6%3C/text%3E%3Ctext%20x%3D%22452%22%20y%3D%22144%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E7%3C/text%3E%3Ctext%20x%3D%22508%22%20y%3D%22144%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E8%3C/text%3E%3Ctext%20x%3D%2260%22%20y%3D%22196%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E3%3C/text%3E%3Ctext%20x%3D%22116%22%20y%3D%22196%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E4%3C/text%3E%3Ctext%20x%3D%22172%22%20y%3D%22196%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E5%3C/text%3E%3Ctext%20x%3D%22228%22%20y%3D%22196%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E6%3C/text%3E%3Ctext%20x%3D%22284%22%20y%3D%22196%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E7%3C/text%3E%3Ctext%20x%3D%22340%22%20y%3D%22196%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E8%3C/text%3E%3Ctext%20x%3D%22396%22%20y%3D%22196%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E9%3C/text%3E%3Ctext%20x%3D%22452%22%20y%3D%22196%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E1%3C/text%3E%3Ctext%20x%3D%22508%22%20y%3D%22196%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E2%3C/text%3E%3Ctext%20x%3D%2260%22%20y%3D%22248%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E6%3C/text%3E%3Ctext%20x%3D%22116%22%20y%3D%22248%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E7%3C/text%3E%3Ctext%20x%3D%22172%22%20y%3D%22248%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E8%3C/text%3E%3Ctext%20x%3D%22228%22%20y%3D%22248%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E9%3C/text%3E%3Ctext%20x%3D%22284%22%20y%3D%22248%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E1%3C/text%3E%3Ctext%20x%3D%22340%22%20y%3D%22248%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E2%3C/text%3E%3Ctext%20x%3D%22396%22%20y%3D%22248%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E3%3C/text%3E%3Ctext%20x%3D%22452%22%20y%3D%22248%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E4%3C/text%3E%3Ctext%20x%3D%22508%22%20y%3D%22248%22%20font-size%3D%2218%22%20font-family%3D%22Arial%22%20fill%3D%22rgba%2815%2C23%2C42%2C0.35%29%22%3E5%3C/text%3E%0A%3C/g%3E%0A%3C/svg%3E"),
+            linear-gradient(180deg, rgba(226,232,240,0.95) 0%, rgba(226,232,240,0.95) 16%, transparent 16%),
+            repeating-linear-gradient(0deg, rgba(148,163,184,0.22) 0px, rgba(148,163,184,0.22) 1px, transparent 1px, transparent 12px),
+            repeating-linear-gradient(90deg, rgba(148,163,184,0.18) 0px, rgba(148,163,184,0.18) 1px, transparent 1px, transparent 22px),
+            linear-gradient(180deg, rgba(255,255,255,0.90), rgba(255,255,255,0.66));
+          background-size: cover, auto, auto, auto, auto;
+          background-blend-mode: normal, normal, normal, normal, normal;
         }
-        .hm-scoreOverlay .top{
-          display:flex; justify-content:space-between; gap:10px; align-items:flex-start;
-        }
-        .hm-scoreOverlay .course{
-          font-weight: 950;
-          letter-spacing: -0.02em;
-          font-size: 14px;
-          line-height: 1.05;
-          max-width: 60%;
-        }
-        .hm-scoreOverlay .name{
-          font-weight: 900;
-          font-size: 12px;
-          line-height: 1.05;
-          text-align:right;
-          opacity: .95;
-          max-width: 40%;
-        }
-        .hm-scoreOverlay .grid{
-          display:grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 8px;
-        }
-        .hm-scoreOverlay .stat{
-          border: 1px solid rgba(255,255,255,0.18);
-          background: rgba(0,0,0,0.22);
-          border-radius: 12px;
-          padding: 8px 10px;
-          backdrop-filter: blur(6px);
-        }
-        .hm-scoreOverlay .label{ font-size: 10px; opacity: .8; }
-        .hm-scoreOverlay .value{ font-size: 18px; font-weight: 950; line-height: 1.05; }
-        .hm-scoreOverlay .sub{ font-size: 10px; opacity: .85; margin-top: 2px; }
-        @media (max-width: 640px){
-          .hm-scoreOverlay{ inset: 8px; }
-          .hm-scoreOverlay .course{ font-size: 13px; }
-          .hm-scoreOverlay .value{ font-size: 16px; }
-        }
-`}</style>
+      `}</style>
 <div className="hm-stage">
         <div className="hm-grid">
 
@@ -2954,24 +2918,6 @@ function Home({
                   <div className="hm-sheet s1" />
                   <div className="hm-sheet s2" />
                   <div className="hm-sheet s3" />
-                  <div className="hm-scoreOverlay">
-                    <div className="top">
-                      <div className="course">Chart Hills</div>
-                      <div className="name">Ben Hogan</div>
-                    </div>
-                    <div className="grid">
-                      <div className="stat">
-                        <div className="label">Strokes</div>
-                        <div className="value">59</div>
-                        <div className="sub">Front 29 · Back 30</div>
-                      </div>
-                      <div className="stat">
-                        <div className="label">Stableford</div>
-                        <div className="value">54</div>
-                        <div className="sub">Front 27 · Back 27</div>
-                      </div>
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>
