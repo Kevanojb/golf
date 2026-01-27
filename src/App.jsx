@@ -3319,7 +3319,7 @@ function PastEvents({ sharedGroups, loadShared, setView }) {
         const client = window.__supabase_client__;
 
         const { data, error } = await client
-          .from("courses").eq("society_id", _getActiveSocietyIdGlobal())
+          .from("courses").select("*").eq("society_id", _getActiveSocietyIdGlobal())
           .select("photo_urls")
           .eq("slug", key)
           .maybeSingle();
@@ -13316,15 +13316,15 @@ async function getTeesForCourseName(courseName) {
     let course = null;
 
     // exact, then fuzzy
-    let q = await client.from("courses").eq("society_id", _getActiveSocietyIdGlobal()).select("id,name").eq("name", courseName).maybeSingle();
+    let q = await client.from("courses").select("*").eq("society_id", _getActiveSocietyIdGlobal()).select("id,name").eq("name", courseName).maybeSingle();
     if (!q.error && q.data) course = q.data;
     if (!course) {
-      q = await client.from("courses").eq("society_id", _getActiveSocietyIdGlobal()).select("id,name").ilike("name", `%${courseName}%`).limit(1);
+      q = await client.from("courses").select("*").eq("society_id", _getActiveSocietyIdGlobal()).select("id,name").ilike("name", `%${courseName}%`).limit(1);
       if (!q.error && q.data && q.data.length) course = q.data[0];
     }
     if (!course?.id) { teesCache[key] = null; return null; }
 
-    const teesRes = await client.from("tees").eq("society_id", activeSocietyId).select("*").eq("course_id", course.id);
+    const teesRes = await client.from("tees").select("*").eq("society_id", activeSocietyId).select("*").eq("course_id", course.id);
     if (teesRes.error || !teesRes.data?.length) { teesCache[key] = null; return null; }
 
     const teeIds = teesRes.data.map(t => t.id);
@@ -13563,7 +13563,7 @@ setSeasonRounds(rounds);
               c.auth.getSession().then(({ data: { session } }) => { setUser(session?.user ?? null); });
               c.auth.onAuthStateChange((_event, session) => { setUser(session?.user ?? null); });
 
-              const probe = await c.from(STANDINGS_TABLE).eq("society_id", activeSocietyId).select("name").limit(1);
+              const probe = await c.from(STANDINGS_TABLE).select("*").eq("society_id", activeSocietyId).select("name").limit(1);
               if (probe.error) { setStatusMsg("Error: " + probe.error.message); } 
               else {
                 setStatusMsg("Connected");
@@ -13652,7 +13652,7 @@ async function savePlayerVisibility(nextHiddenKeys) {
 }
         async function fetchAvailableCourses(c) {
            c = c || client; if(!c) return;
-           const { data, error } = await c.from('courses').eq("society_id", activeSocietyId).select('id, name').order('name');
+           const { data, error } = await c.from('courses').select("*").eq("society_id", activeSocietyId).select('id, name').order('name');
            if(!error && data) setCourseList(data);
         }
 
@@ -13739,9 +13739,9 @@ async function savePlayerVisibility(nextHiddenKeys) {
 
         async function loadCourseFromDB(courseId) {
             if(!client || !courseId) return;
-            const courseRes = await client.from('courses').eq("society_id", activeSocietyId).select('name').eq('id', courseId).single();
+            const courseRes = await client.from('courses').select("*").eq("society_id", activeSocietyId).select('name').eq('id', courseId).single();
             if(courseRes.data) setCourseName(courseRes.data.name);
-            const teesRes = await client.from('tees').eq("society_id", activeSocietyId).select('*').eq('course_id', courseId);
+            const teesRes = await client.from('tees').select("*").eq("society_id", activeSocietyId).select('*').eq('course_id', courseId);
             if(teesRes.error || !teesRes.data.length) {
               toast("No tee data found for this course.");
               return;
@@ -13829,7 +13829,7 @@ function seasonIdForDateMs(ms, seasonsArr) {
 
 async function fetchSeasons(c) {
   c = c || client; if (!c) return;
-  const r = await c.from('seasons').eq("society_id", activeSocietyId).select('competition,season_id,label,start_date,end_date,is_active').eq('competition', COMPETITION).order('start_date', { ascending: false });
+  const r = await c.from('seasons').select("*").eq("society_id", activeSocietyId).select('competition,season_id,label,start_date,end_date,is_active').eq('competition', COMPETITION).order('start_date', { ascending: false });
   if (r.error) { toast('Seasons load failed: ' + r.error.message); return; }
   const arr = Array.isArray(r.data) ? r.data : [];
   setSeasonsDef(arr);
@@ -13916,7 +13916,7 @@ async function refreshShared(c) {
 
         async function fetchSeason(c) {
           c = c || client; if (!c) return;
-          let q = c.from(STANDINGS_TABLE).eq("society_id", activeSocietyId).select("*").eq("competition", COMPETITION);
+          let q = c.from(STANDINGS_TABLE).select("*").eq("society_id", activeSocietyId).select("*").eq("competition", COMPETITION);
           if (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all") q = q.eq("season_id", String(leagueSeasonYear));
           const r = await q;
           if (r.error) { setStatusMsg("Error: " + r.error.message); return; }
