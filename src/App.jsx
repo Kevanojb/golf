@@ -764,7 +764,7 @@ function isFuzzyMatch(a, b) {
 }
 
 function AdminPasswordModal({ open, onClose, onSubmit }) {
-({ open, onClose, onSubmit }) {
+
   const [pw, setPw] = React.useState("");
 
   React.useEffect(() => {
