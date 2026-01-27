@@ -32,78 +32,38 @@ var formatGrossVsPar = function (n) {
 };
 
 // =========================
-// MULTI-TENANT BRANDING + STORAGE (module-scope)
-// Derive league/society identity from AuthGate globals (window.__activeSociety*)
-// IMPORTANT: these are *mutable* so that switching societies in-session works.
+// LEAGUE ROUTE + BRANDING (module-scope)
+// Ensures all views/components can access league title and bucket without ReferenceErrors.
+// Supports both "#/winter-league" and "#winter-league" style hashes.
 // =========================
-function _readWin(key, fallback = "") {
+function getLeagueSlug() {
   try {
-    return (typeof window !== "undefined" && window[key] != null) ? String(window[key]) : fallback;
+    const h = (typeof window !== "undefined" ? (window.location.hash || "") : "").replace(/^#\/?/, "");
+    if (h) return (h.split("/")[0] || "den-society").trim();
+    const parts = (typeof window !== "undefined" ? window.location.pathname : "").split("/").filter(Boolean);
+    // GH Pages base path: /den-society-vite/<slug>
+    return (parts[1] || parts[0] || "den-society").trim();
   } catch (e) {
-    return fallback;
+    return "den-society";
   }
 }
 
-// Active tenant (mutable globals)
-let ACTIVE_SOCIETY_ID = _readWin("__activeSocietyId", "");
-let ACTIVE_SOCIETY_NAME = _readWin("__activeSocietyName", "");
-let ACTIVE_SOCIETY_SLUG = _readWin("__activeSocietySlug", "");
+const LEAGUE_SLUG = getLeagueSlug();
+const IS_WINTER_LEAGUE = LEAGUE_SLUG === "winter-league";
 
-// Storage bucket mapping (keep your existing buckets, but drive it from society slug, not URL hash)
-let BUCKET = (ACTIVE_SOCIETY_SLUG === "winter-league") ? "winter_league" : "den-events";
+// Display branding (titles)
+const LEAGUE_TITLE = IS_WINTER_LEAGUE ? "Wednesday League" : "Den Society League";
+const LEAGUE_APP_TITLE = `${LEAGUE_TITLE} — Golfer’s Guide`;
+const LEAGUE_HEADER_TITLE = `${LEAGUE_TITLE} — Ultimate Edition`;
 
-// Competition mode (used by seasons/leaderboards)
-let COMPETITION = (ACTIVE_SOCIETY_SLUG === "winter-league") ? "winter" : "season";
+// Storage bucket per league (separate buckets)
+const BUCKET = IS_WINTER_LEAGUE ? "winter_league" : "den-events";
 
-// Storage prefix for files inside the bucket. Multi-tenant layout: society/<society_id>/events/...
-let SOCIETY_ID = ACTIVE_SOCIETY_ID;
-let SOC_PREFIX = SOCIETY_ID ? `society/${SOCIETY_ID}` : "";
-let PREFIX = SOC_PREFIX ? `${SOC_PREFIX}/events` : "events";
+// Default competition per league (used by seasons table + leaderboards)
+const COMPETITION = IS_WINTER_LEAGUE ? "winter" : "season";
 
-// Admin player visibility file path
-let ADMIN_VIS_PATH = PREFIX ? `${PREFIX}/admin/player_visibility.json` : "admin/player_visibility.json";
-
-// Branding (mutable)
-let LEAGUE_TITLE = ACTIVE_SOCIETY_NAME || "Den Society League";
-let LEAGUE_APP_TITLE = `${LEAGUE_TITLE} — Golfer’s Guide`;
-let LEAGUE_HEADER_TITLE = `${LEAGUE_TITLE} — Ultimate Edition`;
-
-function syncTenantGlobals() {
-  ACTIVE_SOCIETY_ID = _readWin("__activeSocietyId", "");
-  ACTIVE_SOCIETY_NAME = _readWin("__activeSocietyName", "");
-  ACTIVE_SOCIETY_SLUG = _readWin("__activeSocietySlug", "");
-
-  BUCKET = (ACTIVE_SOCIETY_SLUG === "winter-league") ? "winter_league" : "den-events";
-  COMPETITION = (ACTIVE_SOCIETY_SLUG === "winter-league") ? "winter" : "season";
-
-  SOCIETY_ID = ACTIVE_SOCIETY_ID;
-  SOC_PREFIX = SOCIETY_ID ? `society/${SOCIETY_ID}` : "";
-  PREFIX = SOC_PREFIX ? `${SOC_PREFIX}/events` : "events";
-  ADMIN_VIS_PATH = PREFIX ? `${PREFIX}/admin/player_visibility.json` : "admin/player_visibility.json";
-
-  // Update branding too
-  LEAGUE_TITLE = ACTIVE_SOCIETY_NAME || "Den Society League";
-  LEAGUE_APP_TITLE = `${LEAGUE_TITLE} — Golfer’s Guide`;
-  LEAGUE_HEADER_TITLE = `${LEAGUE_TITLE} — Ultimate Edition`;
-
-  try {
-    if (typeof window !== "undefined") {
-      window.__tenant = {
-        societyId: SOCIETY_ID,
-        societyName: ACTIVE_SOCIETY_NAME,
-        societySlug: ACTIVE_SOCIETY_SLUG,
-        bucket: BUCKET,
-        competition: COMPETITION,
-        prefix: PREFIX,
-      };
-    }
-  } catch (e) {}
-}
-
-// initialise once on module load
-syncTenantGlobals();
-
-// Branding (titles)
+// Storage prefix for CSVs inside bucket.
+const PREFIX = "events";
 
 try {
   if (typeof window !== "undefined") {
@@ -738,70 +698,81 @@ function isFuzzyMatch(a, b) {
       }
 
       function LoginModal({ open, onClose, onSubmit, busy }) {
-  const [email, setEmail] = useState("");
-  const [err, setErr] = useState("");
+        const [email, setEmail] = useState("");
+        const [password, setPassword] = useState("");
+        const [err, setErr] = useState("");
 
-  useEffect(() => {
-    if (!open) { setEmail(""); setErr(""); }
-  }, [open]);
+        useEffect(() => {
+          if (!open) { setEmail(""); setPassword(""); setErr(""); }
+        }, [open]);
 
-  if (!open) return null;
+        if (!open) return null;
 
-  const submit = async (e) => {
-    e.preventDefault();
-    setErr("");
-    const em = (email || "").trim();
-    if (!em) { setErr("Enter your email."); return; }
-    try {
-      await onSubmit(em);
-    } catch (ex) {
-      setErr(ex?.message || String(ex));
-    }
-  };
+        const submit = async (e) => {
+          e.preventDefault();
+          setErr("");
+          const em = (email || "").trim();
+          if (!em || !password) { setErr("Enter email + password."); return; }
+          try {
+            await onSubmit(em, password);
+          } catch (ex) {
+            setErr(ex?.message || String(ex));
+          }
+        };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-      <div className="relative w-full max-w-md glass-card p-4 sm:p-5" style={{ maxHeight: "85vh", overflow: "auto" }}>
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="text-lg font-extrabold text-squab-900">Sign in</div>
-            <div className="text-xs text-neutral-500">We’ll email you a magic link.</div>
+        return (
+          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4">
+            <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+            <div className="relative w-full max-w-md glass-card p-4 sm:p-5">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="text-lg font-extrabold text-squab-900">Admin sign in</div>
+                  <div className="text-xs text-neutral-500">Use your Supabase account.</div>
+                </div>
+                <button className="btn-secondary" type="button" onClick={onClose}>✕</button>
+              </div>
+
+              <form className="mt-4 space-y-3" onSubmit={submit}>
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">Email</label>
+                  <input
+                    className="w-full px-3 py-2 rounded-xl border border-squab-200 bg-white/90 focus:outline-none focus:ring-2 focus:ring-squab-300"
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e)=>setEmail(e.target.value)}
+                    placeholder="name@example.com"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-neutral-700 mb-1">Password</label>
+                  <input
+                    className="w-full px-3 py-2 rounded-xl border border-squab-200 bg-white/90 focus:outline-none focus:ring-2 focus:ring-squab-300"
+                    type="password"
+                    autoComplete="current-password"
+                    value={password}
+                    onChange={(e)=>setPassword(e.target.value)}
+                    placeholder="••••••••"
+                  />
+                </div>
+
+                {err ? (
+                  <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2">{err}</div>
+                ) : null}
+
+                <div className="flex items-center justify-end gap-2 pt-1">
+                  <button type="button" className="btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
+                  <button type="submit" className="btn-primary" disabled={busy}>
+                    {busy ? "Signing in…" : "Sign in"}
+                  </button>
+                </div>
+              </form>
+            </div>
           </div>
-          <button className="btn-secondary" type="button" onClick={onClose}>✕</button>
-        </div>
-
-        <form className="mt-4 space-y-3" onSubmit={submit}>
-          <div>
-            <label className="block text-xs font-bold text-neutral-700 mb-1">Email</label>
-            <input
-              className="w-full px-3 py-2 rounded-xl border border-squab-200 bg-white/90 focus:outline-none focus:ring-2 focus:ring-squab-300"
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(e)=>setEmail(e.target.value)}
-              placeholder="name@example.com"
-            />
-          </div>
-
-          {err ? (
-            <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2">{err}</div>
-          ) : null}
-
-          <div className="flex items-center justify-end gap-2 pt-1">
-            <button type="button" className="btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
-            <button type="submit" className="btn-primary" disabled={busy}>
-              {busy ? "Sending…" : "Send magic link"}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
-  );
-}
+        );
+      }
 
 function AdminPasswordModal({ open, onClose, onSubmit }) {
-
   const [pw, setPw] = React.useState("");
 
   React.useEffect(() => {
@@ -12282,11 +12253,19 @@ const [user, setUser] = useState(null);
 
 const STANDINGS_TABLE = "standings";
 
-// Ensure the latest society selection is reflected in PREFIX / BUCKET / COMPETITION
-syncTenantGlobals();
+// Default competition per league (used by seasons table + leaderboards)
+const COMPETITION = IS_WINTER_LEAGUE ? "winter" : "season";
 
-// NOTE: SOCIETY_ID / PREFIX / BUCKET / COMPETITION / ADMIN_VIS_PATH are module-scope *mutable* vars
-// kept in sync via syncTenantGlobals().
+// Storage prefix for CSVs inside bucket.
+const PREFIX = "events";
+
+// Admin player visibility (hide / re-include players)
+const ADMIN_PW_OK_LS_KEY = "den_admin_pw_ok_v1";
+const ADMIN_PASSWORD = (typeof window !== "undefined" && window.DEN_ADMIN_PASSWORD)
+  ? String(window.DEN_ADMIN_PASSWORD)
+  : "Den Society League";
+const VIS_LS_KEY = "den_hidden_players_v1";   // changed (optional but recommended)
+const ADMIN_VIS_PATH = PREFIX ? `${PREFIX}/admin/player_visibility.json` : "admin/player_visibility.json";
 
 
 
@@ -13505,53 +13484,6 @@ setSeasonRounds(rounds);
         const [startHcapMode, setStartHcapMode] = useState("raw");
         const [nextHcapMode, setNextHcapMode] = useState("den");
 
-// Watch for society changes pushed by AuthGate (window.__activeSocietyId / __activeSocietySlug / __activeSocietyName).
-// We poll because App.jsx is a legacy single-file app and we want a minimal, safe retrofit.
-const [tenantKey, setTenantKey] = useState(() => {
-  try {
-    const id = (typeof window !== "undefined" && window.__activeSocietyId) ? String(window.__activeSocietyId) : "";
-    const slug = (typeof window !== "undefined" && window.__activeSocietySlug) ? String(window.__activeSocietySlug) : "";
-    return `${id}|${slug}`;
-  } catch (e) {
-    return "";
-  }
-});
-
-useEffect(() => {
-  let prev = tenantKey;
-  const t = setInterval(() => {
-    try {
-      const id = (typeof window !== "undefined" && window.__activeSocietyId) ? String(window.__activeSocietyId) : "";
-      const slug = (typeof window !== "undefined" && window.__activeSocietySlug) ? String(window.__activeSocietySlug) : "";
-      const next = `${id}|${slug}`;
-      if (next && next !== prev) {
-        prev = next;
-        setTenantKey(next);
-      }
-    } catch (e) {}
-  }, 400);
-  return () => clearInterval(t);
-}, []);
-
-// When tenant changes, resync globals and reload tenant-scoped data.
-useEffect(() => {
-  syncTenantGlobals();
-  if (!client) return;
-
-  (async () => {
-    try {
-      // Re-run the key tenant-dependent fetches
-      await refreshShared(client);
-      await fetchSeasons(client);
-      await fetchSeason(client);
-      await fetchAvailableCourses(client);
-      await fetchPlayerVisibility(client);
-    } catch (e) {
-      // keep UI alive even if one fetch fails
-    }
-  })();
-}, [tenantKey, client]);
-
         useEffect(() => {
           let cancelled = false;
           async function boot() {
@@ -13566,9 +13498,7 @@ useEffect(() => {
               c.auth.getSession().then(({ data: { session } }) => { setUser(session?.user ?? null); });
               c.auth.onAuthStateChange((_event, session) => { setUser(session?.user ?? null); });
 
-              let probeQ = c.from(STANDINGS_TABLE).select("name").limit(1);
-              if (SOCIETY_ID) probeQ = probeQ.eq("society_id", SOCIETY_ID);
-              const probe = await probeQ;
+              const probe = await c.from(STANDINGS_TABLE).select("name").limit(1);
               if (probe.error) { setStatusMsg("Error: " + probe.error.message); } 
               else {
                 setStatusMsg("Connected");
@@ -13590,22 +13520,20 @@ useEffect(() => {
           fetchSeason(client);
         }, [client, leagueSeasonYear]);
 
-        async function handleLogin(email) {
-  if (!email) { setLoginOpen(true); return; }
+        async function handleLogin(email, password) {
+  // If called without creds (e.g., button click), open modal
+  if (!email || !password) { setLoginOpen(true); return; }
   setLoginBusy(true);
   try {
-    const em = String(email || "").trim();
-    if (!em) throw new Error("Enter your email.");
-    const redirectTo = `${window.location.origin}${window.location.pathname}${window.location.hash || ""}`;
-    const { error } = await client.auth.signInWithOtp({ email: em, options: { emailRedirectTo: redirectTo } });
+    const { error } = await client.auth.signInWithPassword({ email, password });
     if (error) throw error;
-    toast("Magic link sent ✓ Check your email");
+    toast("Logged in");
     setLoginOpen(false);
   } finally {
     setLoginBusy(false);
   }
 }
-async function handleLogout() {
+        async function handleLogout() {
           await client.auth.signOut(); setUser(null); alert("Logged out");
         }
 
@@ -13659,9 +13587,7 @@ async function savePlayerVisibility(nextHiddenKeys) {
 }
         async function fetchAvailableCourses(c) {
            c = c || client; if(!c) return;
-           let cq = c.from('courses').select('id, name').order('name');
-           if (SOCIETY_ID) cq = cq.eq('society_id', SOCIETY_ID);
-           const { data, error } = await cq;
+           const { data, error } = await c.from('courses').select('id, name').order('name');
            if(!error && data) setCourseList(data);
         }
 
@@ -14311,7 +14237,6 @@ return {
               : (seasonsDef.find((x) => x && x.is_active)?.season_id || "");
             if (!targetSeasonId) { toast("Select a season first"); return; }
             const rows = vals.map((r) => ({
-              society_id: SOCIETY_ID || null,
               season_id: targetSeasonId,
               competition: COMPETITION,
               name: r.name, total_points: r.totalPoints, events: r.events,
@@ -14353,7 +14278,6 @@ if (res.error) toast("Error: " + res.error.message);
               : (seasonsDef.find((x) => x && x.is_active)?.season_id || "");
             if (!targetSeasonId) { toast("Select a season first"); return; }
             const rows = vals.map((r) => ({
-              society_id: SOCIETY_ID || null,
               season_id: targetSeasonId,
               competition: COMPETITION,
               name: r.name, total_points: r.totalPoints, events: r.events,
