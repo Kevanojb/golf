@@ -17,6 +17,17 @@ if (typeof window !== "undefined") {
   window.supabase.createClient = window.supabase.createClient || createClient;
 }
 
+// Active society id (set by the multi-tenant wrapper).
+// Use this in module-scope helpers/components that run before React state is initialized.
+const _getActiveSocietyIdGlobal = () => {
+  try {
+    if (typeof window === 'undefined') return null;
+    return window.__activeSocietyId || null;
+  } catch (e) {
+    return null;
+  }
+};
+
 // Used for per-hole accumulators (defaults to 18 holes of zeros)
 var makeBlank = function (n, fill) {
   if (n === undefined || n === null) n = 18;
@@ -3308,7 +3319,7 @@ function PastEvents({ sharedGroups, loadShared, setView }) {
         const client = window.__supabase_client__;
 
         const { data, error } = await client
-          .from("courses").eq("society_id", activeSocietyId)
+          .from("courses").eq("society_id", _getActiveSocietyIdGlobal())
           .select("photo_urls")
           .eq("slug", key)
           .maybeSingle();
@@ -13307,10 +13318,10 @@ async function getTeesForCourseName(courseName) {
     let course = null;
 
     // exact, then fuzzy
-    let q = await client.from("courses").eq("society_id", activeSocietyId).select("id,name").eq("name", courseName).maybeSingle();
+    let q = await client.from("courses").eq("society_id", _getActiveSocietyIdGlobal()).select("id,name").eq("name", courseName).maybeSingle();
     if (!q.error && q.data) course = q.data;
     if (!course) {
-      q = await client.from("courses").eq("society_id", activeSocietyId).select("id,name").ilike("name", `%${courseName}%`).limit(1);
+      q = await client.from("courses").eq("society_id", _getActiveSocietyIdGlobal()).select("id,name").ilike("name", `%${courseName}%`).limit(1);
       if (!q.error && q.data && q.data.length) course = q.data[0];
     }
     if (!course?.id) { teesCache[key] = null; return null; }
