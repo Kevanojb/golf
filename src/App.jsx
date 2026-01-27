@@ -3308,7 +3308,7 @@ function PastEvents({ sharedGroups, loadShared, setView }) {
         const client = window.__supabase_client__;
 
         const { data, error } = await client
-          .from("courses")
+          .from("courses").eq("society_id", activeSocietyId)
           .select("photo_urls")
           .eq("slug", key)
           .maybeSingle();
@@ -12245,6 +12245,62 @@ function App() {
         const [loginBusy, setLoginBusy] = useState(false);
 const [user, setUser] = useState(null);
 
+const [memberships, setMemberships] = useState([]);
+const [activeSocietyId, setActiveSocietyId] = useState(() => {
+  try { return localStorage.getItem("den_active_society_id") || ""; } catch(e){ return ""; }
+});
+const [societyLoading, setSocietyLoading] = useState(false);
+const [societyError, setSocietyError] = useState("");
+
+useEffect(() => {
+  try { if (activeSocietyId) localStorage.setItem("den_active_society_id", activeSocietyId); } catch(e){}
+  try { window.__activeSocietyId = activeSocietyId; } catch(e){}
+}, [activeSocietyId]);
+
+// Load memberships once we have a client + signed-in user
+useEffect(() => {
+  if (!client || !user) { setMemberships([]); return; }
+  let cancelled = false;
+  (async () => {
+    setSocietyLoading(true); setSocietyError("");
+    try {
+      const { data, error } = await client
+        .from("memberships")
+        .select("society_id, role, societies ( id, name, slug )")
+        .eq("user_id", user.id);
+      if (error) throw error;
+      const rows = Array.isArray(data) ? data : [];
+      if (cancelled) return;
+      setMemberships(rows);
+      // Auto-select if exactly one society
+      if ((!activeSocietyId || activeSocietyId === "") && rows.length === 1) {
+        setActiveSocietyId(rows[0].society_id);
+      }
+      // If activeSocietyId is not in memberships, clear it
+      if (activeSocietyId && rows.length && !rows.some(r => r.society_id === activeSocietyId)) {
+        setActiveSocietyId(rows[0].society_id);
+      }
+    } catch (e) {
+      if (!cancelled) setSocietyError(String(e?.message || e));
+    } finally {
+      if (!cancelled) setSocietyLoading(false);
+    }
+  })();
+  return () => { cancelled = true; };
+}, [client, user]);
+
+const activeMembership = useMemo(() => {
+  if (!activeSocietyId) return null;
+  return (memberships || []).find(m => m.society_id === activeSocietyId) || null;
+}, [memberships, activeSocietyId]);
+
+const isSocietyAdmin = useMemo(() => {
+  const r = String(activeMembership?.role || "").toLowerCase();
+  return r === "captain" || r === "admin" || r === "owner";
+}, [activeMembership]);
+
+
+
         
 
 // Supabase config
@@ -13251,15 +13307,15 @@ async function getTeesForCourseName(courseName) {
     let course = null;
 
     // exact, then fuzzy
-    let q = await client.from("courses").select("id,name").eq("name", courseName).maybeSingle();
+    let q = await client.from("courses").eq("society_id", activeSocietyId).select("id,name").eq("name", courseName).maybeSingle();
     if (!q.error && q.data) course = q.data;
     if (!course) {
-      q = await client.from("courses").select("id,name").ilike("name", `%${courseName}%`).limit(1);
+      q = await client.from("courses").eq("society_id", activeSocietyId).select("id,name").ilike("name", `%${courseName}%`).limit(1);
       if (!q.error && q.data && q.data.length) course = q.data[0];
     }
     if (!course?.id) { teesCache[key] = null; return null; }
 
-    const teesRes = await client.from("tees").select("*").eq("course_id", course.id);
+    const teesRes = await client.from("tees").eq("society_id", activeSocietyId).select("*").eq("course_id", course.id);
     if (teesRes.error || !teesRes.data?.length) { teesCache[key] = null; return null; }
 
     const teeIds = teesRes.data.map(t => t.id);
@@ -13498,7 +13554,7 @@ setSeasonRounds(rounds);
               c.auth.getSession().then(({ data: { session } }) => { setUser(session?.user ?? null); });
               c.auth.onAuthStateChange((_event, session) => { setUser(session?.user ?? null); });
 
-              const probe = await c.from(STANDINGS_TABLE).select("name").limit(1);
+              const probe = await c.from(STANDINGS_TABLE).eq("society_id", activeSocietyId).select("name").limit(1);
               if (probe.error) { setStatusMsg("Error: " + probe.error.message); } 
               else {
                 setStatusMsg("Connected");
@@ -13587,7 +13643,7 @@ async function savePlayerVisibility(nextHiddenKeys) {
 }
         async function fetchAvailableCourses(c) {
            c = c || client; if(!c) return;
-           const { data, error } = await c.from('courses').select('id, name').order('name');
+           const { data, error } = await c.from('courses').eq("society_id", activeSocietyId).select('id, name').order('name');
            if(!error && data) setCourseList(data);
         }
 
@@ -13674,9 +13730,9 @@ async function savePlayerVisibility(nextHiddenKeys) {
 
         async function loadCourseFromDB(courseId) {
             if(!client || !courseId) return;
-            const courseRes = await client.from('courses').select('name').eq('id', courseId).single();
+            const courseRes = await client.from('courses').eq("society_id", activeSocietyId).select('name').eq('id', courseId).single();
             if(courseRes.data) setCourseName(courseRes.data.name);
-            const teesRes = await client.from('tees').select('*').eq('course_id', courseId);
+            const teesRes = await client.from('tees').eq("society_id", activeSocietyId).select('*').eq('course_id', courseId);
             if(teesRes.error || !teesRes.data.length) {
               toast("No tee data found for this course.");
               return;
@@ -13764,7 +13820,7 @@ function seasonIdForDateMs(ms, seasonsArr) {
 
 async function fetchSeasons(c) {
   c = c || client; if (!c) return;
-  const r = await c.from('seasons').select('competition,season_id,label,start_date,end_date,is_active').eq('competition', COMPETITION).order('start_date', { ascending: false });
+  const r = await c.from('seasons').eq("society_id", activeSocietyId).select('competition,season_id,label,start_date,end_date,is_active').eq('competition', COMPETITION).order('start_date', { ascending: false });
   if (r.error) { toast('Seasons load failed: ' + r.error.message); return; }
   const arr = Array.isArray(r.data) ? r.data : [];
   setSeasonsDef(arr);
@@ -13851,7 +13907,7 @@ async function refreshShared(c) {
 
         async function fetchSeason(c) {
           c = c || client; if (!c) return;
-          let q = c.from(STANDINGS_TABLE).select("*").eq("competition", COMPETITION);
+          let q = c.from(STANDINGS_TABLE).eq("society_id", activeSocietyId).select("*").eq("competition", COMPETITION);
           if (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all") q = q.eq("season_id", String(leagueSeasonYear));
           const r = await q;
           if (r.error) { setStatusMsg("Error: " + r.error.message); return; }
@@ -14357,6 +14413,118 @@ if (res.error) toast("Error: " + res.error.message);
             });
           } catch (e) { return players; }
         }, [players, hiddenKeySet]);
+
+// =========================
+// MULTI-TENANT AUTH + SOCIETY GATE
+// - Requires Supabase Auth sign-in
+// - Loads memberships and chooses an active society
+// - With RLS enabled in Supabase, all data automatically scopes to the user’s society.
+// =========================
+useEffect(() => {
+  if (!client) return;
+  // If not signed in, prompt login modal (non-blocking)
+  if (!user) setLoginOpen(true);
+}, [client, user]);
+
+// Block the app until we know which society we're in (when user has multiple)
+if (!client) {
+  return (
+    <div className="min-h-screen grid place-items-center bg-neutral-50 p-6">
+      <div className="card max-w-lg w-full p-5">
+        <div className="text-lg font-semibold">Connecting…</div>
+        <div className="text-sm opacity-80 mt-1">{statusMsg || "Connecting to Supabase"}</div>
+      </div>
+    </div>
+  );
+}
+
+if (!user) {
+  return (
+    <div className="min-h-screen grid place-items-center bg-neutral-50 p-6">
+      <div className="card max-w-lg w-full p-5">
+        <div className="text-lg font-semibold">Sign in</div>
+        <div className="text-sm opacity-80 mt-1">
+          You need to sign in to access your society.
+        </div>
+
+        <div className="mt-4 flex gap-2">
+          <button className="btn" onClick={() => setLoginOpen(true)}>Sign in</button>
+        </div>
+
+        {societyError ? (
+          <div className="mt-3 text-sm text-red-600">{societyError}</div>
+        ) : null}
+
+        <div className="mt-4">
+          <LoginModal
+            open={loginOpen}
+            busy={loginBusy}
+            onClose={() => setLoginOpen(false)}
+            onSignIn={async (email, password) => {
+              if (!client) return;
+              setLoginBusy(true);
+              try {
+                const { error } = await client.auth.signInWithPassword({ email, password });
+                if (error) throw error;
+                toast("Logged in");
+                setLoginOpen(false);
+              } catch (e) {
+                toast(String(e?.message || e));
+              } finally {
+                setLoginBusy(false);
+              }
+            }}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+if (societyLoading) {
+  return (
+    <div className="min-h-screen grid place-items-center bg-neutral-50 p-6">
+      <div className="card max-w-lg w-full p-5">
+        <div className="text-lg font-semibold">Loading your society…</div>
+        <div className="text-sm opacity-80 mt-1">Fetching memberships</div>
+      </div>
+    </div>
+  );
+}
+
+if ((memberships || []).length > 1 && !activeSocietyId) {
+  return (
+    <div className="min-h-screen grid place-items-center bg-neutral-50 p-6">
+      <div className="card max-w-lg w-full p-5">
+        <div className="text-lg font-semibold">Choose a society</div>
+        <div className="text-sm opacity-80 mt-1">You belong to multiple societies.</div>
+
+        <select
+          className="mt-4 w-full border rounded px-3 py-2"
+          value={activeSocietyId || ""}
+          onChange={(e) => setActiveSocietyId(e.target.value)}
+        >
+          <option value="" disabled>Select…</option>
+          {(memberships || []).map((m) => (
+            <option key={m.society_id} value={m.society_id}>
+              {(m.societies && m.societies.name) ? m.societies.name : m.society_id}
+            </option>
+          ))}
+        </select>
+
+        <div className="mt-4 text-sm opacity-70">
+          Signed in as <b>{user.email}</b>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Expose role to existing admin UI (captain/admin)
+useEffect(() => {
+  try { window.__isSocietyAdmin = !!isSocietyAdmin; } catch(e){}
+}, [isSocietyAdmin]);
+
 return (
           <div className="min-h-screen p-4 sm:p-6 bg-neutral-50">
             <div className="app-shell space-y-4 pt-1">
