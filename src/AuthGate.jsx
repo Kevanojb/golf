@@ -11,7 +11,6 @@ const GH_PAGES_BASE = "/den-society-vite/";
 const SITE_ORIGIN = "https://kevanojb.github.io";
 const SITE_URL = `${SITE_ORIGIN}${GH_PAGES_BASE}`;
 
-// ✅ IMPORTANT: lazy import defined at module scope (NOT a hook)
 const AppLazy = React.lazy(() => import("./App.jsx"));
 
 function CenterCard({ children }) {
@@ -129,9 +128,7 @@ export default function AuthGate() {
       // choose: remembered (if valid) else if single membership choose it else force picker
       let pick = activeSocietyId && ids.includes(activeSocietyId) ? activeSocietyId : "";
 
-      if (!pick && ids.length === 1) {
-        pick = ids[0];
-      }
+      if (!pick && ids.length === 1) pick = ids[0];
 
       if (!pick && ids.length > 1) {
         setPickerOpen(true);
@@ -160,6 +157,27 @@ export default function AuthGate() {
       if (activeSocietyId) localStorage.setItem(LS_ACTIVE_SOCIETY, activeSocietyId);
     } catch {}
   }, [activeSocietyId]);
+
+  // ✅ Always sync globals once we know the active society
+  React.useEffect(() => {
+    if (!session?.user || !activeSocietyId) return;
+
+    const options = (societies || [])
+      .slice()
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+
+    const activeSoc = options.find((s) => String(s.id) === String(activeSocietyId));
+    const role =
+      memberships.find((m) => String(m.society_id) === String(activeSocietyId))?.role || "player";
+
+    window.__activeSocietyId = String(activeSocietyId);
+    window.__activeSocietyName = activeSoc?.name || "";
+    window.__activeSocietySlug = activeSoc?.slug || "";
+    window.__activeSocietyRole = role;
+
+    // legacy compatibility
+    window.__supabase_client__ = client;
+  }, [client, session?.user?.id, activeSocietyId, societies, memberships]);
 
   async function sendMagicLink(e) {
     e.preventDefault();
@@ -201,7 +219,7 @@ export default function AuthGate() {
     } catch {}
   }
 
-  // ---- UI gates (NO hooks below this line) ----
+  // ---- UI gates ----
 
   if (!envOk) {
     return (
@@ -319,18 +337,16 @@ export default function AuthGate() {
     );
   }
 
-  // set tenant globals BEFORE App renders
-  const activeSoc = options.find((s) => String(s.id) === String(activeSocietyId));
-  window.__activeSocietyId = String(activeSocietyId);
-  window.__activeSocietyName = activeSoc?.name || "";
-  window.__activeSocietySlug = activeSoc?.slug || "";
-  window.__activeSocietyRole =
-    memberships.find((m) => String(m.society_id) === String(activeSocietyId))?.role || "player";
-  window.__supabase_client__ = client;
-
   return (
     <React.Suspense fallback={<CenterCard><div>Loading…</div></CenterCard>}>
-      <AppLazy key={String(activeSocietyId)} />
+      <AppLazy
+        key={String(activeSocietyId)}
+        supabase={client}
+        session={session}
+        activeSocietyId={String(activeSocietyId)}
+        activeSocietySlug={options.find((s) => String(s.id) === String(activeSocietyId))?.slug || ""}
+        activeSocietyName={options.find((s) => String(s.id) === String(activeSocietyId))?.name || ""}
+      />
     </React.Suspense>
   );
 }
