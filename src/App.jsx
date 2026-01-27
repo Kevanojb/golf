@@ -732,9 +732,9 @@ function isFuzzyMatch(a, b) {
         };
 
         return (
-          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
             <div className="absolute inset-0 bg-black/40" onClick={onClose} />
-            <div className="relative w-full max-w-md glass-card p-4 sm:p-5">
+            <div className="relative w-full max-w-md max-h-[90vh] overflow-y-auto glass-card p-4 sm:p-5">
               <div className="flex items-start justify-between gap-3">
                 <div>
                   <div className="text-lg font-extrabold text-squab-900">Admin sign in</div>
@@ -12258,14 +12258,17 @@ const [user, setUser] = useState(null);
 
 const [memberships, setMemberships] = useState([]);
 const [activeSocietyId, setActiveSocietyId] = useState(() => {
-  try { return localStorage.getItem("den_active_society_id") || ""; } catch(e){ return ""; }
+  try { return localStorage.getItem("den_active_society_id") || null; } catch(e){ return null; }
 });
 const [societyLoading, setSocietyLoading] = useState(false);
 const [societyError, setSocietyError] = useState("");
 
 useEffect(() => {
-  try { if (activeSocietyId) localStorage.setItem("den_active_society_id", activeSocietyId); } catch(e){}
-  try { window.__activeSocietyId = activeSocietyId; } catch(e){}
+  try {
+    if (activeSocietyId) localStorage.setItem("den_active_society_id", activeSocietyId);
+    else localStorage.removeItem("den_active_society_id");
+  } catch(e){}
+  try { window.__activeSocietyId = activeSocietyId || null; } catch(e){}
 }, [activeSocietyId]);
         const [client, setClient] = useState(null);
         const [statusMsg, setStatusMsg] = useState("Connecting…");
@@ -12273,7 +12276,7 @@ useEffect(() => {
 
 // Load memberships once we have a client + signed-in user
 useEffect(() => {
-  if (!client || !user) { setMemberships([]); return; }
+  if (!client || !user) { setMemberships([]); setActiveSocietyId(null); return; }
   let cancelled = false;
   (async () => {
     setSocietyLoading(true); setSocietyError("");
@@ -13324,7 +13327,8 @@ async function getTeesForCourseName(courseName) {
     }
     if (!course?.id) { teesCache[key] = null; return null; }
 
-    const teesRes = await client.from("tees").select("*").eq("society_id", activeSocietyId).select("*").eq("course_id", course.id);
+        if (!activeSocietyId) return;
+    const teesRes = await client.from("tees").select("*").eq("society_id", activeSocietyId).eq("course_id", course.id);
     if (teesRes.error || !teesRes.data?.length) { teesCache[key] = null; return null; }
 
     const teeIds = teesRes.data.map(t => t.id);
@@ -13563,7 +13567,8 @@ setSeasonRounds(rounds);
               c.auth.getSession().then(({ data: { session } }) => { setUser(session?.user ?? null); });
               c.auth.onAuthStateChange((_event, session) => { setUser(session?.user ?? null); });
 
-              const probe = await c.from(STANDINGS_TABLE).select("*").eq("society_id", activeSocietyId).select("name").limit(1);
+                            if (!activeSocietyId) { setStatusMsg("Select a society"); return; }
+              const probe = await c.from(STANDINGS_TABLE).select("name").eq("society_id", activeSocietyId).limit(1);
               if (probe.error) { setStatusMsg("Error: " + probe.error.message); } 
               else {
                 setStatusMsg("Connected");
@@ -13652,7 +13657,8 @@ async function savePlayerVisibility(nextHiddenKeys) {
 }
         async function fetchAvailableCourses(c) {
            c = c || client; if(!c) return;
-           const { data, error } = await c.from('courses').select("*").eq("society_id", activeSocietyId).select('id, name').order('name');
+                      if (!activeSocietyId) { setStatusMsg('Select a society'); return; }
+           const { data, error } = await c.from('courses').select('id, name').eq('society_id', activeSocietyId).order('name');
            if(!error && data) setCourseList(data);
         }
 
@@ -13739,9 +13745,11 @@ async function savePlayerVisibility(nextHiddenKeys) {
 
         async function loadCourseFromDB(courseId) {
             if(!client || !courseId) return;
-            const courseRes = await client.from('courses').select("*").eq("society_id", activeSocietyId).select('name').eq('id', courseId).single();
+                        if (!activeSocietyId) return;
+            const courseRes = await client.from('courses').select('name').eq('society_id', activeSocietyId).eq('id', courseId).single();
             if(courseRes.data) setCourseName(courseRes.data.name);
-            const teesRes = await client.from('tees').select("*").eq("society_id", activeSocietyId).select('*').eq('course_id', courseId);
+                        if (!activeSocietyId) return;
+            const teesRes = await client.from('tees').select('*').eq('society_id', activeSocietyId).eq('course_id', courseId);
             if(teesRes.error || !teesRes.data.length) {
               toast("No tee data found for this course.");
               return;
@@ -13829,7 +13837,8 @@ function seasonIdForDateMs(ms, seasonsArr) {
 
 async function fetchSeasons(c) {
   c = c || client; if (!c) return;
-  const r = await c.from('seasons').select("*").eq("society_id", activeSocietyId).select('competition,season_id,label,start_date,end_date,is_active').eq('competition', COMPETITION).order('start_date', { ascending: false });
+    if (!activeSocietyId) return { data: [], error: null };
+  const r = await c.from('seasons').select('competition,season_id,label,start_date,end_date,is_active').eq('society_id', activeSocietyId).eq('competition', COMPETITION).order('start_date', { ascending: false });
   if (r.error) { toast('Seasons load failed: ' + r.error.message); return; }
   const arr = Array.isArray(r.data) ? r.data : [];
   setSeasonsDef(arr);
@@ -13916,7 +13925,8 @@ async function refreshShared(c) {
 
         async function fetchSeason(c) {
           c = c || client; if (!c) return;
-          let q = c.from(STANDINGS_TABLE).select("*").eq("society_id", activeSocietyId).select("*").eq("competition", COMPETITION);
+                    if (!activeSocietyId) { setStatusMsg("Select a society"); return; }
+          let q = c.from(STANDINGS_TABLE).select("*").eq("society_id", activeSocietyId).eq("competition", COMPETITION);
           if (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all") q = q.eq("season_id", String(leagueSeasonYear));
           const r = await q;
           if (r.error) { setStatusMsg("Error: " + r.error.message); return; }
