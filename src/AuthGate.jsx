@@ -59,7 +59,7 @@ export default function AuthGate() {
     };
   }, [client]);
 
-  // 2) load memberships + societies
+  // 2) load memberships + societies (IMPORTANT: does NOT depend on activeSocietyId)
   React.useEffect(() => {
     let cancelled = false;
 
@@ -107,7 +107,8 @@ export default function AuthGate() {
       setSocieties(socs);
 
       // pick remembered > only-one > first
-      let pick = activeSocietyId && ids.includes(activeSocietyId) ? activeSocietyId : "";
+      let pick =
+        activeSocietyId && ids.includes(activeSocietyId) ? activeSocietyId : "";
       if (!pick && ids.length === 1) pick = ids[0];
       if (!pick && ids.length) pick = ids[0];
       if (pick) setActiveSocietyId(String(pick));
@@ -118,9 +119,11 @@ export default function AuthGate() {
     loadTenant();
     return () => {
       cancelled = true;
+      // if we unmount mid-flight, don't leave UI stuck
+      setTenantLoading(false);
     };
-    // IMPORTANT: include activeSocietyId so it re-evaluates pick after storage reads
-  }, [client, session?.user?.id, activeSocietyId]);
+    // NOTE: activeSocietyId intentionally NOT in deps to avoid re-run loops
+  }, [client, session?.user?.id]);
 
   // 3) persist selection
   React.useEffect(() => {
@@ -226,7 +229,7 @@ export default function AuthGate() {
     );
   }
 
-  // 6) If we’re still loading tenant data OR we haven’t got a society yet, block App render.
+  // 6) Block App render until we have a society
   if (tenantLoading || !activeSocietyId) {
     return (
       <CenterCard>
@@ -258,7 +261,13 @@ export default function AuthGate() {
   const AppLazy = React.useMemo(() => React.lazy(() => import("./App.jsx")), [activeSocietyId]);
 
   return (
-    <React.Suspense fallback={<CenterCard><div className="text-sm text-neutral-600">Loading…</div></CenterCard>}>
+    <React.Suspense
+      fallback={
+        <CenterCard>
+          <div className="text-sm text-neutral-600">Loading…</div>
+        </CenterCard>
+      }
+    >
       {memberships.length > 1 ? (
         <div className="fixed inset-0 z-50 bg-black/40 p-4 flex items-end sm:items-center justify-center">
           <div className="w-full max-w-md rounded-3xl bg-white border border-neutral-200 shadow-xl p-4">
