@@ -10,7 +10,7 @@ const LS_ACTIVE_SOCIETY = "den_active_society_id_v1";
 // IMPORTANT: your GitHub Pages base
 const GH_PAGES_BASE = "/den-society-vite/";
 const SITE_ORIGIN = "https://kevanojb.github.io";
-const SITE_URL = `${SITE_ORIGIN}${GH_PAGES_BASE}`; // "https://kevanojb.github.io/den-society-vite/"
+const SITE_URL = `${SITE_ORIGIN}${GH_PAGES_BASE}`;
 
 function CenterCard({ children }) {
   return (
@@ -45,7 +45,6 @@ export default function AuthGate() {
   const [msg, setMsg] = React.useState("");
 
   const [tenantLoading, setTenantLoading] = React.useState(false);
-
   const [memberships, setMemberships] = React.useState([]);
   const [societies, setSocieties] = React.useState([]);
 
@@ -57,7 +56,10 @@ export default function AuthGate() {
     }
   });
 
-  // hard fail early if env is missing (prevents silent "undefined" chaos)
+  // This controls whether the picker is currently shown.
+  // We will show it ONLY when user has >1 membership AND we haven't chosen one this session.
+  const [showPicker, setShowPicker] = React.useState(false);
+
   const envOk = Boolean(SUPA_URL && SUPA_KEY);
 
   // 1) session tracking
@@ -107,6 +109,7 @@ export default function AuthGate() {
       if (!ids.length) {
         setSocieties([]);
         setTenantLoading(false);
+        setShowPicker(false);
         return;
       }
 
@@ -125,10 +128,21 @@ export default function AuthGate() {
 
       // pick remembered > only-one > first
       let pick = activeSocietyId && ids.includes(activeSocietyId) ? activeSocietyId : "";
+
       if (!pick && ids.length === 1) pick = ids[0];
+
+      // If >1 and nothing valid remembered, force picker
+      if (!pick && ids.length > 1) {
+        setShowPicker(true);
+        setTenantLoading(false);
+        return;
+      }
+
       if (!pick && ids.length) pick = ids[0];
       if (pick) setActiveSocietyId(String(pick));
 
+      // If user has multiple memberships, we only show picker when they *need* to choose
+      setShowPicker(false);
       setTenantLoading(false);
     }
 
@@ -165,7 +179,6 @@ export default function AuthGate() {
 
     setBusy(true);
     try {
-      // FORCE GitHub Pages URL (prevents localhost redirects)
       const redirectTo = SITE_URL;
 
       const { error } = await client.auth.signInWithOtp({
@@ -191,7 +204,8 @@ export default function AuthGate() {
     } catch {}
   }
 
-  // If env missing, show a clear screen (otherwise you chase ghosts)
+  // ---------- UI GATES ----------
+
   if (!envOk) {
     return (
       <CenterCard>
@@ -210,7 +224,6 @@ export default function AuthGate() {
     );
   }
 
-  // not signed in => show magic link screen
   if (!session?.user) {
     return (
       <CenterCard>
@@ -257,9 +270,6 @@ export default function AuthGate() {
     );
   }
 
-  // IMPORTANT:
-  // Don’t show “no societies” while we’re still fetching memberships.
-  // Otherwise you’ll flash the warning and/or get stuck in the wrong UI state.
   if (tenantLoading) {
     return (
       <CenterCard>
@@ -275,7 +285,6 @@ export default function AuthGate() {
     );
   }
 
-  // signed in but no access
   if (Array.isArray(memberships) && memberships.length === 0) {
     return (
       <CenterCard>
@@ -298,7 +307,47 @@ export default function AuthGate() {
     );
   }
 
-  // Block App render until we have a society id
+  // If we need the user to choose a society, DO NOT render the app behind it.
+  if (showPicker) {
+    const options = (societies || [])
+      .slice()
+      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+
+    return (
+      <CenterCard>
+        <div className="text-xs font-black tracking-widest uppercase text-neutral-400">
+          Choose society
+        </div>
+        <div className="text-lg font-black text-neutral-900 mt-1">{session.user.email}</div>
+
+        <div className="mt-4 space-y-2">
+          {options.map((s) => (
+            <button
+              key={s.id}
+              className="w-full text-left rounded-2xl border border-neutral-200 bg-white px-4 py-3 hover:bg-neutral-50"
+              onClick={() => {
+                setActiveSocietyId(String(s.id));
+                setShowPicker(false);
+              }}
+            >
+              <div className="font-black text-neutral-900">{s.name || s.slug || s.id}</div>
+              <div className="text-xs text-neutral-500">{s.slug ? `/${s.slug}` : s.id}</div>
+            </button>
+          ))}
+        </div>
+
+        <button
+          className="mt-4 w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
+          onClick={signOut}
+        >
+          Sign out
+        </button>
+
+        {msg ? <div className="mt-3 text-sm text-rose-700">{msg}</div> : null}
+      </CenterCard>
+    );
+  }
+
   if (!activeSocietyId) {
     return (
       <CenterCard>
@@ -314,21 +363,19 @@ export default function AuthGate() {
     );
   }
 
-  // society picker (only shown if >1)
+  // Set globals synchronously BEFORE App renders (prevents 400s)
   const options = (societies || [])
     .slice()
     .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
-
   const activeSoc = options.find((s) => String(s.id) === String(activeSocietyId));
 
-  // Set globals synchronously BEFORE App renders (prevents 400s like eq('society_id', ''))
   window.__activeSocietyId = String(activeSocietyId);
   window.__activeSocietyName = activeSoc?.name || "";
   window.__activeSocietySlug = activeSoc?.slug || "";
   window.__activeSocietyRole =
     memberships.find((m) => String(m.society_id) === String(activeSocietyId))?.role || "member";
 
-  // IMPORTANT: no hooks down here (prevents React #310)
+  // No hooks down here
   const AppLazy = React.lazy(() => import("./App.jsx"));
 
   return (
@@ -339,42 +386,6 @@ export default function AuthGate() {
         </CenterCard>
       }
     >
-      {memberships.length > 1 ? (
-        <div className="fixed inset-0 z-50 bg-black/40 p-4 flex items-end sm:items-center justify-center">
-          <div className="w-full max-w-md rounded-3xl bg-white border border-neutral-200 shadow-xl p-4">
-            <div className="text-xs font-black tracking-widest uppercase text-neutral-400">
-              Choose society
-            </div>
-            <div className="text-lg font-black text-neutral-900 mt-1">{session.user.email}</div>
-
-            <div className="mt-3 space-y-2">
-              {options.map((s) => (
-                <button
-                  key={s.id}
-                  className={
-                    "w-full text-left rounded-2xl border px-4 py-3 " +
-                    (String(s.id) === String(activeSocietyId)
-                      ? "border-black bg-neutral-50"
-                      : "border-neutral-200 bg-white")
-                  }
-                  onClick={() => setActiveSocietyId(String(s.id))}
-                >
-                  <div className="font-black text-neutral-900">{s.name || s.slug || s.id}</div>
-                  <div className="text-xs text-neutral-500">{s.slug ? `/${s.slug}` : s.id}</div>
-                </button>
-              ))}
-            </div>
-
-            <button
-              className="mt-4 w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
-              onClick={signOut}
-            >
-              Sign out
-            </button>
-          </div>
-        </div>
-      ) : null}
-
       {/* key forces remount when switching societies */}
       <AppLazy key={activeSocietyId} />
     </React.Suspense>
