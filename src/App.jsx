@@ -13532,17 +13532,32 @@ setSeasonRounds(rounds);
               if (probe.error) { setStatusMsg("Error: " + probe.error.message); } 
               else {
                 setStatusMsg("Connected");
-                await refreshShared(c);
-                await fetchSeasons(c);
-                await fetchSeason(c);
+                if (SOCIETY_ID) {
+                  await refreshShared(c);
+                  await fetchSeasons(c);
+                  await fetchSeason(c);
+                  await fetchPlayerVisibility(c);
+                }
                 await fetchAvailableCourses(c);
-                await fetchPlayerVisibility(c);
               }
             } catch (err) { if (!cancelled) setStatusMsg("Error: " + (err?.message || err)); }
           }
           boot();
           return () => { cancelled = true; };
         }, []);
+
+        
+        // Refetch tenant-scoped data when the active society changes.
+        // AuthGate can load membership asynchronously, so App may mount once with SOCIETY_ID = "".
+        useEffect(() => {
+          if (!client) return;
+          if (!SOCIETY_ID) return;
+          // Pull everything that is tenant-scoped
+          refreshShared(client);
+          fetchSeasons(client);
+          fetchSeason(client);
+          fetchPlayerVisibility(client);
+        }, [client, SOCIETY_ID, COMPETITION]);
 
         // Refetch standings when the selected league season changes
         useEffect(() => {
@@ -14262,9 +14277,9 @@ return {
           setSeason(next);
           if (client) {
             const vals = Object.values(next).filter((r) => !isTeamLike(r.name));
-            const targetSeasonId = (seasonYear && String(seasonYear).toLowerCase() !== "all")
-              ? String(seasonYear)
-              : (seasonsDef.find((x) => x && x.is_active)?.season_id || "");
+            const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
+              ? String(leagueSeasonYear)
+              : (activeSeasonId || (seasonsDef.find((x) => x && x.is_active)?.season_id || ""));
             if (!targetSeasonId) { toast("Select a season first"); return; }
             const rows = vals.map((r) => ({
               society_id: SOCIETY_ID,
@@ -14284,9 +14299,9 @@ if (res.error) toast("Error: " + res.error.message);
         }
 
         async function removeEventFromSeason() {
-          const targetSeasonId = (seasonYear && String(seasonYear).toLowerCase() !== "all")
-            ? String(seasonYear)
-            : (seasonsDef.find((x) => x && x.is_active)?.season_id || "");
+          const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
+              ? String(leagueSeasonYear)
+              : (activeSeasonId || (seasonsDef.find((x) => x && x.is_active)?.season_id || ""));
           if (!targetSeasonId) { toast("Select a season first"); return; }
 
           if (!computed.length) { toast("Load an event first"); return; }
@@ -14304,9 +14319,9 @@ if (res.error) toast("Error: " + res.error.message);
           setSeason(next);
           if (client) {
             const vals = Object.values(next).filter((r) => !isTeamLike(r.name));
-            const targetSeasonId = (seasonYear && String(seasonYear).toLowerCase() !== "all")
-              ? String(seasonYear)
-              : (seasonsDef.find((x) => x && x.is_active)?.season_id || "");
+            const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
+              ? String(leagueSeasonYear)
+              : (activeSeasonId || (seasonsDef.find((x) => x && x.is_active)?.season_id || ""));
             if (!targetSeasonId) { toast("Select a season first"); return; }
             const rows = vals.map((r) => ({
               society_id: SOCIETY_ID,
@@ -14324,6 +14339,10 @@ if (res.error) toast("Error: " + res.error.message);
 
         async function clearSeason() {
           if (!client) { toast("No client"); return; }
+          const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
+            ? String(leagueSeasonYear)
+            : (activeSeasonId || (seasonsDef.find((x) => x && x.is_active)?.season_id || ""));
+          if (!targetSeasonId) { toast("Select a season first"); return; }
           if (!window.confirm("⚠ This will delete ALL season standings. Continue?")) return;
           const res = await client.from(STANDINGS_TABLE).delete().eq("competition", COMPETITION).eq("society_id", SOCIETY_ID).eq("season_id", targetSeasonId).neq("name", "");
           if (res.error) toast("Error: " + res.error.message);
