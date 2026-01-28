@@ -32,25 +32,39 @@ var formatGrossVsPar = function (n) {
 };
 
 // =========================
-// TENANT ROUTE + BRANDING (module-scope)
-// In the multi-tenant build, AuthGate sets these globals BEFORE App renders.
-// We no longer use URL hash switching.
+// LEAGUE ROUTE + BRANDING (module-scope)
+// Ensures all views/components can access league title and bucket without ReferenceErrors.
+// Supports both "#/winter-league" and "#winter-league" style hashes.
 // =========================
-function getActiveSociety() {
+function getLeagueSlug() {
   try {
-    const id = (typeof window !== "undefined" ? window.__activeSocietyId : "") || "";
-    const slug = (typeof window !== "undefined" ? window.__activeSocietySlug : "") || "";
-    const name = (typeof window !== "undefined" ? window.__activeSocietyName : "") || "";
-    const role = (typeof window !== "undefined" ? window.__activeSocietyRole : "") || "";
-    return { id, slug, name, role };
+    const h = (typeof window !== "undefined" ? (window.location.hash || "") : "").replace(/^#\/?/, "");
+    if (h) return (h.split("/")[0] || "den-society").trim();
+    const parts = (typeof window !== "undefined" ? window.location.pathname : "").split("/").filter(Boolean);
+    // GH Pages base path: /den-society-vite/<slug>
+    return (parts[1] || parts[0] || "den-society").trim();
   } catch (e) {
-    return { id: "", slug: "", name: "", role: "" };
+    return "den-society";
   }
 }
 
-// NOTE: tenant selection is now decided at runtime (props from AuthGate),
-// so we must NOT freeze SOCIETY_ID/PREFIX at module-load time.
-// (In Vite/ESM, module-scope constants run once on import, which can be before globals are set.)
+const LEAGUE_SLUG = getLeagueSlug();
+const IS_WINTER_LEAGUE = LEAGUE_SLUG === "winter-league";
+
+// Display branding (titles)
+const LEAGUE_TITLE = IS_WINTER_LEAGUE ? "Wednesday League" : "Den Society League";
+const LEAGUE_APP_TITLE = `${LEAGUE_TITLE} — Golfer’s Guide`;
+const LEAGUE_HEADER_TITLE = `${LEAGUE_TITLE} — Ultimate Edition`;
+
+// Storage bucket per league (separate buckets)
+const BUCKET = IS_WINTER_LEAGUE ? "winter_league" : "den-events";
+
+// Default competition per league (used by seasons table + leaderboards)
+const COMPETITION = IS_WINTER_LEAGUE ? "winter" : "season";
+
+// Storage prefix for CSVs inside bucket.
+const PREFIX = "events";
+
 try {
   if (typeof window !== "undefined") {
     window.__league = { slug: LEAGUE_SLUG, isWinter: IS_WINTER_LEAGUE, title: LEAGUE_TITLE, bucket: BUCKET, competition: COMPETITION };
@@ -12189,40 +12203,8 @@ function PlayerInsightsView({
 }
 
 
-function App(props) {
+function App() {
         const [view, setView] = useState("home");
-// ---- Tenant runtime config (from AuthGate props, with safe fallback to globals) ----
-const __p = props || {};
-const ACTIVE = (() => {
-  try {
-    const id   = String(__p.activeSocietyId || (typeof window !== "undefined" ? window.__activeSocietyId : "") || "").trim();
-    const slug = String(__p.activeSocietySlug || (typeof window !== "undefined" ? window.__activeSocietySlug : "") || "den-society").trim();
-    const name = String(__p.activeSocietyName || (typeof window !== "undefined" ? window.__activeSocietyName : "") || "").trim();
-    const role = String(__p.activeSocietyRole || (typeof window !== "undefined" ? window.__activeSocietyRole : "") || "").trim();
-    return { id, slug, name, role };
-  } catch {
-    return { id: "", slug: "den-society", name: "", role: "" };
-  }
-})();
-
-const SOCIETY_ID = ACTIVE.id;
-const SOCIETY_SLUG = ACTIVE.slug || "den-society";
-const IS_WINTER_LEAGUE = SOCIETY_SLUG === "winter-league";
-
-// Storage: single bucket, per-society folders
-const BUCKET = "den-events";
-const PREFIX = SOCIETY_ID ? `societies/${SOCIETY_ID}/events` : "societies/UNKNOWN/events";
-
-// Competition (used by seasons + standings). Keep your existing winter vs season split.
-const COMPETITION = IS_WINTER_LEAGUE ? "winter" : "season";
-
-// Optional: expose for debugging
-try {
-  if (typeof window !== "undefined") {
-    window.__league = { slug: SOCIETY_SLUG, isWinter: IS_WINTER_LEAGUE, title: (ACTIVE.name || SOCIETY_SLUG), bucket: BUCKET, competition: COMPETITION, prefix: PREFIX, societyId: SOCIETY_ID };
-  }
-} catch (e) {}
-
 
 
         // --- Global scoring-mode visual accent (UI only; no calculation changes) ---
@@ -12271,7 +12253,12 @@ const [user, setUser] = useState(null);
 
 const STANDINGS_TABLE = "standings";
 
+// Default competition per league (used by seasons table + leaderboards)
+const COMPETITION = IS_WINTER_LEAGUE ? "winter" : "season";
+
 // Storage prefix for CSVs inside bucket.
+const PREFIX = "events";
+
 // Admin player visibility (hide / re-include players)
 const ADMIN_PW_OK_LS_KEY = "den_admin_pw_ok_v1";
 const ADMIN_PASSWORD = (typeof window !== "undefined" && window.DEN_ADMIN_PASSWORD)
@@ -13501,33 +13488,15 @@ setSeasonRounds(rounds);
           let cancelled = false;
           async function boot() {
             try {
-              // Prefer the Supabase client created by AuthGate (keeps the magic-link session).
-              // Fallback: create our own client if running standalone.
-              const c =
-                (props && props.supabase)
-                  ? props.supabase
-                  : (typeof window !== "undefined" && window.__supabase_client__)
-                      ? window.__supabase_client__
-                      : createClient(SUPA_URL, SUPA_KEY, {
-                      auth: {
-                        persistSession: true,
-                        autoRefreshToken: true,
-                        detectSessionInUrl: true,
-                      },
-                    });
-
-
-              if (typeof window !== "undefined") window.__supabase_client__ = c;
+              if (!(window.supabase && window.supabase.createClient)) {
+                setTimeout(boot, 200); return;
+              }
+              const c = window.supabase.createClient(SUPA_URL, SUPA_KEY, { auth: { persistSession: true }, });
+              window.__supabase_client__ = c;
               if (cancelled) return;
-
               setClient(c);
-              c.auth.getSession().then(({ data: { session } }) => {
-                setUser(session?.user ?? null);
-              });
-              c.auth.onAuthStateChange((_event, session) => {
-                setUser(session?.user ?? null);
-              });
-
+              c.auth.getSession().then(({ data: { session } }) => { setUser(session?.user ?? null); });
+              c.auth.onAuthStateChange((_event, session) => { setUser(session?.user ?? null); });
 
               const probe = await c.from(STANDINGS_TABLE).select("name").limit(1);
               if (probe.error) { setStatusMsg("Error: " + probe.error.message); } 
@@ -13795,7 +13764,7 @@ function seasonIdForDateMs(ms, seasonsArr) {
 
 async function fetchSeasons(c) {
   c = c || client; if (!c) return;
-  const r = await c.from('seasons').select('competition,season_id,label,start_date,end_date,is_active').eq('competition', COMPETITION).eq('society_id', SOCIETY_ID).eq('society_id', SOCIETY_ID).order('start_date', { ascending: false });
+  const r = await c.from('seasons').select('competition,season_id,label,start_date,end_date,is_active').eq('competition', COMPETITION).order('start_date', { ascending: false });
   if (r.error) { toast('Seasons load failed: ' + r.error.message); return; }
   const arr = Array.isArray(r.data) ? r.data : [];
   setSeasonsDef(arr);
@@ -13882,7 +13851,7 @@ async function refreshShared(c) {
 
         async function fetchSeason(c) {
           c = c || client; if (!c) return;
-          let q = c.from(STANDINGS_TABLE).select("*").eq("competition", COMPETITION).eq("society_id", SOCIETY_ID);
+          let q = c.from(STANDINGS_TABLE).select("*").eq("competition", COMPETITION);
           if (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all") q = q.eq("season_id", String(leagueSeasonYear));
           const r = await q;
           if (r.error) { setStatusMsg("Error: " + r.error.message); return; }
@@ -14268,14 +14237,13 @@ return {
               : (seasonsDef.find((x) => x && x.is_active)?.season_id || "");
             if (!targetSeasonId) { toast("Select a season first"); return; }
             const rows = vals.map((r) => ({
-              society_id: SOCIETY_ID,
               season_id: targetSeasonId,
               competition: COMPETITION,
               name: r.name, total_points: r.totalPoints, events: r.events,
               best_event_points: r.bestEventPoints, best_hole_points: r.bestHolePoints,
               eclectic_total: r.eclecticTotal, best_per_hole: r.bestPerHole,
             }));
-            const res = await client.from(STANDINGS_TABLE).upsert(rows, { onConflict: "society_id,season_id,competition,name" });
+            const res = await client.from(STANDINGS_TABLE).upsert(rows, { onConflict: "season_id,competition,name" });
 if (res.error) toast("Error: " + res.error.message);
             else toast("Season updated ✓");
             
@@ -14310,14 +14278,13 @@ if (res.error) toast("Error: " + res.error.message);
               : (seasonsDef.find((x) => x && x.is_active)?.season_id || "");
             if (!targetSeasonId) { toast("Select a season first"); return; }
             const rows = vals.map((r) => ({
-              society_id: SOCIETY_ID,
               season_id: targetSeasonId,
               competition: COMPETITION,
               name: r.name, total_points: r.totalPoints, events: r.events,
               best_event_points: r.bestEventPoints, best_hole_points: r.bestHolePoints,
               eclectic_total: r.eclecticTotal, best_per_hole: r.bestPerHole,
             }));
-            const res = await client.from(STANDINGS_TABLE).upsert(rows, { onConflict: "society_id,season_id,competition,name" });
+            const res = await client.from(STANDINGS_TABLE).upsert(rows, { onConflict: "season_id,competition,name" });
 if (res.error) toast("Error: " + res.error.message);
             else toast("Event removed from season ✓");
           }
@@ -14326,7 +14293,7 @@ if (res.error) toast("Error: " + res.error.message);
         async function clearSeason() {
           if (!client) { toast("No client"); return; }
           if (!window.confirm("⚠ This will delete ALL season standings. Continue?")) return;
-          const res = await client.from(STANDINGS_TABLE).delete().eq("competition", COMPETITION).eq("society_id", SOCIETY_ID).eq("season_id", targetSeasonId).neq("name", "");
+          const res = await client.from(STANDINGS_TABLE).delete().eq("competition", COMPETITION).eq("season_id", targetSeasonId).neq("name", "");
           if (res.error) toast("Error: " + res.error.message);
           else { setSeason({}); toast("Season cleared"); }
         }
