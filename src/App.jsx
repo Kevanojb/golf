@@ -12194,11 +12194,15 @@ function App(props) {
 const __p = props || {};
 const ACTIVE = (() => {
   try {
-    const id   = String(__p.activeSocietyId || (typeof window !== "undefined" ? window.__activeSocietyId : "") || "").trim();
-    const slug = String(__p.activeSocietySlug || (typeof window !== "undefined" ? window.__activeSocietySlug : "") || "den-society").trim();
-    const name = String(__p.activeSocietyName || (typeof window !== "undefined" ? window.__activeSocietyName : "") || "").trim();
-    const role = String(__p.activeSocietyRole || (typeof window !== "undefined" ? window.__activeSocietyRole : "") || "").trim();
-    return { id, slug, name, role };
+    // AuthGate sets these globals before App renders in the multi-tenant build.
+    // Avoid referencing any props at module-load time.
+    const a = getActiveSociety();
+    return {
+      id: String(a?.id || "").trim(),
+      slug: String(a?.slug || "den-society").trim(),
+      name: String(a?.name || "").trim(),
+      role: String(a?.role || "").trim(),
+    };
   } catch {
     return { id: "", slug: "den-society", name: "", role: "" };
   }
@@ -13532,44 +13536,19 @@ setSeasonRounds(rounds);
               if (probe.error) { setStatusMsg("Error: " + probe.error.message); } 
               else {
                 setStatusMsg("Connected");
-                if (SOCIETY_ID) {
-                  await refreshShared(c);
-                  await fetchSeasons(c);
-                  await fetchSeason(c);
-                  await fetchPlayerVisibility(c);
-                }
+                await refreshShared(c);
+                await fetchSeasons(c);
+                await fetchSeason(c);
                 await fetchAvailableCourses(c);
+                await fetchPlayerVisibility(c);
               }
             } catch (err) { if (!cancelled) setStatusMsg("Error: " + (err?.message || err)); }
           }
           boot();
           return () => { cancelled = true; };
-        }, []); 
+        }, []);
 
-        
-        // When the active society changes (or competition mode flips), reload tenant-scoped data.
-        // This matters because SOCIETY_ID is resolved at runtime from AuthGate props/globals,
-        // and the initial boot() effect runs only once.
-        useEffect(() => {
-          if (!client) return;
-
-          // Reset UI state so we don't carry season IDs across tenants
-          setSeasonsDef([]);
-          setActiveSeasonId("");
-          setLeagueSeasonYear("All");
-          setSeason({});
-
-          if (!SOCIETY_ID) return;
-
-          (async () => {
-            await refreshShared(client);
-            await fetchSeasons(client);
-            await fetchSeason(client);
-            await fetchPlayerVisibility(client);
-          })();
-        }, [client, SOCIETY_ID, COMPETITION]);
-
-// Refetch standings when the selected league season changes
+        // Refetch standings when the selected league season changes
         useEffect(() => {
           if (!client) return;
           fetchSeason(client);
@@ -14247,68 +14226,144 @@ return {
           return out.sort((a, b) => a.position - b.position);
         }, [players, courseTees, courseSlope, courseRating, startHcapMode, nextHcapMode, seasonRounds]);
 
-        async function addEventToSeason() {
-          if (!computed.length) { toast("Load an event first"); return; }
-          if (!user) { alert("Please log in as admin first."); return; }
-          
-          // 1. UPLOAD FILE IF EXISTS
-          if (currentFile) {
-              toast("Uploading file...");
-              const fileName = currentFile.name;
-              const path = `${PREFIX}/${fileName}`;
-              const { error: uploadError } = await client.storage
-                .from(BUCKET)
-                .upload(path, currentFile, { upsert: true });
+        
+async function addEventToSeason() {
+  if (!computed.length) { toast("Load an event first"); return; }
+  if (!user) { alert("Please log in as admin first."); return; }
 
-              if (uploadError) {
-                alert("File upload failed: " + uploadError.message);
-              } else {
-                toast("File uploaded successfully.");
-              }
-          }
+  if (currentFile) {
+    const fileName = currentFile.name;
+    const path = `${PREFIX}/${fileName}`;
+    await client.storage.from(BUCKET).upload(path, currentFile, { upsert: true });
+  }
 
-          // 2. UPDATE SEASON STATS
-          const next = { ...season };
-          for (const r of computed) {
-            if (isTeamLike(r.name)) continue;
-            const prev = next[r.name] || {
-              name: r.name, totalPoints: 0, events: 0, bestPerHole: Array(18).fill(0), eclecticTotal: 0, bestEventPoints: 0, bestHolePoints: 0,
-            };
-            const eventPerHole = (r.perHole || []).map((v) => Math.max(0, Math.min(6, Number(v) || 0)));
-            const bestPerHole = prev.bestPerHole.map((v, i) => Math.max(v, eventPerHole[i]));
-            const eclecticTotal = bestPerHole.reduce((s, v) => s + v, 0);
-            const bestEvent = Math.max(prev.bestEventPoints || 0, r.points || 0);
-            const bestHole = Math.max(prev.bestHolePoints || 0, Math.max(...eventPerHole));
-            next[r.name] = {
-              name: r.name, totalPoints: (prev.totalPoints || 0) + (r.leaguePoints || 0), events: (prev.events || 0) + 1,
-              bestEventPoints: bestEvent, bestHolePoints: bestHole, eclecticTotal, bestPerHole,
-            };
-          }
-          setSeason(next);
-          if (client) {
-            const vals = Object.values(next).filter((r) => !isTeamLike(r.name));
-            const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
-              ? String(leagueSeasonYear)
-              : (activeSeasonId || (seasonsDef.find((x) => x && x.is_active)?.season_id || ""));
-            if (!targetSeasonId) { toast("Select a season first"); return; }
-            const rows = vals.map((r) => ({
-              society_id: SOCIETY_ID,
-              season_id: targetSeasonId,
-              competition: COMPETITION,
-              name: r.name, total_points: r.totalPoints, events: r.events,
-              best_event_points: r.bestEventPoints, best_hole_points: r.bestHolePoints,
-              eclectic_total: r.eclecticTotal, best_per_hole: r.bestPerHole,
-            }));
-            const res = await client.from(STANDINGS_TABLE).upsert(rows, { onConflict: "society_id,season_id,competition,name" });
-if (res.error) toast("Error: " + res.error.message);
-            else toast("Season updated ✓");
-            
-            // 3. REFRESH LIST
-            await refreshShared(client);
-          }
-        }
+  const next = { ...season };
 
-        async function removeEventFromSeason() {
+  for (const r of computed) {
+    if (isTeamLike(r.name)) continue;
+
+    const prev = next[r.name] || {
+      name: r.name,
+      totalPoints: 0,
+      events: 0,
+      bestPerHole: Array(18).fill(0),
+      eclecticTotal: 0,
+      bestEventPoints: 0,
+      bestHolePoints: 0,
+    };
+
+    const eventPerHole = (r.perHole || []).map(v => Math.max(0, Math.min(6, Number(v) || 0)));
+    const bestPerHole = prev.bestPerHole.map((v, i) => Math.max(v, eventPerHole[i]));
+    const eclecticTotal = bestPerHole.reduce((s, v) => s + v, 0);
+
+    const bestEvent = Math.max(prev.bestEventPoints || 0, r.points || 0);
+    const bestHole = Math.max(prev.bestHolePoints || 0, Math.max(...eventPerHole));
+
+    next[r.name] = {
+      name: r.name,
+      totalPoints: (prev.totalPoints || 0) + (r.leaguePoints || 0),
+      events: (prev.events || 0) + 1,
+      bestEventPoints: bestEvent,
+      bestHolePoints: bestHole,
+      eclecticTotal,
+      bestPerHole,
+    };
+  }
+
+  setSeason(next);
+
+  const targetSeasonId =
+    (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
+      ? String(leagueSeasonYear)
+      : (activeSeasonId || seasonsDef.find(x => x?.is_active)?.season_id || "");
+
+  if (!targetSeasonId) { toast("Select a season first"); return; }
+
+  const rows = Object.values(next)
+    .filter(r => !isTeamLike(r.name))
+    .map(r => ({
+      society_id: SOCIETY_ID,
+      season_id: targetSeasonId,
+      competition: COMPETITION,
+      name: r.name,
+      total_points: r.totalPoints,
+      events: r.events,
+      best_event_points: r.bestEventPoints,
+      best_hole_points: r.bestHolePoints,
+      eclectic_total: r.eclecticTotal,
+      best_per_hole: r.bestPerHole,
+    }));
+
+  await client.from(STANDINGS_TABLE)
+    .upsert(rows, { onConflict: "society_id,season_id,competition,name" });
+
+  await refreshShared(client);
+  toast("Season updated ✓");
+}
+
+async function removeEventFromSeason() {
+  const targetSeasonId =
+    (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
+      ? String(leagueSeasonYear)
+      : (activeSeasonId || seasonsDef.find(x => x?.is_active)?.season_id || "");
+
+  if (!targetSeasonId) { toast("Select a season first"); return; }
+
+  const next = { ...season };
+
+  for (const r of computed) {
+    const prev = next[r.name];
+    if (!prev) continue;
+
+    const newTotal = prev.totalPoints - r.leaguePoints;
+    const newEvents = Math.max(0, prev.events - 1);
+
+    if (newTotal <= 0 && newEvents === 0) delete next[r.name];
+    else next[r.name] = { ...prev, totalPoints: newTotal, events: newEvents };
+  }
+
+  setSeason(next);
+
+  const rows = Object.values(next)
+    .filter(r => !isTeamLike(r.name))
+    .map(r => ({
+      society_id: SOCIETY_ID,
+      season_id: targetSeasonId,
+      competition: COMPETITION,
+      name: r.name,
+      total_points: r.totalPoints,
+      events: r.events,
+      best_event_points: r.bestEventPoints,
+      best_hole_points: r.bestHolePoints,
+      eclectic_total: r.eclecticTotal,
+      best_per_hole: r.bestPerHole,
+    }));
+
+  await client.from(STANDINGS_TABLE)
+    .upsert(rows, { onConflict: "society_id,season_id,competition,name" });
+
+  toast("Event removed ✓");
+}
+
+async function clearSeason() {
+  const targetSeasonId =
+    (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
+      ? String(leagueSeasonYear)
+      : (activeSeasonId || seasonsDef.find(x => x?.is_active)?.season_id || "");
+
+  if (!targetSeasonId) { toast("Select a season first"); return; }
+
+  await client.from(STANDINGS_TABLE)
+    .delete()
+    .eq("competition", COMPETITION)
+    .eq("society_id", SOCIETY_ID)
+    .eq("season_id", targetSeasonId);
+
+  setSeason({});
+  toast("Season cleared");
+}
+
+async function removeEventFromSeason() {
           const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
               ? String(leagueSeasonYear)
               : (activeSeasonId || (seasonsDef.find((x) => x && x.is_active)?.season_id || ""));
@@ -14349,10 +14404,6 @@ if (res.error) toast("Error: " + res.error.message);
 
         async function clearSeason() {
           if (!client) { toast("No client"); return; }
-          const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
-            ? String(leagueSeasonYear)
-            : (activeSeasonId || (seasonsDef.find((x) => x && x.is_active)?.season_id || ""));
-          if (!targetSeasonId) { toast("Select a season first"); return; }
           if (!window.confirm("⚠ This will delete ALL season standings. Continue?")) return;
           const res = await client.from(STANDINGS_TABLE).delete().eq("competition", COMPETITION).eq("society_id", SOCIETY_ID).eq("season_id", targetSeasonId).neq("name", "");
           if (res.error) toast("Error: " + res.error.message);
