@@ -32,24 +32,29 @@ var formatGrossVsPar = function (n) {
 };
 
 // =========================
-// LEAGUE ROUTE + BRANDING (module-scope)
-// Ensures all views/components can access league title and bucket without ReferenceErrors.
-// Supports both "#/winter-league" and "#winter-league" style hashes.
+// TENANT ROUTE + BRANDING (module-scope)
+// In the multi-tenant build, AuthGate sets these globals BEFORE App renders.
+// We no longer use URL hash switching.
 // =========================
-function getLeagueSlug() {
+function getActiveSociety() {
   try {
-    const h = (typeof window !== "undefined" ? (window.location.hash || "") : "").replace(/^#\/?/, "");
-    if (h) return (h.split("/")[0] || "den-society").trim();
-    const parts = (typeof window !== "undefined" ? window.location.pathname : "").split("/").filter(Boolean);
-    // GH Pages base path: /den-society-vite/<slug>
-    return (parts[1] || parts[0] || "den-society").trim();
+    const id = (typeof window !== "undefined" ? window.__activeSocietyId : "") || "";
+    const slug = (typeof window !== "undefined" ? window.__activeSocietySlug : "") || "";
+    const name = (typeof window !== "undefined" ? window.__activeSocietyName : "") || "";
+    const role = (typeof window !== "undefined" ? window.__activeSocietyRole : "") || "";
+    return { id, slug, name, role };
   } catch (e) {
-    return "den-society";
+    return { id: "", slug: "", name: "", role: "" };
   }
 }
 
-const LEAGUE_SLUG = getLeagueSlug();
-const IS_WINTER_LEAGUE = LEAGUE_SLUG === "winter-league";
+const ACTIVE = getActiveSociety();
+const SOCIETY_ID = (ACTIVE.id || "").trim();
+const SOCIETY_SLUG = (ACTIVE.slug || "den-society").trim();
+
+// If you want per-society buckets later, change this mapping.
+// For now we keep your existing two-bucket setup.
+const IS_WINTER_LEAGUE = SOCIETY_SLUG === "winter-league";
 
 // Display branding (titles)
 const LEAGUE_TITLE = IS_WINTER_LEAGUE ? "Wednesday League" : "Den Society League";
@@ -63,7 +68,8 @@ const BUCKET = IS_WINTER_LEAGUE ? "winter_league" : "den-events";
 const COMPETITION = IS_WINTER_LEAGUE ? "winter" : "season";
 
 // Storage prefix for CSVs inside bucket.
-const PREFIX = "events";
+// Keep stable, but include society folder so future societies don't collide.
+const PREFIX = SOCIETY_ID ? `societies/${SOCIETY_ID}/events` : "events";
 
 try {
   if (typeof window !== "undefined") {
@@ -13488,15 +13494,30 @@ setSeasonRounds(rounds);
           let cancelled = false;
           async function boot() {
             try {
-              if (!(window.supabase && window.supabase.createClient)) {
-                setTimeout(boot, 200); return;
-              }
-              const c = window.supabase.createClient(SUPA_URL, SUPA_KEY, { auth: { persistSession: true }, });
-              window.__supabase_client__ = c;
+              // Prefer the Supabase client created by AuthGate (keeps the magic-link session).
+              // Fallback: create our own client if running standalone.
+              const c =
+                (typeof window !== "undefined" && window.__supabase_client__)
+                  ? window.__supabase_client__
+                  : createClient(SUPA_URL, SUPA_KEY, {
+                      auth: {
+                        persistSession: true,
+                        autoRefreshToken: true,
+                        detectSessionInUrl: true,
+                      },
+                    });
+
+              if (typeof window !== "undefined") window.__supabase_client__ = c;
               if (cancelled) return;
+
               setClient(c);
-              c.auth.getSession().then(({ data: { session } }) => { setUser(session?.user ?? null); });
-              c.auth.onAuthStateChange((_event, session) => { setUser(session?.user ?? null); });
+              c.auth.getSession().then(({ data: { session } }) => {
+                setUser(session?.user ?? null);
+              });
+              c.auth.onAuthStateChange((_event, session) => {
+                setUser(session?.user ?? null);
+              });
+
 
               const probe = await c.from(STANDINGS_TABLE).select("name").limit(1);
               if (probe.error) { setStatusMsg("Error: " + probe.error.message); } 
