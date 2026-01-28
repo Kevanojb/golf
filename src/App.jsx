@@ -1,6 +1,11 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
+// Back-compat league labels (some components reference these)
+let LEAGUE_SLUG = "";
+let LEAGUE_TITLE = "";
+let LEAGUE_HEADER_TITLE = "";
+
 // =========================
 // VITE RUNTIME HELPERS (module-scope)
 // Some helpers were previously declared inside blocks which makes them block-scoped in ES modules.
@@ -48,35 +53,9 @@ function getActiveSociety() {
   }
 }
 
-const ACTIVE = getActiveSociety();
-const SOCIETY_ID = (ACTIVE.id || "").trim();
-const SOCIETY_SLUG = (ACTIVE.slug || "den-society").trim();
-
-// If you want per-society buckets later, change this mapping.
-// For now we keep your existing two-bucket setup.
-const IS_WINTER_LEAGUE = SOCIETY_SLUG === "winter-league";
-
-// Display branding (titles)
-const LEAGUE_TITLE = IS_WINTER_LEAGUE ? "Wednesday League" : "Den Society League";
-const LEAGUE_APP_TITLE = `${LEAGUE_TITLE} — Golfer’s Guide`;
-const LEAGUE_HEADER_TITLE = `${LEAGUE_TITLE} — Ultimate Edition`;
-
-// Storage bucket per league (separate buckets)
-const BUCKET = IS_WINTER_LEAGUE ? "winter_league" : "den-events";
-
-// Default competition per league (used by seasons table + leaderboards)
-const COMPETITION = IS_WINTER_LEAGUE ? "winter" : "season";
-
-// Storage prefix for CSVs inside bucket.
-// Keep stable, but include society folder so future societies don't collide.
-const PREFIX = SOCIETY_ID ? `societies/${SOCIETY_ID}/events` : "events";
-
-try {
-  if (typeof window !== "undefined") {
-    window.__league = { slug: LEAGUE_SLUG, isWinter: IS_WINTER_LEAGUE, title: LEAGUE_TITLE, bucket: BUCKET, competition: COMPETITION };
-  }
-} catch (e) {}
-
+// NOTE: tenant selection is now decided at runtime (props from AuthGate),
+// so we must NOT freeze SOCIETY_ID/PREFIX at module-load time.
+// (In Vite/ESM, module-scope constants run once on import, which can be before globals are set.)
 // --- 9-hole / partial round support ---
 // Guaranteed global helper (using `var`) so missing holes stay missing instead of becoming zeros.
 var _safeNum = function (v, fallback) {
@@ -12209,11 +12188,43 @@ function PlayerInsightsView({
 }
 
 
-function App() {
+function App(props) {
         const [view, setView] = useState("home");
+// ---- Tenant runtime config (from AuthGate props, with safe fallback to globals) ----
+const __p = props || {};
+const ACTIVE = (() => {
+  try {
+    const id   = String(__p.activeSocietyId || (typeof window !== "undefined" ? window.__activeSocietyId : "") || "").trim();
+    const slug = String(__p.activeSocietySlug || (typeof window !== "undefined" ? window.__activeSocietySlug : "") || "den-society").trim();
+    const name = String(__p.activeSocietyName || (typeof window !== "undefined" ? window.__activeSocietyName : "") || "").trim();
+    const role = String(__p.activeSocietyRole || (typeof window !== "undefined" ? window.__activeSocietyRole : "") || "").trim();
+    return { id, slug, name, role };
+  } catch {
+    return { id: "", slug: "den-society", name: "", role: "" };
+  }
+})();
+
+const SOCIETY_ID = ACTIVE.id;
+const SOCIETY_SLUG = ACTIVE.slug || "den-society";
 
 
-        // --- Global scoring-mode visual accent (UI only; no calculation changes) ---
+// Update back-compat module vars once tenant is known
+LEAGUE_SLUG = SOCIETY_SLUG;
+LEAGUE_TITLE = ACTIVE.name || SOCIETY_SLUG;
+LEAGUE_HEADER_TITLE = LEAGUE_TITLE;
+
+const IS_WINTER_LEAGUE = SOCIETY_SLUG === "winter-league";
+
+
+// Storage: single bucket, per-society folders
+const BUCKET = "den-events";
+const PREFIX = SOCIETY_ID ? `societies/${SOCIETY_ID}/events` : "societies/UNKNOWN/events";
+
+// Competition (used by seasons + standings). Keep your existing winter vs season split.
+const COMPETITION = IS_WINTER_LEAGUE ? "winter" : "season";
+
+// Optional: expose for debugging
+// --- Global scoring-mode visual accent (UI only; no calculation changes) ---
         useEffect(() => {
           const apply = (lens) => {
             const v = (lens === "pointsField" || lens === "strokesField" || lens === "strokesPar") ? lens : "pointsField";
@@ -12259,12 +12270,7 @@ const [user, setUser] = useState(null);
 
 const STANDINGS_TABLE = "standings";
 
-// Default competition per league (used by seasons table + leaderboards)
-const COMPETITION = IS_WINTER_LEAGUE ? "winter" : "season";
-
 // Storage prefix for CSVs inside bucket.
-const PREFIX = "events";
-
 // Admin player visibility (hide / re-include players)
 const ADMIN_PW_OK_LS_KEY = "den_admin_pw_ok_v1";
 const ADMIN_PASSWORD = (typeof window !== "undefined" && window.DEN_ADMIN_PASSWORD)
@@ -13497,15 +13503,18 @@ setSeasonRounds(rounds);
               // Prefer the Supabase client created by AuthGate (keeps the magic-link session).
               // Fallback: create our own client if running standalone.
               const c =
-                (typeof window !== "undefined" && window.__supabase_client__)
-                  ? window.__supabase_client__
-                  : createClient(SUPA_URL, SUPA_KEY, {
+                (props && props.supabase)
+                  ? props.supabase
+                  : (typeof window !== "undefined" && window.__supabase_client__)
+                      ? window.__supabase_client__
+                      : createClient(SUPA_URL, SUPA_KEY, {
                       auth: {
                         persistSession: true,
                         autoRefreshToken: true,
                         detectSessionInUrl: true,
                       },
                     });
+
 
               if (typeof window !== "undefined") window.__supabase_client__ = c;
               if (cancelled) return;
@@ -13785,7 +13794,7 @@ function seasonIdForDateMs(ms, seasonsArr) {
 
 async function fetchSeasons(c) {
   c = c || client; if (!c) return;
-  const r = await c.from('seasons').select('competition,season_id,label,start_date,end_date,is_active').eq('competition', COMPETITION).order('start_date', { ascending: false });
+  const r = await c.from('seasons').select('competition,season_id,label,start_date,end_date,is_active').eq('competition', COMPETITION).eq('society_id', SOCIETY_ID).eq('society_id', SOCIETY_ID).order('start_date', { ascending: false });
   if (r.error) { toast('Seasons load failed: ' + r.error.message); return; }
   const arr = Array.isArray(r.data) ? r.data : [];
   setSeasonsDef(arr);
@@ -13872,7 +13881,7 @@ async function refreshShared(c) {
 
         async function fetchSeason(c) {
           c = c || client; if (!c) return;
-          let q = c.from(STANDINGS_TABLE).select("*").eq("competition", COMPETITION);
+          let q = c.from(STANDINGS_TABLE).select("*").eq("competition", COMPETITION).eq("society_id", SOCIETY_ID);
           if (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all") q = q.eq("season_id", String(leagueSeasonYear));
           const r = await q;
           if (r.error) { setStatusMsg("Error: " + r.error.message); return; }
@@ -14258,13 +14267,14 @@ return {
               : (seasonsDef.find((x) => x && x.is_active)?.season_id || "");
             if (!targetSeasonId) { toast("Select a season first"); return; }
             const rows = vals.map((r) => ({
+              society_id: SOCIETY_ID,
               season_id: targetSeasonId,
               competition: COMPETITION,
               name: r.name, total_points: r.totalPoints, events: r.events,
               best_event_points: r.bestEventPoints, best_hole_points: r.bestHolePoints,
               eclectic_total: r.eclecticTotal, best_per_hole: r.bestPerHole,
             }));
-            const res = await client.from(STANDINGS_TABLE).upsert(rows, { onConflict: "season_id,competition,name" });
+            const res = await client.from(STANDINGS_TABLE).upsert(rows, { onConflict: "society_id,season_id,competition,name" });
 if (res.error) toast("Error: " + res.error.message);
             else toast("Season updated ✓");
             
@@ -14299,13 +14309,14 @@ if (res.error) toast("Error: " + res.error.message);
               : (seasonsDef.find((x) => x && x.is_active)?.season_id || "");
             if (!targetSeasonId) { toast("Select a season first"); return; }
             const rows = vals.map((r) => ({
+              society_id: SOCIETY_ID,
               season_id: targetSeasonId,
               competition: COMPETITION,
               name: r.name, total_points: r.totalPoints, events: r.events,
               best_event_points: r.bestEventPoints, best_hole_points: r.bestHolePoints,
               eclectic_total: r.eclecticTotal, best_per_hole: r.bestPerHole,
             }));
-            const res = await client.from(STANDINGS_TABLE).upsert(rows, { onConflict: "season_id,competition,name" });
+            const res = await client.from(STANDINGS_TABLE).upsert(rows, { onConflict: "society_id,season_id,competition,name" });
 if (res.error) toast("Error: " + res.error.message);
             else toast("Event removed from season ✓");
           }
@@ -14314,7 +14325,7 @@ if (res.error) toast("Error: " + res.error.message);
         async function clearSeason() {
           if (!client) { toast("No client"); return; }
           if (!window.confirm("⚠ This will delete ALL season standings. Continue?")) return;
-          const res = await client.from(STANDINGS_TABLE).delete().eq("competition", COMPETITION).eq("season_id", targetSeasonId).neq("name", "");
+          const res = await client.from(STANDINGS_TABLE).delete().eq("competition", COMPETITION).eq("society_id", SOCIETY_ID).eq("season_id", targetSeasonId).neq("name", "");
           if (res.error) toast("Error: " + res.error.message);
           else { setSeason({}); toast("Season cleared"); }
         }
