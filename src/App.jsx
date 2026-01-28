@@ -3050,8 +3050,10 @@ function AdminView({
             {!isAdmin ? (
               <button className="btn-primary" onClick={handleLogin}>Sign In</button>
             ) : (
-              <button className="btn-secondary" onClick={handleSwitchSociety}>Switch Society</button>
-              <button className="btn-secondary" onClick={handleLogout}>Sign Out</button>
+              <>
+                <button className="btn-secondary" onClick={handleSwitchSociety}>Switch Society</button>
+                <button className="btn-secondary" onClick={handleLogout}>Sign Out</button>
+              </>
             )}
           </div>
         </div>
