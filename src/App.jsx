@@ -14477,9 +14477,9 @@ async function addEventToSeason() {
           setSeason(next);
           if (client) {
             const vals = Object.values(next).filter((r) => !isTeamLike(r.name));
-            let targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== \"all\")
+            let targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
               ? String(leagueSeasonYear)
-              : (seasonsDef.find((x) => x && x.is_active)?.season_id || \"\");
+              : (seasonsDef.find((x) => x && x.is_active)?.season_id || "");
 
             if (!targetSeasonId) {
               targetSeasonId = await ensureSeasonExists(client);
@@ -14536,9 +14536,9 @@ if (res.error) toast("Error: " + res.error.message);
         }
 
         async function removeEventFromSeason() {
-          const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== \"all\")
+          const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
               ? String(leagueSeasonYear)
-              : (seasonsDef.find((x) => x && x.is_active)?.season_id || \"\");
+              : (seasonsDef.find((x) => x && x.is_active)?.season_id || "");
           if (!targetSeasonId) { toast("Select a season first"); return; }
 
           if (!computed.length) { toast("Load an event first"); return; }
@@ -14556,9 +14556,9 @@ if (res.error) toast("Error: " + res.error.message);
           setSeason(next);
           if (client) {
             const vals = Object.values(next).filter((r) => !isTeamLike(r.name));
-            const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== \"all\")
+            const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
               ? String(leagueSeasonYear)
-              : (seasonsDef.find((x) => x && x.is_active)?.season_id || \"\");
+              : (seasonsDef.find((x) => x && x.is_active)?.season_id || "");
             if (!targetSeasonId) { toast("Select a season first"); return; }
             const rows = vals.map((r) => ({
               society_id: SOCIETY_ID,
@@ -14577,9 +14577,9 @@ if (res.error) toast("Error: " + res.error.message);
         async function clearSeason() {
           if (!client) { toast("No client"); return; }
 
-          const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== \"all\")
+          const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
               ? String(leagueSeasonYear)
-              : (seasonsDef.find((x) => x && x.is_active)?.season_id || \"\");
+              : (seasonsDef.find((x) => x && x.is_active)?.season_id || "");
 
           if (!targetSeasonId) { toast("Select a season first"); return; }
 
