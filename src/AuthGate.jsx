@@ -37,6 +37,93 @@ function slugify(s) {
     .replace(/(^-|-$)/g, "");
 }
 
+// For GH Pages, pathname includes the repo base path.
+// Example: "/den-society-vite/den" => slug "den"
+function getSlugFromPath() {
+  try {
+    const path = window.location.pathname || "/";
+    const clean = path.startsWith(GH_PAGES_BASE)
+      ? path.slice(GH_PAGES_BASE.length)
+      : path.replace(/^\//, "");
+    return (clean.split("/").filter(Boolean)[0] || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function FloatingAdminButton({ onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="fixed bottom-4 left-4 z-50 rounded-full px-4 py-2 shadow-lg border border-neutral-200 bg-white text-neutral-900 font-bold"
+      title="Admin sign in"
+      style={{
+        paddingBottom: "max(10px, env(safe-area-inset-bottom))",
+      }}
+    >
+      Admin sign in
+    </button>
+  );
+}
+
+function AdminSignInSheet({ open, onClose, email, setEmail, busy, msg, onSubmit }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative w-full max-w-md rounded-3xl border border-neutral-200 bg-white p-4 shadow-xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-lg font-extrabold text-neutral-900">Admin sign in</div>
+            <div className="text-xs text-neutral-500">We’ll email you a magic link.</div>
+          </div>
+          <button className="rounded-xl border border-neutral-200 bg-white px-3 py-1.5 font-bold" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+
+        <form className="mt-4 space-y-3" onSubmit={onSubmit}>
+          <div>
+            <label className="block text-xs font-bold text-neutral-700 mb-1">Email</label>
+            <input
+              className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@example.com"
+            />
+          </div>
+
+          {msg ? (
+            <div className="text-sm rounded-xl px-3 py-2 border border-neutral-200 bg-neutral-50">
+              {msg}
+            </div>
+          ) : null}
+
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button
+              type="button"
+              className="rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
+              onClick={onClose}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="rounded-xl bg-black text-white px-4 py-2.5 font-bold disabled:opacity-60"
+              disabled={busy}
+            >
+              {busy ? "Sending…" : "Send magic link"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 export default function AuthGate() {
   const envOk = Boolean(SUPA_URL && SUPA_KEY);
 
@@ -69,6 +156,13 @@ export default function AuthGate() {
 
   const [pickerOpen, setPickerOpen] = React.useState(false);
 
+  // Public society-by-slug mode (no login)
+  const [publicLoading, setPublicLoading] = React.useState(false);
+  const [publicSociety, setPublicSociety] = React.useState(null);
+
+  // Sheet for captains/admins to sign in from public view
+  const [adminSheetOpen, setAdminSheetOpen] = React.useState(false);
+
   // ---- Create society (invite code) ----
   const [createMode, setCreateMode] = React.useState(false);
   const [inviteCode, setInviteCode] = React.useState("");
@@ -77,7 +171,6 @@ export default function AuthGate() {
   const [creating, setCreating] = React.useState(false);
 
   React.useEffect(() => {
-    // Auto-suggest slug from name unless user has typed a slug.
     if (!newSocietyName) return;
     if (newSocietySlug) return;
     setNewSocietySlug(slugify(newSocietyName));
@@ -94,6 +187,43 @@ export default function AuthGate() {
       try {
         sub?.subscription?.unsubscribe?.();
       } catch {}
+    };
+  }, [client, envOk]);
+
+  // Public mode: if URL contains a slug, fetch that society without requiring login
+  React.useEffect(() => {
+    if (!envOk) return;
+
+    const slug = getSlugFromPath();
+    if (!slug) {
+      setPublicSociety(null);
+      return;
+    }
+
+    let cancelled = false;
+    async function loadPublicSociety() {
+      setPublicLoading(true);
+      setMsg("");
+      try {
+        const { data, error } = await client
+          .from("societies")
+          .select("id, name, slug")
+          .eq("slug", slug)
+          .single();
+
+        if (error) throw error;
+        if (!cancelled) setPublicSociety(data || null);
+      } catch (e) {
+        if (!cancelled) setMsg(e?.message || String(e));
+        if (!cancelled) setPublicSociety(null);
+      } finally {
+        if (!cancelled) setPublicLoading(false);
+      }
+    }
+
+    loadPublicSociety();
+    return () => {
+      cancelled = true;
     };
   }, [client, envOk]);
 
@@ -138,16 +268,10 @@ export default function AuthGate() {
       const socs = Array.isArray(s.data) ? s.data : [];
       setSocieties(socs);
 
-      // choose:
-      // 1) preferSocietyId (used after create)
-      // 2) remembered (if valid)
-      // 3) if single membership choose it
-      // 4) if multiple memberships and still no pick, show picker
       let pick =
         preferSocietyId && ids.includes(String(preferSocietyId)) ? String(preferSocietyId) : "";
 
-      if (!pick && activeSocietyId && ids.includes(String(activeSocietyId)))
-        pick = String(activeSocietyId);
+      if (!pick && activeSocietyId && ids.includes(String(activeSocietyId))) pick = String(activeSocietyId);
 
       if (!pick && ids.length === 1) pick = ids[0];
 
@@ -172,7 +296,7 @@ export default function AuthGate() {
     [client, envOk, activeSocietyId]
   );
 
-  // load memberships + societies
+  // load memberships + societies (only when logged in)
   React.useEffect(() => {
     if (!envOk) return;
 
@@ -185,43 +309,44 @@ export default function AuthGate() {
     run();
   }, [envOk, session?.user?.id, loadTenant]);
 
-  // persist selection (normal selection changes)
+  // persist selection
   React.useEffect(() => {
     try {
       if (activeSocietyId) localStorage.setItem(LS_ACTIVE_SOCIETY, activeSocietyId);
     } catch {}
   }, [activeSocietyId]);
 
-  // ✅ Legacy compatibility: keep these globals while App.jsx still expects them.
-  // Once App.jsx is fully prop/context-driven, you can remove this entire effect safely.
+  // Legacy globals for App.jsx
   React.useEffect(() => {
-    if (!session?.user || !activeSocietyId) return;
+    if (session?.user && activeSocietyId) {
+      const options = (societies || [])
+        .slice()
+        .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
 
-    const options = (societies || [])
-      .slice()
-      .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+      const activeSoc = options.find((s) => String(s.id) === String(activeSocietyId));
+      const role =
+        memberships.find((m) => String(m.society_id) === String(activeSocietyId))?.role || "player";
 
-    const activeSoc = options.find((s) => String(s.id) === String(activeSocietyId));
-    const role =
-      memberships.find((m) => String(m.society_id) === String(activeSocietyId))?.role || "player";
+      window.__activeSocietyId = String(activeSocietyId);
+      window.__activeSocietyName = activeSoc?.name || "";
+      window.__activeSocietySlug = activeSoc?.slug || "";
+      window.__activeSocietyRole = role;
+      window.__supabase_client__ = client;
+      return;
+    }
 
-    window.__activeSocietyId = String(activeSocietyId);
-    window.__activeSocietyName = activeSoc?.name || "";
-    window.__activeSocietySlug = activeSoc?.slug || "";
-    window.__activeSocietyRole = role;
-
-    // legacy compatibility
-    window.__supabase_client__ = client;
-  }, [client, session?.user?.id, activeSocietyId, societies, memberships]);
+    if (!session?.user && publicSociety?.id) {
+      window.__activeSocietyId = String(publicSociety.id);
+      window.__activeSocietyName = publicSociety.name || "";
+      window.__activeSocietySlug = publicSociety.slug || "";
+      window.__activeSocietyRole = "player";
+      window.__supabase_client__ = client;
+    }
+  }, [client, session?.user?.id, activeSocietyId, societies, memberships, publicSociety]);
 
   async function sendMagicLink(e) {
     e.preventDefault();
     setMsg("");
-
-    if (!envOk) {
-      setMsg("Missing VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY in the deployed build.");
-      return;
-    }
 
     const em = (email || "").trim();
     if (!em) {
@@ -267,8 +392,6 @@ export default function AuthGate() {
 
     setCreating(true);
     try {
-      // Expected signature:
-      //   create_society_with_code(society_name text, society_slug text, invite_code text) returns uuid
       const { data, error } = await client.rpc("create_society_with_code", {
         society_name: name,
         society_slug: slug,
@@ -279,7 +402,6 @@ export default function AuthGate() {
 
       const newId = String(data || "");
       if (newId) {
-        // Force-select the newly created society (beats remembered selection)
         setActiveSocietyId(newId);
         try {
           localStorage.setItem(LS_ACTIVE_SOCIETY, newId);
@@ -287,7 +409,6 @@ export default function AuthGate() {
         setPickerOpen(false);
       }
 
-      // Clear form + reload tenant data (preferring the newly created society)
       setInviteCode("");
       setNewSocietyName("");
       setNewSocietySlug("");
@@ -302,20 +423,57 @@ export default function AuthGate() {
     }
   }
 
-  // ---- UI gates ----
-
   if (!envOk) {
     return (
       <CenterCard>
         <div className="text-xl font-black text-neutral-900">Config missing</div>
         <div className="mt-2 text-sm text-neutral-700">
-          VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are undefined in the deployed site.
+          VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are undefined in the deployed build.
         </div>
       </CenterCard>
     );
   }
 
+  // ✅ Public golfer mode: slug in URL + no session => render app without forcing sign-in
   if (!session?.user) {
+    if (publicLoading) {
+      return (
+        <CenterCard>
+          <div className="text-sm text-neutral-600">Loading society…</div>
+        </CenterCard>
+      );
+    }
+
+    if (publicSociety?.id) {
+      return (
+        <>
+          <React.Suspense fallback={<CenterCard><div>Loading…</div></CenterCard>}>
+            <AppLazy
+              key={String(publicSociety.id)}
+              supabase={client}
+              session={null}
+              activeSocietyId={String(publicSociety.id)}
+              activeSocietySlug={publicSociety.slug || ""}
+              activeSocietyName={publicSociety.name || ""}
+              activeSocietyRole={"player"}
+            />
+          </React.Suspense>
+
+          <FloatingAdminButton onClick={() => { setMsg(""); setAdminSheetOpen(true); }} />
+          <AdminSignInSheet
+            open={adminSheetOpen}
+            onClose={() => setAdminSheetOpen(false)}
+            email={email}
+            setEmail={setEmail}
+            busy={busy}
+            msg={msg}
+            onSubmit={sendMagicLink}
+          />
+        </>
+      );
+    }
+
+    // No valid slug => show sign-in landing
     return (
       <CenterCard>
         <div className="text-2xl font-black text-neutral-900">Sign in</div>
@@ -346,10 +504,16 @@ export default function AuthGate() {
           >
             {busy ? "Sending…" : "Send magic link"}
           </button>
+
+          <div className="text-xs text-neutral-500 pt-1">
+            Golfers: use your society link (e.g. <span className="font-mono">{SITE_URL}den</span>).
+          </div>
         </form>
       </CenterCard>
     );
   }
+
+  // Logged-in modes below (captains/admins)
 
   if (tenantLoading) {
     return (
@@ -432,7 +596,7 @@ export default function AuthGate() {
               placeholder="e.g. den-society"
             />
             <div className="text-xs text-neutral-500 mt-1">
-              Used for friendly URLs later. Leave blank to auto-generate.
+              Used for friendly URLs. Leave blank to auto-generate.
             </div>
           </div>
 
