@@ -124,6 +124,19 @@ function AdminSignInSheet({ open, onClose, email, setEmail, busy, msg, onSubmit 
   );
 }
 
+
+function getSocietySlugFromUrl() {
+  try {
+    const path = window.location.pathname || "/";
+    if (!path.startsWith(GH_PAGES_BASE)) return "";
+    const rest = path.slice(GH_PAGES_BASE.length);
+    const seg = rest.split("/").filter(Boolean)[0] || "";
+    return String(seg || "");
+  } catch {
+    return "";
+  }
+}
+
 export default function AuthGate() {
   const envOk = Boolean(SUPA_URL && SUPA_KEY);
 
@@ -237,7 +250,7 @@ if (!cancelled) setPublicSociety(data || null);
       if (!envOk) return;
       if (!userId) return;
 
-      const { preferSocietyId = "" } = opts || {};
+      const { preferSocietyId = "", preferSocietySlug = "" } = opts || {};
 
       setTenantLoading(true);
       setMsg("");
@@ -275,6 +288,15 @@ if (!cancelled) setPublicSociety(data || null);
 
       let pick =
         preferSocietyId && ids.includes(String(preferSocietyId)) ? String(preferSocietyId) : "";
+
+      // If the URL includes a society slug (e.g. /den-society-vite/sportsmans-classic),
+      // prefer that society over the remembered selection.
+      const wantedSlug = String(preferSocietySlug || getSocietySlugFromUrl() || "");
+      if (!pick && wantedSlug) {
+        const bySlug = socs.find((x) => String(x.slug || "") === wantedSlug);
+        if (bySlug && ids.includes(String(bySlug.id))) pick = String(bySlug.id);
+      }
+
 
       if (!pick && activeSocietyId && ids.includes(String(activeSocietyId))) pick = String(activeSocietyId);
 
