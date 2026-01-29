@@ -41,12 +41,6 @@ function slugify(s) {
 // Example: "/den-society-vite/den" => slug "den"
 function getSlugFromPath() {
   try {
-    // Prefer hash route: "#/den"
-    const hash = (window.location.hash || "").replace(/^#\/?/, "");
-    const hashSlug = (hash.split("/").filter(Boolean)[0] || "").trim();
-    if (hashSlug) return hashSlug;
-
-    // Fallback to path: "/den-society-vite/den"
     const path = window.location.pathname || "/";
     const clean = path.startsWith(GH_PAGES_BASE)
       ? path.slice(GH_PAGES_BASE.length)
@@ -56,7 +50,6 @@ function getSlugFromPath() {
     return "";
   }
 }
-
 
 function FloatingAdminButton({ onClick }) {
   return (
@@ -214,12 +207,17 @@ export default function AuthGate() {
       try {
         const { data, error } = await client
           .from("societies")
-          .select("id, name, slug")
+          .select("id, name, slug, viewer_enabled")
           .eq("slug", slug)
           .single();
 
         if (error) throw error;
-        if (!cancelled) setPublicSociety(data || null);
+        
+        // Extra safety: even if RLS is loose, only allow public view when explicitly enabled.
+        if (data && data.viewer_enabled === false) {
+          throw new Error("This society is not publicly viewable.");
+        }
+if (!cancelled) setPublicSociety(data || null);
       } catch (e) {
         if (!cancelled) setMsg(e?.message || String(e));
         if (!cancelled) setPublicSociety(null);
@@ -264,7 +262,7 @@ export default function AuthGate() {
         return;
       }
 
-      const s = await client.from("societies").select("id, name, slug").in("id", ids);
+      const s = await client.from("societies").select("id, name, slug, viewer_enabled").in("id", ids);
 
       if (s.error) {
         setMsg(s.error.message);
