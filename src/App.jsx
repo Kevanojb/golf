@@ -56,6 +56,49 @@ function getActiveSociety() {
   }
 }
 
+// =========================
+// PUBLIC TENANT FROM URL (module-scope)
+// Allow public access via /<repo>/<society-slug>/... without requiring AuthGate.
+// Example (GitHub Pages): /golf/den-society/  -> society slug "den-society"
+// =========================
+function _repoBaseSegment() {
+  try {
+    const base = (typeof import.meta !== "undefined" && import.meta.env && import.meta.env.BASE_URL)
+      ? String(import.meta.env.BASE_URL)
+      : "/";
+    const seg = base.replace(/^\/+/, "").split("/")[0] || "";
+    return seg;
+  } catch {
+    return "";
+  }
+}
+
+function _parseSocietySlugFromUrl() {
+  try {
+    if (typeof window === "undefined") return "";
+    const repoSeg = _repoBaseSegment(); // e.g. "golf"
+    const parts = String(window.location.pathname || "")
+      .split("?")[0]
+      .split("#")[0]
+      .split("/")
+      .filter(Boolean);
+
+    if (!parts.length) return "";
+
+    // If we're hosted under a repo segment (GitHub Pages), slug is the segment after it.
+    if (repoSeg) {
+      const i = parts.indexOf(repoSeg);
+      if (i >= 0 && parts[i + 1]) return decodeURIComponent(parts[i + 1]);
+    }
+
+    // Fallback: first segment could be the society slug (non-GH Pages hosting)
+    return decodeURIComponent(parts[0] || "");
+  } catch {
+    return "";
+  }
+}
+
+
 // NOTE: tenant selection is now decided at runtime (props from AuthGate),
 // so we must NOT freeze SOCIETY_ID/PREFIX at module-load time.
 // (In Vite/ESM, module-scope constants run once on import, which can be before globals are set.)
@@ -12203,6 +12246,63 @@ function PlayerInsightsView({
 
 function App(props) {
         const [view, setView] = useState("home");
+
+// --- Public society bootstrap from URL ---
+// If someone visits /<repo>/<society-slug>/..., resolve the society in Supabase and set globals.
+// This makes League/Eclectic public without forcing a sign-in.
+useEffect(() => {
+  try {
+    if (typeof window === "undefined") return;
+
+    const slugFromUrl = String(_parseSocietySlugFromUrl() || "").trim();
+    if (!slugFromUrl) return;
+
+    const currentSlug = String(window.__activeSocietySlug || "").trim();
+    if (currentSlug && currentSlug === slugFromUrl) return;
+
+    const guardKey = `dsl_bootstrap_society_${slugFromUrl}`;
+    if (sessionStorage.getItem(guardKey) === "1") return;
+    sessionStorage.setItem(guardKey, "1");
+
+    (async () => {
+      try {
+        // Ensure we have a Supabase client (public anon key is fine for reading the societies table).
+        const c =
+          (typeof window !== "undefined" && window.__supabase_client__)
+            ? window.__supabase_client__
+            : createClient(SUPA_URL, SUPA_KEY, {
+                auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
+              });
+        if (typeof window !== "undefined") window.__supabase_client__ = c;
+
+        // Fetch society by slug (take first match if duplicates exist, avoids PostgREST single() crash).
+        const { data, error } = await c
+          .from("societies")
+          .select("id,slug,name")
+          .eq("slug", slugFromUrl)
+          .limit(1)
+          .maybeSingle();
+
+        if (error) throw error;
+
+        if (data && data.id) {
+          window.__activeSocietyId = data.id;
+          window.__activeSocietySlug = data.slug || slugFromUrl;
+          window.__activeSocietyName = data.name || data.slug || slugFromUrl;
+          window.__activeSocietyRole = ""; // public by default
+
+          // Hard reload so all tenant-scoped constants (PREFIX, etc.) pick up the new society_id.
+          window.location.reload();
+        }
+      } catch (e) {
+        console.warn("Society bootstrap failed:", e);
+      }
+    })();
+  } catch (e) {
+    // ignore
+  }
+}, []);
+
 // ---- Tenant runtime config (from AuthGate props, with safe fallback to globals) ----
 const __p = props || {};
 const ACTIVE = (() => {
