@@ -41,6 +41,12 @@ function slugify(s) {
 // Example: "/den-society-vite/den" => slug "den"
 function getSlugFromPath() {
   try {
+    // Prefer hash route: "#/den"
+    const hash = (window.location.hash || "").replace(/^#\/?/, "");
+    const hashSlug = (hash.split("/").filter(Boolean)[0] || "").trim();
+    if (hashSlug) return hashSlug;
+
+    // Fallback to path: "/den-society-vite/den"
     const path = window.location.pathname || "/";
     const clean = path.startsWith(GH_PAGES_BASE)
       ? path.slice(GH_PAGES_BASE.length)
@@ -50,6 +56,7 @@ function getSlugFromPath() {
     return "";
   }
 }
+
 
 function FloatingAdminButton({ onClick }) {
   return (
