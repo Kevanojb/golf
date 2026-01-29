@@ -406,38 +406,34 @@ function _statusFromVsField(delta, higherIsBetter, thresh) {
 // =========================
   // HARDENING LAYER (runtime-safe)
   // Ensures common helpers exist so local/offline runs don't crash with ReferenceError.
+  // IMPORTANT: In ES modules (Vite), function declarations inside blocks are block-scoped.
+  // Safari/iOS is especially strict here. Use `var` fallbacks instead (module-scoped).
   // =========================
-  
 
-  if (typeof tone !== "function") {
-    function tone(){
-      // neutral fallback
-      return "ok";
+  var tone = (typeof tone === "function") ? tone : function tone(){
+    // neutral fallback
+    return "ok";
+  };
+
+  var badge = (typeof badge === "function") ? badge : function badge(metric, v){
+    // Always return a badge object so JSX like b.cls / b.txt never crashes.
+    try{
+      if (!Number.isFinite(v)) return { txt: "OK", cls: "bg-neutral-100 text-neutral-800 border border-neutral-200" };
+      const t = (typeof tone === "function") ? tone(metric, v) : "ok";
+      if (t === "good") return { txt: "Good", cls: "bg-emerald-100 text-emerald-800 border border-emerald-200" };
+      if (t === "bad")  return { txt: "Bad",  cls: "bg-rose-100 text-rose-800 border border-rose-200" };
+      return { txt: "OK", cls: "bg-neutral-100 text-neutral-800 border border-neutral-200" };
+    }catch(e){
+      return { txt: "OK", cls: "bg-neutral-100 text-neutral-800 border border-neutral-200" };
     }
-  }
+  };
 
-  if (typeof badge !== "function") {
-    function badge(metric, v){
-      // Always return a badge object so JSX like b.cls / b.txt never crashes.
-      try{
-        if (!Number.isFinite(v)) return { txt: "OK", cls: "bg-neutral-100 text-neutral-800 border border-neutral-200" };
-        const t = (typeof tone === "function") ? tone(metric, v) : "ok";
-        if (t === "good") return { txt: "Good", cls: "bg-emerald-100 text-emerald-800 border border-emerald-200" };
-        if (t === "bad")  return { txt: "Bad",  cls: "bg-rose-100 text-rose-800 border border-rose-200" };
-        return { txt: "OK", cls: "bg-neutral-100 text-neutral-800 border border-neutral-200" };
-      }catch(e){
-        return { txt: "OK", cls: "bg-neutral-100 text-neutral-800 border border-neutral-200" };
-      }
-    }
-  }
+  var toneClass = (typeof toneClass === "function") ? toneClass : function toneClass(){
+    return "";
+  };
 
-  if (typeof toneClass !== "function") {
-    function toneClass(){
-      return "";
-    }
-  }
 
-  // =========================
+// =========================
   // EXTRA HARDENING (report helpers)
   // If a helper is defined inside another component, Safari will throw ReferenceError when PlayerReportView tries to call it.
   // These stubs keep the app stable; when the "real" helpers exist, they will be used instead.
