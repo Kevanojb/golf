@@ -4,19 +4,22 @@
     <meta charset="utf-8" />
     <title>Redirecting…</title>
     <script>
-      // SPA redirect for GitHub Pages
-      // Redirect /den-society-vite/some-slug -> /den-society-vite/#/some-slug
+      // GitHub Pages SPA redirect for /golf (project site)
+      // Redirect unknown routes back to /golf/ while preserving the path in ?p=
       (function () {
-        var base = "/den-society-vite/";
-        var path = window.location.pathname;
+        var l = window.location;
+        var base = "/golf";
 
-        if (path.startsWith(base)) {
-          var slugPath = path.slice(base.length); // e.g. "den-society"
-          var target = window.location.origin + base + "#/" + slugPath + window.location.search;
-          window.location.replace(target);
-        } else {
-          window.location.replace(window.location.origin + base);
-        }
+        // Preserve the attempted path *after* /golf
+        var rest = l.pathname.indexOf(base + "/") === 0 ? l.pathname.slice(base.length) : l.pathname;
+
+        var target =
+          l.origin +
+          base +
+          "/?p=" +
+          encodeURIComponent(rest + (l.search || "") + (l.hash || ""));
+
+        l.replace(target);
       })();
     </script>
   </head>
