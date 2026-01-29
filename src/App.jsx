@@ -12247,6 +12247,20 @@ function PlayerInsightsView({
 function App(props) {
         const [view, setView] = useState("home");
 
+const [tenantTick, setTenantTick] = useState(0);
+
+// Restore last-resolved tenant (GitHub Pages refresh-safe)
+try {
+  if (typeof window !== "undefined" && typeof sessionStorage !== "undefined") {
+    const sid = sessionStorage.getItem("dsl_active_society_id") || "";
+    const sslug = sessionStorage.getItem("dsl_active_society_slug") || "";
+    const sname = sessionStorage.getItem("dsl_active_society_name") || "";
+    if (sid && !window.__activeSocietyId) window.__activeSocietyId = sid;
+    if (sslug && !window.__activeSocietySlug) window.__activeSocietySlug = sslug;
+    if (sname && !window.__activeSocietyName) window.__activeSocietyName = sname;
+  }
+} catch {}
+
 // --- Public society bootstrap from URL ---
 // If someone visits /<repo>/<society-slug>/..., resolve the society in Supabase and set globals.
 // This makes League/Eclectic public without forcing a sign-in.
@@ -12257,12 +12271,10 @@ useEffect(() => {
     const slugFromUrl = String(_parseSocietySlugFromUrl() || "").trim();
     if (!slugFromUrl) return;
 
+    // If we already have this tenant loaded, nothing to do.
     const currentSlug = String(window.__activeSocietySlug || "").trim();
-    if (currentSlug && currentSlug === slugFromUrl) return;
-
-    const guardKey = `dsl_bootstrap_society_${slugFromUrl}`;
-    if (sessionStorage.getItem(guardKey) === "1") return;
-    sessionStorage.setItem(guardKey, "1");
+    const currentId = String(window.__activeSocietyId || "").trim();
+    if (currentSlug === slugFromUrl && currentId) return;
 
     (async () => {
       try {
@@ -12291,8 +12303,15 @@ useEffect(() => {
           window.__activeSocietyName = data.name || data.slug || slugFromUrl;
           window.__activeSocietyRole = ""; // public by default
 
-          // Hard reload so all tenant-scoped constants (PREFIX, etc.) pick up the new society_id.
-          window.location.reload();
+          // Persist so refreshes / routing changes don't lose the tenant.
+          try {
+            sessionStorage.setItem("dsl_active_society_id", data.id);
+            sessionStorage.setItem("dsl_active_society_slug", data.slug || slugFromUrl);
+            sessionStorage.setItem("dsl_active_society_name", data.name || "");
+          } catch {}
+
+          // Trigger a re-render so SOCIETY_ID/PREFIX recompute without a hard reload.
+          setTenantTick((t) => t + 1);
         }
       } catch (e) {
         console.warn("Society bootstrap failed:", e);
@@ -12301,10 +12320,12 @@ useEffect(() => {
   } catch (e) {
     // ignore
   }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
 }, []);
 
 // ---- Tenant runtime config (from AuthGate props, with safe fallback to globals) ----
 const __p = props || {};
+void tenantTick;
 const ACTIVE = (() => {
   try {
     const id   = String(__p.activeSocietyId || (typeof window !== "undefined" ? window.__activeSocietyId : "") || "").trim();
