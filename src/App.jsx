@@ -794,7 +794,7 @@ function isFuzzyMatch(a, b) {
                 <div className="flex items-center justify-end gap-2 pt-1">
                   <button type="button" className="btn-secondary" onClick={onClose} disabled={busy}>Cancel</button>
                   <button type="submit" className="btn-primary" disabled={busy}>
-                    {busy ? "Signing in…" : "Sign in"}
+                    {busy ? "Signing in..." : "Sign in"}
                   </button>
                 </div>
               </form>
@@ -843,7 +843,7 @@ function AdminPasswordModal({ open, onClose, onSubmit }) {
           <input
             value={pw}
             onChange={(e)=>setPw(e.target.value)}
-            placeholder="Password…"
+            placeholder="Password..."
             type="password"
             className="w-full rounded-2xl border border-neutral-200 px-4 py-3 bg-white"
           />
@@ -985,7 +985,7 @@ async function onImportFile(e) {
             <input
               value={q}
               onChange={(e)=>setQ(e.target.value)}
-              placeholder="Search player…"
+              placeholder="Search player..."
               className="w-full rounded-2xl border border-neutral-200 px-4 py-2 bg-white"
             />
           </div>
@@ -5178,7 +5178,7 @@ const [t1p1, setT1p1] = useState("");
         </div>
 
         <div className="text-xs text-neutral-500 mt-3">
-          {flippingHole ? `Hole ${flippingHole}: points flip… then match updates.` : "Waiting for next hole…"}
+          {flippingHole ? `Hole ${flippingHole}: points flip... then match updates.` : "Waiting for next hole..."}
         </div>
       </div>
 
@@ -6779,7 +6779,7 @@ const allRows = [...parRows, ...siRows, ...ydRows].filter(r => Number.isFinite(r
                   <rect x={x - barW/2} y={yTop} width={barW} height={Math.max(2, h)} rx="4" fill={fill}/>
                   <circle cx={x} cy={yEnd} r="2.5" fill="rgba(0,0,0,0.35)"/>
                   <text x={x} y={H-6} textAnchor="middle" fontSize="10" fill="rgba(0,0,0,0.65)">
-                    {p.label.length>12 ? (p.label.slice(0,11)+"…") : p.label}
+                    {p.label.length>12 ? (p.label.slice(0,11)+"...") : p.label}
                   </text>
                 </g>
               );
@@ -6888,7 +6888,7 @@ const coachLine = (row) => {
         <div className="mt-4 rounded-3xl border border-amber-200 bg-amber-50 p-4">
           <div className="flex items-start justify-between gap-3">
             <div>
-              <div className="font-black text-amber-900">Loading Previous Games…</div>
+              <div className="font-black text-amber-900">Loading Previous Games...</div>
               <div className="text-sm text-amber-900/80 mt-1">
                 We’re loading your previous games and building same-course / same-tee comparisons to spot patterns.
                 This can take a moment — especially the first time.
@@ -10526,7 +10526,7 @@ function buildDeepGuideHTML(leagueTitle){
     <section class="card">
       <div class="hero">
         <div class="kicker"><span class="dot" aria-hidden="true"></span>ONE-FILE LEAGUE + ANALYTICS <span class="tagline">“Sports broadcast” vibe</span></div>
-        <h2 class="title">Turn your society golf into <br/>a scoreboard, a story… and a plan.</h2>
+        <h2 class="title">Turn your society golf into <br/>a scoreboard, a story... and a plan.</h2>
         <p class="subtitle">
           Load a <b>Squabbit event game</b> and the app builds leaderboards, scorecards, course insights, season standings,
           and the fun stuff (Replay, Teams, Banter, Casino, Trophies).
@@ -10573,7 +10573,7 @@ function buildDeepGuideHTML(leagueTitle){
             <div class="ico" aria-hidden="true">2</div>
             <div>
               <b>Open the Menu</b>
-              <span>Pick your view: leaderboards, scorecards, replay, teams, trophies, banter… the lot.</span>
+              <span>Pick your view: leaderboards, scorecards, replay, teams, trophies, banter... the lot.</span>
             </div>
           </li>
           <li class="li">
@@ -11672,7 +11672,7 @@ function FullReportView({ seasonModel, seasonPlayer, seasonYear, seasonLimit, se
         {/* PUNCHY SUMMARY */}
         <section className="rounded-2xl border border-neutral-200 bg-white p-4 md:p-6">
           <div className="text-xs font-bold text-neutral-500 uppercase tracking-wide">Punchy summary</div>
-          <div className="text-xl font-extrabold text-neutral-900 mt-1">So… how are you playing?</div>
+          <div className="text-xl font-extrabold text-neutral-900 mt-1">So... how are you playing?</div>
 
           <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
@@ -11799,7 +11799,7 @@ function QAReportBuilder({
             </div>
             <div className="mt-3 flex gap-2 flex-wrap">
               <button className="btn-primary" onClick={goRun} disabled={!!seasonLoading}>
-                {seasonLoading ? "Loading…" : "Run Player Progress"}
+                {seasonLoading ? "Loading..." : "Run Player Progress"}
               </button>
               <button className="btn-secondary" onClick={() => setView("home")}>Back</button>
             </div>
@@ -11817,7 +11817,7 @@ function QAReportBuilder({
                 onChange={(e) => setP(e.target.value)}
                 disabled={controlsDisabled}
               >
-                {controlsDisabled ? (<option value="">Run Player Progress to load players…</option>) : null}
+                {controlsDisabled ? (<option value="">Run Player Progress to load players...</option>) : null}
                 {players.map(n => <option key={n} value={n}>{n}</option>)}
               </select>
             </div>
@@ -11875,7 +11875,7 @@ function QAReportBuilder({
             <button className="btn-primary" onClick={submit} disabled={!canRun}>Generate Improvement Summary</button>
             <button className="btn-secondary" onClick={() => setView("home")}>Cancel</button>
             {seasonLoading && (
-              <span className="text-xs font-bold text-neutral-500">Loading: {seasonProgress ? `${seasonProgress}%` : "…"}</span>
+              <span className="text-xs font-bold text-neutral-500">Loading: {seasonProgress ? `${seasonProgress}%` : "..."}</span>
             )}
           </div>
         )}
@@ -12031,7 +12031,7 @@ function PlayerInsightsView({
         <Breadcrumbs items={[{ label: "Insights" }]} />
         <ImproveTopNav active="summary" setView={setView} />
         <div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          Loading season analysis… {seasonProgress ? `(${seasonProgress}%)` : ""}
+          Loading season analysis... {seasonProgress ? `(${seasonProgress}%)` : ""}
         </div>
       </section>
     );
@@ -12416,7 +12416,7 @@ const ADMIN_VIS_PATH = PREFIX ? `${PREFIX}/admin/player_visibility.json` : "admi
 
 
         const [client, setClient] = useState(null);
-        const [statusMsg, setStatusMsg] = useState("Connecting…");
+        const [statusMsg, setStatusMsg] = useState("Connecting...");
         const [sharedGroups, setSharedGroups] = useState([]);
         
         const [seasonModel, setSeasonModel] = useState(null);
@@ -13634,6 +13634,17 @@ setSeasonRounds(rounds);
           let cancelled = false;
           async function boot() {
             try {
+              // Tenant-aware boot: when SOCIETY_ID changes, this effect re-runs.
+              // Clear tenant-scoped state up front to avoid cross-society "mixed CSV" races.
+              try {
+                setSharedGroups([]);
+                setSeasonRounds([]);
+                setSeasonFiles({ processed: [], skipped: [] });
+                setSeasonError("");
+                setSeasonsDef([]);
+              } catch (e) { /* ignore */ }
+              if (!SOCIETY_ID) { setStatusMsg("Waiting for society..."); return; }
+
               // Prefer the Supabase client created by AuthGate (keeps the magic-link session).
               // Fallback: create our own client if running standalone.
               const c =
@@ -13676,7 +13687,7 @@ setSeasonRounds(rounds);
           }
           boot();
           return () => { cancelled = true; };
-        }, []);
+        }, [SOCIETY_ID]);
 
         // Refetch standings when the selected league season changes
         useEffect(() => {
