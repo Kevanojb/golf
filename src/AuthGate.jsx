@@ -1,347 +1,532 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React from "react";
 import { createClient } from "@supabase/supabase-js";
 
-// ====== CONFIG ======
-const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
-const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const SUPA_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPA_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
-// Your deployed site base URL (used only for displaying an example link)
-const SITE_URL = (import.meta.env.VITE_SITE_URL || window.location.origin + "/").replace(/\/?$/, "/");
+const LS_ACTIVE_SOCIETY = "den_active_society_id_v1";
 
-// LocalStorage keys
-const LS_ACTIVE_SOCIETY = "active_society_id";
+// GitHub Pages base
+const GH_PAGES_BASE = "/den-society-vite/";
+const SITE_ORIGIN = "https://kevanojb.github.io";
+const SITE_URL = `${SITE_ORIGIN}${GH_PAGES_BASE}`;
 
-// Lazy-load the main App so AuthGate stays lightweight
 const AppLazy = React.lazy(() => import("./App.jsx"));
 
-// ====== UI Helpers ======
 function CenterCard({ children }) {
   return (
-    <div className="min-h-screen w-full flex items-center justify-center bg-[radial-gradient(circle_at_top,rgba(0,0,0,0.06),transparent_55%),radial-gradient(circle_at_bottom,rgba(0,0,0,0.06),transparent_55%)]">
-      <div className="w-[min(520px,92vw)] rounded-3xl border border-neutral-200 bg-white/80 backdrop-blur p-6 shadow-[0_20px_80px_rgba(0,0,0,0.08)]">
+    <div
+      className="min-h-screen w-full flex items-center justify-center p-4"
+      style={{
+        paddingTop: "max(16px, env(safe-area-inset-top))",
+        paddingBottom: "max(16px, env(safe-area-inset-bottom))",
+      }}
+    >
+      <div className="w-full max-w-md rounded-3xl border border-neutral-200 bg-white p-4 shadow-sm">
         {children}
       </div>
     </div>
   );
 }
 
-function slugify(input) {
-  return String(input || "")
+function slugify(s) {
+  return String(s || "")
     .trim()
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60);
+    .replace(/(^-|-$)/g, "");
 }
 
-// ====== MAIN COMPONENT ======
-export default function AuthGate() {
-  // Create Supabase client once
-  const client = useMemo(() => {
-    if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
-      console.error("Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY");
-      return null;
+// For GH Pages, pathname includes the repo base path.
+// Example: "/den-society-vite/den" => slug "den"
+function getSlugFromPath() {
+  try {
+    const path = window.location.pathname || "/";
+    const clean = path.startsWith(GH_PAGES_BASE)
+      ? path.slice(GH_PAGES_BASE.length)
+      : path.replace(/^\//, "");
+    return (clean.split("/").filter(Boolean)[0] || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function FloatingAdminButton({ onClick }) {
+  return (
+    <button
+      onClick={onClick}
+      className="fixed bottom-4 left-4 z-50 rounded-full px-4 py-2 shadow-lg border border-neutral-200 bg-white text-neutral-900 font-bold"
+      title="Admin sign in"
+      style={{
+        paddingBottom: "max(10px, env(safe-area-inset-bottom))",
+      }}
+    >
+      Admin sign in
+    </button>
+  );
+}
+
+function AdminSignInSheet({ open, onClose, email, setEmail, busy, msg, onSubmit }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      <div className="relative w-full max-w-md rounded-3xl border border-neutral-200 bg-white p-4 shadow-xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="text-lg font-extrabold text-neutral-900">Admin sign in</div>
+            <div className="text-xs text-neutral-500">We’ll email you a magic link.</div>
+          </div>
+          <button className="rounded-xl border border-neutral-200 bg-white px-3 py-1.5 font-bold" onClick={onClose}>
+            ✕
+          </button>
+        </div>
+
+        <form className="mt-4 space-y-3" onSubmit={onSubmit}>
+          <div>
+            <label className="block text-xs font-bold text-neutral-700 mb-1">Email</label>
+            <input
+              className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@example.com"
+            />
+          </div>
+
+          {msg ? (
+            <div className="text-sm rounded-xl px-3 py-2 border border-neutral-200 bg-neutral-50">
+              {msg}
+            </div>
+          ) : null}
+
+          <div className="flex items-center justify-end gap-2 pt-1">
+            <button
+              type="button"
+              className="rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
+              onClick={onClose}
+              disabled={busy}
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              className="rounded-xl bg-black text-white px-4 py-2.5 font-bold disabled:opacity-60"
+              disabled={busy}
+            >
+              {busy ? "Sending…" : "Send magic link"}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+
+function getSocietySlugFromUrl() {
+  try {
+    const path = window.location.pathname || "/";
+    const hash = window.location.hash || "";
+
+    // 1) Hash router (GitHub Pages): "#/slug/anything"
+    //    Also handle "#slug" just in case.
+    if (hash) {
+      const cleaned = hash.startsWith("#/") ? hash.slice(2) : hash.startsWith("#") ? hash.slice(1) : hash;
+      const seg = cleaned.split("/").filter(Boolean)[0] || "";
+      if (seg) return String(seg);
     }
-    return createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+
+    // 2) Non-hash routes: "/den-society-vite/slug/anything"
+    if (!path.startsWith(GH_PAGES_BASE)) return "";
+    const rest = path.slice(GH_PAGES_BASE.length);
+    const seg = rest.split("/").filter(Boolean)[0] || "";
+    return String(seg || "");
+  } catch {
+    return "";
+  }
+}
+
+export default function AuthGate() {
+  const envOk = Boolean(SUPA_URL && SUPA_KEY);
+
+  const [client] = React.useState(() =>
+    createClient(SUPA_URL, SUPA_KEY, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: true,
       },
-    });
-  }, []);
+    })
+  );
 
-  // Determine “public society slug” from URL
-  const pathSlug = useMemo(() => {
-    const p = window.location.pathname.replace(/^\/+/, "").split("/")[0] || "";
-    return p.trim();
-  }, []);
+  const [session, setSession] = React.useState(null);
+  const [email, setEmail] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+  const [msg, setMsg] = React.useState("");
 
-  // Auth state
-  const [session, setSession] = useState(null);
-  const [authLoading, setAuthLoading] = useState(true);
+  const [tenantLoading, setTenantLoading] = React.useState(false);
+  const [memberships, setMemberships] = React.useState([]);
+  const [societies, setSocieties] = React.useState([]);
 
-  // Magic link
-  const [email, setEmail] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
+  const [activeSocietyId, setActiveSocietyId] = React.useState(() => {
+    try {
+      return localStorage.getItem(LS_ACTIVE_SOCIETY) || "";
+    } catch {
+      return "";
+    }
+  });
 
-  // Tenant state (for logged-in)
-  const [tenantLoading, setTenantLoading] = useState(false);
-  const [memberships, setMemberships] = useState([]); // {society_id, role, ...}
-  const [societies, setSocieties] = useState([]); // safe subset
-  const [activeSocietyId, setActiveSocietyId] = useState(null);
+  const [pickerOpen, setPickerOpen] = React.useState(false);
 
-  // UI mode for “no memberships” flow
-  const [createMode, setCreateMode] = useState(false);
-  const [inviteCode, setInviteCode] = useState("");
-  const [newSocietyName, setNewSocietyName] = useState("");
-  const [newSocietySlug, setNewSocietySlug] = useState("");
-  const [creating, setCreating] = useState(false);
+  // Public society-by-slug mode (no login)
+  const [publicLoading, setPublicLoading] = React.useState(false);
+  const [publicSociety, setPublicSociety] = React.useState(null);
 
-  // Society picker
-  const [pickerOpen, setPickerOpen] = useState(false);
+  // Sheet for captains/admins to sign in from public view
+  const [adminSheetOpen, setAdminSheetOpen] = React.useState(false);
 
-  // ---- Init auth
-  useEffect(() => {
-    if (!client) return;
-    let mounted = true;
+  // ---- Create society (invite code) ----
+  const [createMode, setCreateMode] = React.useState(false);
+  const [inviteCode, setInviteCode] = React.useState("");
+  const [newSocietyName, setNewSocietyName] = React.useState("");
+  const [newSocietySlug, setNewSocietySlug] = React.useState("");
+  const [creating, setCreating] = React.useState(false);
 
-    (async () => {
-      setAuthLoading(true);
-      const { data } = await client.auth.getSession();
-      if (!mounted) return;
-      setSession(data.session || null);
-      setAuthLoading(false);
-    })();
+  React.useEffect(() => {
+    if (!newSocietyName) return;
+    if (newSocietySlug) return;
+    setNewSocietySlug(slugify(newSocietyName));
+  }, [newSocietyName, newSocietySlug]);
 
-    const { data: sub } = client.auth.onAuthStateChange((_event, newSession) => {
-      setSession(newSession || null);
-      setAuthLoading(false);
-    });
+  // session tracking
+  React.useEffect(() => {
+    if (!envOk) return;
+
+    client.auth.getSession().then(({ data }) => setSession(data?.session || null));
+    const { data: sub } = client.auth.onAuthStateChange((_evt, s) => setSession(s || null));
 
     return () => {
-      mounted = false;
-      sub?.subscription?.unsubscribe?.();
+      try {
+        sub?.subscription?.unsubscribe?.();
+      } catch {}
     };
-  }, [client]);
+  }, [client, envOk]);
 
-  // ---- Fetch memberships + societies when logged in
-  useEffect(() => {
-    if (!client || !session?.user?.id) return;
+  // Public mode: if URL contains a slug, fetch that society without requiring login
+  React.useEffect(() => {
+    if (!envOk) return;
+
+    const slug = getSlugFromPath();
+    if (!slug) {
+      setPublicSociety(null);
+      return;
+    }
 
     let cancelled = false;
-
-    const load = async () => {
-      setTenantLoading(true);
+    async function loadPublicSociety() {
+      setPublicLoading(true);
       setMsg("");
+      try {
+        const { data, error } = await client
+          .from("societies")
+          .select("id, name, slug, viewer_enabled")
+          .eq("slug", slug)
+          .single();
 
-      // 1) memberships for this user
-      const { data: mem, error: memErr } = await client
-        .from("memberships")
-        .select("society_id,role,created_at")
-        .eq("user_id", session.user.id);
-
-      if (cancelled) return;
-
-      if (memErr) {
-        console.error(memErr);
-        setMsg(memErr.message || "Failed to load memberships");
-        setMemberships([]);
-        setSocieties([]);
-        setActiveSocietyId(null);
-        setTenantLoading(false);
-        return;
+        if (error) throw error;
+        
+        // Extra safety: even if RLS is loose, only allow public view when explicitly enabled.
+        if (data && data.viewer_enabled === false) {
+          throw new Error("This society is not publicly viewable.");
+        }
+if (!cancelled) setPublicSociety(data || null);
+	    } catch (e) {
+	        const raw = e?.message || String(e);
+	        const code = e?.code || e?.error_code;
+	        const status = e?.status || e?.statusCode;
+	        const isRlsDenied = /permission denied/i.test(raw) || code === "42501" || status === 401;
+	        // Don't surface RLS errors to anonymous visitors; just treat as "not public" until they sign in.
+	        if (!cancelled && !isRlsDenied) setMsg(raw);
+	        if (!cancelled) setPublicSociety(null);
+	      } finally {
+        if (!cancelled) setPublicLoading(false);
       }
+    }
 
-      const memRows = Array.isArray(mem) ? mem : [];
-      setMemberships(memRows);
-
-      const societyIds = memRows.map((m) => m.society_id).filter(Boolean);
-
-      if (societyIds.length === 0) {
-        setSocieties([]);
-        setActiveSocietyId(null);
-        setTenantLoading(false);
-        return;
-      }
-
-      // 2) safe select societies (no internals)
-      const { data: soc, error: socErr } = await client
-        .from("societies")
-        .select("id,name,slug,viewer_enabled")
-        .in("id", societyIds);
-
-      if (cancelled) return;
-
-      if (socErr) {
-        console.error(socErr);
-        setMsg(socErr.message || "Failed to load societies");
-        setSocieties([]);
-        setActiveSocietyId(null);
-        setTenantLoading(false);
-        return;
-      }
-
-      const socRows = Array.isArray(soc) ? soc : [];
-      setSocieties(socRows);
-
-      // 3) pick active society:
-      //    Prefer URL slug if it matches a membership society slug
-      let preferredId = null;
-
-      if (pathSlug) {
-        const match = socRows.find((s) => String(s.slug || "").toLowerCase() === String(pathSlug).toLowerCase());
-        if (match) preferredId = String(match.id);
-      }
-
-      // fallback: localStorage
-      if (!preferredId) {
-        try {
-          const stored = localStorage.getItem(LS_ACTIVE_SOCIETY);
-          if (stored && societyIds.map(String).includes(String(stored))) {
-            preferredId = String(stored);
-          }
-        } catch {}
-      }
-
-      // fallback: first society
-      if (!preferredId) preferredId = String(societyIds[0]);
-
-      setActiveSocietyId(preferredId);
-
-      // If user has more than one society, open picker once if URL slug didn't decide it
-      if (!pathSlug && socRows.length > 1) setPickerOpen(true);
-
-      setTenantLoading(false);
-    };
-
-    load();
-
+    loadPublicSociety();
     return () => {
       cancelled = true;
     };
-  }, [client, session?.user?.id, pathSlug]);
+  }, [client, envOk]);
 
-  const signOut = async () => {
-    setMsg("");
-    try {
-      await client.auth.signOut();
-    } catch (e) {
-      console.error(e);
+  const loadTenant = React.useCallback(
+    async (userId, opts = {}) => {
+      if (!envOk) return;
+      if (!userId) return;
+
+      const { preferSocietyId = "", preferSocietySlug = "" } = opts || {};
+
+      setTenantLoading(true);
+      setMsg("");
+
+      const m = await client.from("memberships").select("society_id, role").eq("user_id", userId);
+
+      if (m.error) {
+        setMsg(m.error.message);
+        setTenantLoading(false);
+        return;
+      }
+
+      const mem = Array.isArray(m.data) ? m.data : [];
+      setMemberships(mem);
+
+      const ids = mem.map((x) => x.society_id).filter(Boolean).map(String);
+
+      if (!ids.length) {
+        setSocieties([]);
+        setPickerOpen(false);
+        setTenantLoading(false);
+        return;
+      }
+
+      const s = await client.from("societies").select("id, name, slug, viewer_enabled").in("id", ids);
+
+      if (s.error) {
+        setMsg(s.error.message);
+        setTenantLoading(false);
+        return;
+      }
+
+      const socs = Array.isArray(s.data) ? s.data : [];
+      setSocieties(socs);
+
+      let pick =
+        preferSocietyId && ids.includes(String(preferSocietyId)) ? String(preferSocietyId) : "";
+
+      // If the URL includes a society slug (e.g. /den-society-vite/sportsmans-classic),
+      // prefer that society over the remembered selection.
+      const wantedSlug = String(preferSocietySlug || getSocietySlugFromUrl() || "");
+      if (!pick && wantedSlug) {
+        const bySlug = socs.find((x) => String(x.slug || "") === wantedSlug);
+        if (bySlug && ids.includes(String(bySlug.id))) pick = String(bySlug.id);
+      }
+
+
+      if (!pick && activeSocietyId && ids.includes(String(activeSocietyId))) pick = String(activeSocietyId);
+
+      if (!pick && ids.length === 1) pick = ids[0];
+
+      if (!pick && ids.length > 1) {
+        setPickerOpen(true);
+        setTenantLoading(false);
+        return;
+      }
+
+      if (!pick && ids.length) pick = ids[0];
+
+      if (pick) {
+        setActiveSocietyId(String(pick));
+        try {
+          localStorage.setItem(LS_ACTIVE_SOCIETY, String(pick));
+        } catch {}
+      }
+
+      setPickerOpen(false);
+      setTenantLoading(false);
+    },
+    [client, envOk, activeSocietyId]
+  );
+
+  // load memberships + societies (only when logged in)
+  // If the user is currently on a public society URL (/:slug), prefer that society
+  // after sign-in so we don't "snap back" to whatever was last stored in localStorage.
+  React.useEffect(() => {
+    if (!envOk) return;
+
+    async function run() {
+      const userId = session?.user?.id;
+      if (!userId) return;
+
+      const preferSocietyId = publicSociety?.id ? String(publicSociety.id) : "";
+      await loadTenant(userId, preferSocietyId ? { preferSocietyId } : undefined);
     }
-  };
 
-  const sendMagicLink = async (e) => {
-    e.preventDefault();
-    if (!client) return;
-    setMsg("");
-    setBusy(true);
+    run();
+  }, [envOk, session?.user?.id, publicSociety?.id, loadTenant]);
 
+  // persist selection
+  React.useEffect(() => {
     try {
-      const redirectTo = window.location.origin + "/" + (pathSlug ? pathSlug + "/" : "");
+      if (activeSocietyId) localStorage.setItem(LS_ACTIVE_SOCIETY, activeSocietyId);
+    } catch {}
+  }, [activeSocietyId]);
+
+  // Legacy globals for App.jsx
+  React.useEffect(() => {
+    if (session?.user && activeSocietyId) {
+      const options = (societies || [])
+        .slice()
+        .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
+
+      const activeSoc = options.find((s) => String(s.id) === String(activeSocietyId));
+      const role =
+        memberships.find((m) => String(m.society_id) === String(activeSocietyId))?.role || "player";
+
+      window.__activeSocietyId = String(activeSocietyId);
+      window.__activeSocietyName = activeSoc?.name || "";
+      window.__activeSocietySlug = activeSoc?.slug || "";
+      window.__activeSocietyRole = role;
+      window.__supabase_client__ = client;
+      return;
+    }
+
+    if (!session?.user && publicSociety?.id) {
+      window.__activeSocietyId = String(publicSociety.id);
+      window.__activeSocietyName = publicSociety.name || "";
+      window.__activeSocietySlug = publicSociety.slug || "";
+      window.__activeSocietyRole = "viewer";
+      window.__supabase_client__ = client;
+    }
+  }, [client, session?.user?.id, activeSocietyId, societies, memberships, publicSociety]);
+
+  async function sendMagicLink(e) {
+    e.preventDefault();
+    setMsg("");
+
+    const em = (email || "").trim();
+    if (!em) {
+      setMsg("Enter your email.");
+      return;
+    }
+
+    setBusy(true);
+    try {
       const { error } = await client.auth.signInWithOtp({
-        email,
-        options: { emailRedirectTo: redirectTo },
+        email: em,
+        options: {
+          emailRedirectTo: SITE_URL,
+          shouldCreateUser: true,
+        },
       });
+
       if (error) throw error;
-      setMsg("Check your email for the magic link.");
-    } catch (err) {
-      console.error(err);
-      setMsg(err?.message || "Failed to send magic link");
+      setMsg("Magic link sent ✓ Check your email");
+    } catch (ex) {
+      setMsg(ex?.message || String(ex));
     } finally {
       setBusy(false);
     }
-  };
+  }
 
-  const createSociety = async (e) => {
-    e.preventDefault();
-    if (!client || !session?.user?.id) return;
-
-    setMsg("");
-    setCreating(true);
-
+  async function signOut() {
     try {
-      // Validate invite code
-      const code = String(inviteCode || "").trim();
-      if (!code) throw new Error("Invite code is required");
+      await client.auth.signOut();
+    } catch {}
+  }
 
-      const { data: codeRow, error: codeErr } = await client
-        .from("invite_codes")
-        .select("code,is_active,max_uses,uses")
-        .eq("code", code)
-        .maybeSingle();
+  async function createSociety(e) {
+    e.preventDefault();
+    setMsg("");
 
-      if (codeErr) throw codeErr;
-      if (!codeRow) throw new Error("Invalid invite code");
-      if (codeRow.is_active === false) throw new Error("Invite code is inactive");
+    const name = (newSocietyName || "").trim();
+    const code = (inviteCode || "").trim();
+    const slug = ((newSocietySlug || "") || slugify(name)).trim();
 
-      const uses = Number(codeRow.uses || 0);
-      const maxUses = Number(codeRow.max_uses || 0);
-      if (maxUses > 0 && uses >= maxUses) throw new Error("Invite code has reached max uses");
+    if (!name) return setMsg("Enter a society name.");
+    if (!code) return setMsg("Enter your invite code.");
 
-      const name = String(newSocietyName || "").trim();
-      if (!name) throw new Error("Society name is required");
-
-      let slug = slugify(newSocietySlug || name);
-      if (!slug) slug = "society";
-
-      // Create society (server-side RLS should allow only for users with invite code)
-      const { data: created, error: socErr } = await client
-        .from("societies")
-        .insert({
-          name,
-          slug,
-          // optionally store invite code usage metadata if your schema supports it
-        })
-        .select("id,name,slug,viewer_enabled")
-        .single();
-
-      if (socErr) throw socErr;
-
-      // Add membership as captain for creator
-      const { error: memErr } = await client.from("memberships").insert({
-        society_id: created.id,
-        user_id: session.user.id,
-        role: "captain",
+    setCreating(true);
+    try {
+      const { data, error } = await client.rpc("create_society_with_code", {
+        society_name: name,
+        society_slug: slug,
+        invite_code: code,
       });
-      if (memErr) throw memErr;
 
-      // Increment invite code uses (optional; if schema supports)
-      await client
-        .from("invite_codes")
-        .update({ uses: uses + 1 })
-        .eq("code", code);
+      if (error) throw error;
 
-      setMsg("Society created. Redirecting…");
+      const newId = String(data || "");
+      if (newId) {
+        setActiveSocietyId(newId);
+        try {
+          localStorage.setItem(LS_ACTIVE_SOCIETY, newId);
+        } catch {}
+        setPickerOpen(false);
+      }
 
-      // Store and go
-      setActiveSocietyId(String(created.id));
-      try {
-        localStorage.setItem(LS_ACTIVE_SOCIETY, String(created.id));
-      } catch {}
+      setInviteCode("");
+      setNewSocietyName("");
+      setNewSocietySlug("");
       setCreateMode(false);
 
-      // Navigate to slug route
-      if (created.slug) {
-        window.location.assign(window.location.origin + "/" + created.slug);
-      }
-    } catch (err) {
-      console.error(err);
-      setMsg(err?.message || "Failed to create society");
+      const userId = session?.user?.id;
+      await loadTenant(userId, { preferSocietyId: newId });
+    } catch (ex) {
+      setMsg(ex?.message || String(ex));
     } finally {
       setCreating(false);
     }
-  };
+  }
 
-  // ====== RENDER ======
-  if (!client) {
+  if (!envOk) {
     return (
       <CenterCard>
-        <div className="text-xl font-black">Config error</div>
-        <div className="text-sm text-neutral-600 mt-2">
-          Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.
+        <div className="text-xl font-black text-neutral-900">Config missing</div>
+        <div className="mt-2 text-sm text-neutral-700">
+          VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are undefined in the deployed build.
         </div>
       </CenterCard>
     );
   }
 
-  if (authLoading) {
-    return (
-      <CenterCard>
-        <div className="text-sm text-neutral-600">Loading…</div>
-      </CenterCard>
-    );
-  }
+  // ✅ Public golfer mode: slug in URL + no session => render app without forcing sign-in
+  if (!session?.user) {
+    if (publicLoading) {
+      return (
+        <CenterCard>
+          <div className="text-sm text-neutral-600">Loading society…</div>
+        </CenterCard>
+      );
+    }
 
-  // Not logged in => public landing + magic link
-  if (!session) {
+    if (publicSociety?.id) {
+      return (
+        <>
+          <React.Suspense fallback={<CenterCard><div>Loading…</div></CenterCard>}>
+            <AppLazy
+              key={String(publicSociety.id)}
+              supabase={client}
+              session={null}
+              activeSocietyId={String(publicSociety.id)}
+              activeSocietySlug={publicSociety.slug || ""}
+              activeSocietyName={publicSociety.name || ""}
+              activeSocietyRole={"player"}
+            />
+          </React.Suspense>
+
+          <FloatingAdminButton onClick={() => { setMsg(""); setAdminSheetOpen(true); }} />
+          <AdminSignInSheet
+            open={adminSheetOpen}
+            onClose={() => setAdminSheetOpen(false)}
+            email={email}
+            setEmail={setEmail}
+            busy={busy}
+            msg={msg}
+            onSubmit={sendMagicLink}
+          />
+        </>
+      );
+    }
+
+    // No valid slug => show sign-in landing
     return (
       <CenterCard>
         <div className="text-2xl font-black text-neutral-900">Sign in</div>
         <div className="text-sm text-neutral-600 mt-2">We’ll email you a magic link.</div>
 
-        <form className="mt-5 space-y-3" onSubmit={sendMagicLink}>
+        <form className="mt-4 space-y-3" onSubmit={sendMagicLink}>
           <div>
             <label className="block text-xs font-bold text-neutral-700 mb-1">Email</label>
             <input
