@@ -3,7 +3,6 @@ import { createClient } from "@supabase/supabase-js";
 
 const SUPER_ADMIN_EMAILS = ["kevanojb@icloud.com"]; // global admin(s)
 
-
 // Back-compat league labels (some components reference these)
 let LEAGUE_SLUG = "";
 let LEAGUE_TITLE = "";
