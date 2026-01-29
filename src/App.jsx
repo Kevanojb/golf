@@ -1,6 +1,9 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
+const SUPER_ADMIN_EMAILS = ["kevanojb@icloud.com"]; // global admin(s)
+
+
 // Back-compat league labels (some components reference these)
 let LEAGUE_SLUG = "";
 let LEAGUE_TITLE = "";
@@ -2760,6 +2763,8 @@ function EventNav({ setView, hasEvent = true }) {
 }
 
 function Home({
+  activeRole,
+  isSuperAdmin,
   setView,
   fileInputRef,
   importLocalCSV,
@@ -3005,6 +3010,8 @@ function Home({
 
 
 function AdminView({
+  activeRole,
+  isSuperAdmin,
   setView,
   fileInputRef,
   importLocalCSV,
@@ -3020,7 +3027,8 @@ function AdminView({
   visiblePlayersCount,
   totalPlayersCount,
 }) {
-  const isAdmin = !!user;
+  const role = String(activeRole || "").toLowerCase();
+  const isAdmin = !!user && (isSuperAdmin || role === "admin" || role === "captain");
   const adminLabel = isAdmin ? (user.email || "Admin") : "Not signed in";
   const hasLoadedEvent = !!(computed && computed.length);
 
@@ -14490,7 +14498,7 @@ return (
                 🧭
               </button>
 {view === "home" && (
-                <Home runSeasonAnalysis={loadAllGamesAndBuildPlayerModel} setView={setView} fileInputRef={fileInputRef} importLocalCSV={importLocalCSV} computed={computedFiltered} addEventToSeason={addEventToSeason} removeEventFromSeason={removeEventFromSeason} clearSeason={clearSeason} user={user} handleLogin={handleLogin} handleLogout={handleLogout}
+                <Home runSeasonAnalysis={loadAllGamesAndBuildPlayerModel} setView={setView} fileInputRef={fileInputRef} importLocalCSV={importLocalCSV} computed={computedFiltered} addEventToSeason={addEventToSeason} removeEventFromSeason={removeEventFromSeason} clearSeason={clearSeason} user={user} activeRole={ACTIVE.role} isSuperAdmin={isSuperAdmin} handleLogin={handleLogin} handleLogout={handleLogout}
             handleSwitchSociety={handleSwitchSociety} openPlayersAdmin={requestPlayersAdmin} visiblePlayersCount={(seasonModel?.players||[]).length} totalPlayersCount={(adminPlayerRoster||[]).length} />
               )}
 
@@ -14503,8 +14511,7 @@ return (
     computed={computedFiltered}
     addEventToSeason={addEventToSeason}
     removeEventFromSeason={removeEventFromSeason}
-    clearSeason={clearSeason}
-    user={user}
+    clearSeason={clearSeason} user={user} activeRole={ACTIVE.role} isSuperAdmin={isSuperAdmin}
     handleLogin={handleLogin}
     handleLogout={handleLogout}
             handleSwitchSociety={handleSwitchSociety}
