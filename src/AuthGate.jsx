@@ -207,17 +207,12 @@ export default function AuthGate() {
       try {
         const { data, error } = await client
           .from("societies")
-          .select("id, name, slug, viewer_enabled")
+          .select("id, name, slug")
           .eq("slug", slug)
           .single();
 
         if (error) throw error;
-        
-        // Extra safety: even if RLS is loose, only allow public view when explicitly enabled.
-        if (data && data.viewer_enabled === false) {
-          throw new Error("This society is not publicly viewable.");
-        }
-if (!cancelled) setPublicSociety(data || null);
+        if (!cancelled) setPublicSociety(data || null);
       } catch (e) {
         if (!cancelled) setMsg(e?.message || String(e));
         if (!cancelled) setPublicSociety(null);
@@ -262,7 +257,7 @@ if (!cancelled) setPublicSociety(data || null);
         return;
       }
 
-      const s = await client.from("societies").select("id, name, slug, viewer_enabled").in("id", ids);
+      const s = await client.from("societies").select("id, name, slug").in("id", ids);
 
       if (s.error) {
         setMsg(s.error.message);
