@@ -12275,8 +12275,7 @@ useEffect(() => {
               });
         if (typeof window !== "undefined") window.__supabase_client__ = c;
 
-        // Fetch society by slug from the PUBLIC tenant table (take first match if duplicates exist,
-        // avoids PostgREST single() crash).
+        // Fetch society by slug (take first match if duplicates exist, avoids PostgREST single() crash).
         const { data, error } = await c
           .from("societies_public")
           .select("id,name,slug")
