@@ -302,17 +302,21 @@ if (!cancelled) setPublicSociety(data || null);
   );
 
   // load memberships + societies (only when logged in)
+  // If the user is currently on a public society URL (/:slug), prefer that society
+  // after sign-in so we don't "snap back" to whatever was last stored in localStorage.
   React.useEffect(() => {
     if (!envOk) return;
 
     async function run() {
       const userId = session?.user?.id;
       if (!userId) return;
-      await loadTenant(userId);
+
+      const preferSocietyId = publicSociety?.id ? String(publicSociety.id) : "";
+      await loadTenant(userId, preferSocietyId ? { preferSocietyId } : undefined);
     }
 
     run();
-  }, [envOk, session?.user?.id, loadTenant]);
+  }, [envOk, session?.user?.id, publicSociety?.id, loadTenant]);
 
   // persist selection
   React.useEffect(() => {
