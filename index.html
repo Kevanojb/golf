@@ -3,6 +3,20 @@
   <head>
     <meta charset="UTF-8" />
 
+    <!-- 🔧 REQUIRED: restore deep links after 404.html redirect -->
+    <script>
+      (function () {
+        var p = new URLSearchParams(window.location.search).get("p");
+        if (p) {
+          try {
+            var decoded = decodeURIComponent(p);
+            // decoded looks like "/den-society"
+            window.history.replaceState(null, "", "/golf" + decoded);
+          } catch (e) {}
+        }
+      })();
+    </script>
+
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <title>Den Events League — Ultimate Edition</title>
 
