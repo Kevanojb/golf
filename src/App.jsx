@@ -14576,6 +14576,7 @@ if (res.error) toast("Error: " + res.error.message);
 
         async function clearSeason() {
           if (!client) { toast("No client"); return; }
+          if (!user) { alert("Please log in as admin first."); return; }
 
           const targetSeasonId = (leagueSeasonYear && String(leagueSeasonYear).toLowerCase() !== "all")
               ? String(leagueSeasonYear)
@@ -14583,8 +14584,52 @@ if (res.error) toast("Error: " + res.error.message);
 
           if (!targetSeasonId) { toast("Select a season first"); return; }
 
-          if (!window.confirm("⚠ This will delete ALL standings rows for the selected season. Continue?")) return;
+          if (!window.confirm("⚠ This will delete ALL standings rows, event records, and CSV files for the selected season. Continue?")) return;
 
+          // 1) Find all event files for this season (manifest table)
+          const evList = await client
+            .from("events")
+            .select("storage_path, storage_bucket")
+            .eq("society_id", SOCIETY_ID)
+            .eq("competition", COMPETITION)
+            .eq("season_id", targetSeasonId);
+
+          if (evList?.error) {
+            toast("Error loading events: " + evList.error.message);
+            return;
+          }
+
+          const events = Array.isArray(evList?.data) ? evList.data : [];
+          const paths = events
+            .map((e) => String(e?.storage_path || "").trim())
+            .filter(Boolean);
+
+          // 2) Delete files from storage first (avoid orphaning DB if storage delete fails)
+          if (paths.length > 0) {
+            const bucket = String(events.find((e) => e?.storage_bucket)?.storage_bucket || BUCKET || "").trim() || BUCKET;
+            const rm = await client.storage.from(bucket).remove(paths);
+            if (rm?.error) {
+              toast("Storage delete failed: " + rm.error.message);
+              return;
+            }
+          }
+
+          // 3) Delete event records for this season
+          if (events.length > 0) {
+            const delEv = await client
+              .from("events")
+              .delete()
+              .eq("society_id", SOCIETY_ID)
+              .eq("competition", COMPETITION)
+              .eq("season_id", targetSeasonId);
+
+            if (delEv?.error) {
+              toast("Error deleting event records: " + delEv.error.message);
+              return;
+            }
+          }
+
+          // 4) Delete standings rows for this season
           const res = await client
             .from(STANDINGS_TABLE)
             .delete()
@@ -14599,13 +14644,14 @@ if (res.error) toast("Error: " + res.error.message);
           }
 
           setSeason({});
-          toast("Season cleared");
+          toast(`Season cleared (${paths.length} file${paths.length === 1 ? "" : "s"} removed)`);
 
           // Refresh dropdown + table
           await fetchSeasons(client);
           await fetchSeason(client);
           await refreshShared(client);
         }
+
 
         
         // Admin roster source-of-truth:
