@@ -3096,6 +3096,8 @@ function AdminView({
   const [seasonEnd, setSeasonEnd] = React.useState("");
   const [seasonBusy, setSeasonBusy] = React.useState(false);
 
+  const [actionStatus, setActionStatus] = React.useState("");
+
   const [createSocietyOpen, setCreateSocietyOpen] = React.useState(false);
   const [societyName, setSocietyName] = React.useState("");
   const [societySlug, setSocietySlug] = React.useState("");
@@ -3373,57 +3375,84 @@ function AdminView({
         </div>
 
         {createSeasonOpen ? (
-          <form className="mt-4 grid gap-2" onSubmit={createSeason}>
-            <label className="text-xs font-black text-neutral-600">Season / Competition label</label>
-            <input
-              className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
-              value={newSeasonLabel}
-              onChange={(e) => setNewSeasonLabel(e.target.value)}
-              placeholder="e.g. Winter League 2026"
-            />
+  <form
+    className="mt-4 grid gap-2"
+    onSubmit={(e) => {
+      e.preventDefault();
+      handleCreateSeason();
+    }}
+  >
+    <label className="text-xs font-black text-neutral-600">Season / Competition label</label>
+    <input
+      className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+      value={seasonLabel}
+      onChange={(e) => setSeasonLabel(e.target.value)}
+      placeholder="e.g. Winter League 2026"
+    />
 
-            <label className="text-xs font-black text-neutral-600 mt-2">Competition type</label>
-            <select
-              className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
-              value={newSeasonCompetition}
-              onChange={(e) => setNewSeasonCompetition(e.target.value)}
-            >
-              <option value="season">season</option>
-              <option value="winter">winter</option>
-              <option value="league">league</option>
-            </select>
+    <label className="text-xs font-black text-neutral-600 mt-2">Competition type</label>
+    <select
+      className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+      value={seasonCompetition}
+      onChange={(e) => setSeasonCompetition(e.target.value)}
+    >
+      <option value="season">season</option>
+      <option value="winter">winter</option>
+      <option value="league">league</option>
+    </select>
 
-            <div className="grid grid-cols-2 gap-2 mt-2">
-              <div>
-                <label className="text-xs font-black text-neutral-600">Start date</label>
-                <input
-                  className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
-                  type="date"
-                  value={newSeasonStart}
-                  onChange={(e) => setNewSeasonStart(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="text-xs font-black text-neutral-600">End date</label>
-                <input
-                  className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
-                  type="date"
-                  value={newSeasonEnd}
-                  onChange={(e) => setNewSeasonEnd(e.target.value)}
-                />
-              </div>
-            </div>
+    <div className="grid grid-cols-2 gap-2 mt-2">
+      <div>
+        <label className="text-xs font-black text-neutral-600">Start date</label>
+        <input
+          className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+          type="date"
+          value={seasonStart}
+          onChange={(e) => setSeasonStart(e.target.value)}
+        />
+      </div>
+      <div>
+        <label className="text-xs font-black text-neutral-600">End date</label>
+        <input
+          className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+          type="date"
+          value={seasonEnd}
+          onChange={(e) => setSeasonEnd(e.target.value)}
+        />
+      </div>
+    </div>
 
-            {createMsg ? (
-              <div className="mt-2 text-xs rounded-xl px-3 py-2 border border-neutral-200 bg-neutral-50">{createMsg}</div>
-            ) : null}
+    {actionStatus ? (
+      <div className="mt-2 text-xs rounded-xl px-3 py-2 border border-neutral-200 bg-neutral-50">
+        {actionStatus}
+      </div>
+    ) : null}
+
+    <div className="grid grid-cols-2 gap-2 mt-2">
+      <button
+        type="button"
+        className="btn"
+        onClick={() => {
+          setCreateSeasonOpen(false);
+          setActionStatus("");
+        }}
+        disabled={seasonBusy}
+      >
+        Cancel
+      </button>
+      <button type="submit" className="btn-primary" disabled={seasonBusy}>
+        {seasonBusy ? "Creating…" : "Create season"}
+      </button>
+    </div>
+  </form>
+) : null}
 
             <div className="flex items-center justify-between gap-2 mt-2">
               <button
                 type="button"
                 className="btn"
                 onClick={() => {
-                  setCreateMsg("");
+                  setActionStatus("");
                   setCreateSeasonOpen(false);
                 }}
               >
@@ -3497,8 +3526,8 @@ function AdminView({
               <option value="league">league</option>
             </select>
 
-            {createMsg ? (
-              <div className="mt-2 text-xs rounded-xl px-3 py-2 border border-neutral-200 bg-neutral-50">{createMsg}</div>
+            {actionStatus ? (
+              <div className="mt-2 text-xs rounded-xl px-3 py-2 border border-neutral-200 bg-neutral-50">{actionStatus}</div>
             ) : null}
 
             <div className="flex items-center justify-between gap-2 mt-2">
@@ -3506,7 +3535,7 @@ function AdminView({
                 type="button"
                 className="btn"
                 onClick={() => {
-                  setCreateMsg("");
+                  setActionStatus("");
                   setCreateSocietyOpen(false);
                 }}
               >
