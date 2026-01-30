@@ -30,6 +30,16 @@ function CenterCard({ children }) {
   );
 }
 
+
+function isOnboardForced() {
+  try {
+    const sp = new URLSearchParams(window.location.search || "");
+    return sp.get("onboard") === "1";
+  } catch {
+    return false;
+  }
+}
+
 function slugify(s) {
   return String(s || "")
     .trim()
@@ -42,7 +52,11 @@ function slugify(s) {
 // Example: "/golf/den" => slug "den"
 function getSlugFromPath() {
   try {
-    const path = window.location.pathname || "/";
+    if (isOnboardForced()) return "";
+    let path = window.location.pathname || "/";
+    // Normalize GitHub Pages base with/without trailing slash
+    if (path === GH_PAGES_BASE.slice(0, -1)) path = GH_PAGES_BASE;
+
     const clean = path.startsWith(GH_PAGES_BASE)
       ? path.slice(GH_PAGES_BASE.length)
       : path.replace(/^\//, "");
@@ -229,7 +243,18 @@ export default function AuthGate() {
     setNewSocietySlug(slugify(newSocietyName));
   }, [newSocietyName, newSocietySlug]);
 
-  // session tracking
+  
+// Normalize "/golf" -> "/golf/" so slug detection is consistent on GitHub Pages
+React.useEffect(() => {
+  try {
+    const p = window.location.pathname || "";
+    if (p === GH_PAGES_BASE.slice(0, -1)) {
+      window.location.replace(GH_PAGES_BASE);
+    }
+  } catch {}
+}, []);
+
+// session tracking
   React.useEffect(() => {
     if (!envOk) return;
 
