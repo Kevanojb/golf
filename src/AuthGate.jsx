@@ -5,6 +5,7 @@ const SUPA_URL = import.meta.env.VITE_SUPABASE_URL;
 const SUPA_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 const LS_ACTIVE_SOCIETY = "den_active_society_id_v1";
+const LS_PENDING_CREATE = "den_pending_create_society_v1";
 
 // GitHub Pages base (repo name)
 const GH_PAGES_BASE = "/golf/";
@@ -134,7 +135,11 @@ function getSocietySlugFromUrl() {
 
     // 1) Hash router: "#/slug/anything" (or "#slug")
     if (hash) {
-      const cleaned = hash.startsWith("#/") ? hash.slice(2) : hash.startsWith("#") ? hash.slice(1) : hash;
+      const cleaned = hash.startsWith("#/")
+        ? hash.slice(2)
+        : hash.startsWith("#")
+          ? hash.slice(1)
+          : hash;
       const seg = cleaned.split("/").filter(Boolean)[0] || "";
       if (seg) return String(seg);
     }
@@ -147,6 +152,24 @@ function getSocietySlugFromUrl() {
   } catch {
     return "";
   }
+}
+
+function readPendingCreate() {
+  try {
+    const raw = localStorage.getItem(LS_PENDING_CREATE);
+    if (!raw) return null;
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== "object") return null;
+    return obj;
+  } catch {
+    return null;
+  }
+}
+
+function clearPendingCreate() {
+  try {
+    localStorage.removeItem(LS_PENDING_CREATE);
+  } catch {}
 }
 
 export default function AuthGate() {
@@ -188,12 +211,17 @@ export default function AuthGate() {
   // Sheet for captains/admins to sign in from public view
   const [adminSheetOpen, setAdminSheetOpen] = React.useState(false);
 
+  // Landing screen tabs (root only)
+  const [landingTab, setLandingTab] = React.useState("signin"); // signin | create
+
   // ---- Create society (invite code) ----
-  const [createMode, setCreateMode] = React.useState(false);
   const [inviteCode, setInviteCode] = React.useState("");
   const [newSocietyName, setNewSocietyName] = React.useState("");
   const [newSocietySlug, setNewSocietySlug] = React.useState("");
+  const [newSeasonLabel, setNewSeasonLabel] = React.useState("");
   const [creating, setCreating] = React.useState(false);
+
+  const [autoCreating, setAutoCreating] = React.useState(false);
 
   React.useEffect(() => {
     if (!newSocietyName) return;
@@ -232,9 +260,6 @@ export default function AuthGate() {
       setMsg("");
 
       try {
-        // IMPORTANT:
-        // .single() throws "Cannot coerce the result..." when 0 rows or >1 rows.
-        // maybeSingle() is resilient and lets us show a clean message instead.
         const { data, error } = await client
           .from("societies")
           .select("id, name, slug, viewer_enabled")
@@ -245,7 +270,6 @@ export default function AuthGate() {
         if (error) throw error;
 
         if (!data) {
-          // slug doesn't exist (or filtered by RLS)
           if (!cancelled) setPublicSociety(null);
           return;
         }
@@ -262,10 +286,11 @@ export default function AuthGate() {
         const status = e?.status || e?.statusCode;
         const isRlsDenied = /permission denied/i.test(raw) || code === "42501" || status === 401;
 
-        // Don't surface RLS errors to anonymous visitors; just treat as "not public".
         if (!cancelled && !isRlsDenied) setMsg(raw);
         if (!cancelled) setPublicSociety(null);
-      } finally {
+      } catch (ex) {
+      setMsg(ex?.message || String(ex));
+    } finally {
         if (!cancelled) setPublicLoading(false);
       }
     }
@@ -317,11 +342,8 @@ export default function AuthGate() {
       const socs = Array.isArray(s.data) ? s.data : [];
       setSocieties(socs);
 
-      let pick =
-        preferSocietyId && ids.includes(String(preferSocietyId)) ? String(preferSocietyId) : "";
+      let pick = preferSocietyId && ids.includes(String(preferSocietyId)) ? String(preferSocietyId) : "";
 
-      // If the URL includes a society slug (e.g. /golf/sportsmans-classic),
-      // prefer that society over the remembered selection.
       const wantedSlug = String(preferSocietySlug || getSocietySlugFromUrl() || "");
       if (!pick && wantedSlug) {
         const bySlug = socs.find((x) => String(x.slug || "") === wantedSlug);
@@ -355,7 +377,6 @@ export default function AuthGate() {
 
   // load memberships + societies (only when logged in)
   // If the user is currently on a public society URL (/:slug), prefer that society
-  // after sign-in so we don't "snap back" to whatever was last stored in localStorage.
   React.useEffect(() => {
     if (!envOk) return;
 
@@ -385,8 +406,7 @@ export default function AuthGate() {
         .sort((a, b) => String(a.name || "").localeCompare(String(b.name || "")));
 
       const activeSoc = options.find((s) => String(s.id) === String(activeSocietyId));
-      const role =
-        memberships.find((m) => String(m.society_id) === String(activeSocietyId))?.role || "player";
+      const role = memberships.find((m) => String(m.society_id) === String(activeSocietyId))?.role || "player";
 
       window.__activeSocietyId = String(activeSocietyId);
       window.__activeSocietyName = activeSoc?.name || "";
@@ -405,11 +425,11 @@ export default function AuthGate() {
     }
   }, [client, session?.user?.id, activeSocietyId, societies, memberships, publicSociety]);
 
-  async function sendMagicLink(e) {
-    e.preventDefault();
+  async function sendMagicLink(e, overrideEmail) {
+    if (e?.preventDefault) e.preventDefault();
     setMsg("");
 
-    const em = (email || "").trim();
+    const em = (overrideEmail ?? email ?? "").trim();
     if (!em) {
       setMsg("Enter your email.");
       return;
@@ -443,49 +463,106 @@ export default function AuthGate() {
     } catch {}
   }
 
-  async function createSociety(e) {
+  async function createSocietyAfterSignIn(pending) {
+    const name = String(pending?.society_name || "").trim();
+    const code = String(pending?.invite_code || "").trim();
+    const slug = String(pending?.society_slug || slugify(name) || "").trim();
+    const seasonLabel = String(pending?.season_label || "").trim();
+
+    if (!name || !code) {
+      clearPendingCreate();
+      return;
+    }
+
+    setAutoCreating(true);
+    setMsg("");
+
+    try {
+// 1) Create the society + captain membership + initial season (done server-side in the RPC)
+const now = new Date();
+const year = now.getFullYear();
+
+const season_id_guess = (() => {
+  const y = (seasonLabel.match(/\b(19\d{2}|20\d{2})\b/) || [])[0];
+  return String(y || year);
+})();
+
+const firstSeasonName = seasonLabel || season_id_guess;
+
+const { data, error } = await client.rpc("create_society_with_code", {
+  society_name: name,
+  society_slug: slug,
+  invite_code: code,
+  first_season_name: firstSeasonName,
+});
+
+if (error) throw error;
+
+const newId = String(data || "");
+if (!newId) throw new Error("Society create failed (no id returned).");
+
+      // 3) Remember + jump to the society URL (so public viewers can share the link)
+      setActiveSocietyId(newId);
+      try {
+        localStorage.setItem(LS_ACTIVE_SOCIETY, newId);
+      } catch {}
+
+      clearPendingCreate();
+
+      // Prefer to navigate to the new society slug
+      window.location.href = `${SITE_URL}${slug}`;
+    } finally {
+      setAutoCreating(false);
+    }
+  }
+
+  async function startCreateSociety(e) {
     e.preventDefault();
     setMsg("");
 
-    const name = (newSocietyName || "").trim();
+    const em = (email || "").trim();
     const code = (inviteCode || "").trim();
+    const name = (newSocietyName || "").trim();
     const slug = ((newSocietySlug || "") || slugify(name)).trim();
+    const season = (newSeasonLabel || "").trim();
 
-    if (!name) return setMsg("Enter a society name.");
+    if (!em) return setMsg("Enter your email.");
     if (!code) return setMsg("Enter your invite code.");
+    if (!name) return setMsg("Enter a society name.");
 
-    setCreating(true);
+    // Store for after magic-link sign-in completes
     try {
-      const { data, error } = await client.rpc("create_society_with_code", {
-        society_name: name,
-        society_slug: slug,
-        invite_code: code,
-      });
+      localStorage.setItem(
+        LS_PENDING_CREATE,
+        JSON.stringify({
+          invite_code: code,
+          society_name: name,
+          society_slug: slug,
+          season_label: season,
+        })
+      );
+    } catch {}
 
-      if (error) throw error;
-
-      const newId = String(data || "");
-      if (newId) {
-        setActiveSocietyId(newId);
-        try {
-          localStorage.setItem(LS_ACTIVE_SOCIETY, newId);
-        } catch {}
-        setPickerOpen(false);
-      }
-
-      setInviteCode("");
-      setNewSocietyName("");
-      setNewSocietySlug("");
-      setCreateMode(false);
-
-      const userId = session?.user?.id;
-      await loadTenant(userId, { preferSocietyId: newId });
-    } catch (ex) {
-      setMsg(ex?.message || String(ex));
-    } finally {
-      setCreating(false);
-    }
+    await sendMagicLink(null, em);
+    setCreating(true);
   }
+
+  // Auto-finalise create flow: when a new user signs in and has no memberships
+  React.useEffect(() => {
+    const userId = session?.user?.id;
+    if (!userId) return;
+    if (tenantLoading) return;
+    if (memberships.length) return;
+    if (autoCreating) return;
+
+    const pending = readPendingCreate();
+    if (!pending) return;
+
+    createSocietyAfterSignIn(pending).catch((ex) => {
+      setMsg(ex?.message || String(ex));
+      // keep pending so they can retry
+    });
+  }, [session?.user?.id, memberships.length, tenantLoading, autoCreating]);
 
   if (!envOk) {
     return (
@@ -537,52 +614,144 @@ export default function AuthGate() {
       );
     }
 
-    // No valid slug => show sign-in landing
+    // No valid slug => root landing (sign in OR create society)
     return (
       <CenterCard>
-        <div className="text-2xl font-black text-neutral-900">Sign in</div>
-        <div className="text-sm text-neutral-600 mt-2">We’ll email you a magic link.</div>
+        <div className="text-2xl font-black text-neutral-900">Den Golf Leagues</div>
+        <div className="text-sm text-neutral-600 mt-2">Sign in as a captain, or create your own society.</div>
 
-        <form className="mt-4 space-y-3" onSubmit={sendMagicLink}>
-          <div>
-            <label className="block text-xs font-bold text-neutral-700 mb-1">Email</label>
-            <input
-              className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="name@example.com"
-            />
-          </div>
-
-          {msg ? (
-            <div className="text-sm rounded-xl px-3 py-2 border border-neutral-200 bg-neutral-50">
-              {msg}
-            </div>
-          ) : null}
-
+        <div className="mt-4 grid grid-cols-2 gap-2">
           <button
-            className="w-full rounded-xl bg-black text-white px-4 py-2.5 font-bold disabled:opacity-60"
-            disabled={busy}
+            className={`rounded-xl px-3 py-2 font-bold border ${landingTab === "signin" ? "bg-black text-white border-black" : "bg-white text-neutral-900 border-neutral-200"}`}
+            onClick={() => { setMsg(""); setLandingTab("signin"); }}
           >
-            {busy ? "Sending…" : "Send magic link"}
+            Sign in
           </button>
+          <button
+            className={`rounded-xl px-3 py-2 font-bold border ${landingTab === "create" ? "bg-black text-white border-black" : "bg-white text-neutral-900 border-neutral-200"}`}
+            onClick={() => { setMsg(""); setLandingTab("create"); }}
+          >
+            Create society
+          </button>
+        </div>
 
-          <div className="text-xs text-neutral-500 pt-1">
-            Golfers: use your society link (e.g. <span className="font-mono">{SITE_URL}den</span>).
-          </div>
-        </form>
+        {landingTab === "signin" ? (
+          <form className="mt-4 space-y-3" onSubmit={sendMagicLink}>
+            <div>
+              <label className="block text-xs font-bold text-neutral-700 mb-1">Email</label>
+              <input
+                className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@example.com"
+              />
+            </div>
+
+            {msg ? (
+              <div className="text-sm rounded-xl px-3 py-2 border border-neutral-200 bg-neutral-50">
+                {msg}
+              </div>
+            ) : null}
+
+            <button
+              className="w-full rounded-xl bg-black text-white px-4 py-2.5 font-bold disabled:opacity-60"
+              disabled={busy}
+            >
+              {busy ? "Sending…" : "Send magic link"}
+            </button>
+
+            <div className="text-xs text-neutral-500 pt-1">
+              Golfers: use your society link (e.g. <span className="font-mono">{SITE_URL}den</span>).
+            </div>
+          </form>
+        ) : (
+          <form className="mt-4 space-y-3" onSubmit={startCreateSociety}>
+            <div>
+              <label className="block text-xs font-bold text-neutral-700 mb-1">Email</label>
+              <input
+                className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="name@example.com"
+              />
+              <div className="text-xs text-neutral-500 mt-1">We’ll email you a magic link to confirm.</div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-neutral-700 mb-1">Invite code</label>
+              <input
+                className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
+                value={inviteCode}
+                onChange={(e) => setInviteCode(e.target.value)}
+                placeholder="e.g. CHART-7F3KQ"
+                autoCapitalize="characters"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-neutral-700 mb-1">Society name</label>
+              <input
+                className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
+                value={newSocietyName}
+                onChange={(e) => setNewSocietyName(e.target.value)}
+                placeholder="e.g. Den Society"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-neutral-700 mb-1">Slug (optional)</label>
+              <input
+                className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
+                value={newSocietySlug}
+                onChange={(e) => setNewSocietySlug(e.target.value)}
+                placeholder="e.g. den-society"
+              />
+              <div className="text-xs text-neutral-500 mt-1">Used for friendly URLs. Leave blank to auto-generate.</div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-neutral-700 mb-1">Initial season name (optional)</label>
+              <input
+                className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
+                value={newSeasonLabel}
+                onChange={(e) => setNewSeasonLabel(e.target.value)}
+                placeholder="e.g. 2026 / Winter 25-26"
+              />
+              <div className="text-xs text-neutral-500 mt-1">We’ll create a first season for you under the main league.</div>
+            </div>
+
+            {msg ? (
+              <div className="text-sm rounded-xl px-3 py-2 border border-neutral-200 bg-neutral-50">
+                {msg}
+              </div>
+            ) : null}
+
+            <button
+              className="w-full rounded-xl bg-black text-white px-4 py-2.5 font-bold disabled:opacity-60"
+              disabled={busy || creating}
+            >
+              {busy ? "Sending…" : creating ? "Check your email…" : "Create society"}
+            </button>
+
+            <div className="text-xs text-neutral-500 pt-1">
+              After you click the magic link, we’ll finish creating the society automatically.
+            </div>
+          </form>
+        )}
       </CenterCard>
     );
   }
 
   // Logged-in modes below (captains/admins)
 
-  if (tenantLoading) {
+  if (tenantLoading || autoCreating) {
     return (
       <CenterCard>
-        <div className="text-sm text-neutral-600">Loading…</div>
+        <div className="text-sm text-neutral-600">{autoCreating ? "Creating society…" : "Loading…"}</div>
         <button
           className="mt-4 w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
           onClick={signOut}
@@ -594,108 +763,42 @@ export default function AuthGate() {
   }
 
   if (memberships.length === 0) {
-    if (!createMode) {
-      return (
-        <CenterCard>
-          <div className="text-lg font-black text-neutral-900">{session.user.email}</div>
-          <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-            You don’t have access to any societies yet.
-          </div>
-
-          <button
-            className="mt-4 w-full rounded-xl bg-black text-white px-4 py-2.5 font-bold"
-            onClick={() => {
-              setMsg("");
-              setCreateMode(true);
-            }}
-          >
-            Create a new society
-          </button>
-
-          <button
-            className="mt-3 w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
-            onClick={signOut}
-          >
-            Sign out
-          </button>
-        </CenterCard>
-      );
-    }
+    // If they arrived here after starting create, tell them what to do.
+    const pending = readPendingCreate();
 
     return (
       <CenterCard>
-        <div className="text-2xl font-black text-neutral-900">Create society</div>
-        <div className="text-sm text-neutral-600 mt-2">
-          Enter your invite code and name your society.
-        </div>
+        <div className="text-lg font-black text-neutral-900">{session.user.email}</div>
 
-        <form className="mt-4 space-y-3" onSubmit={createSociety}>
-          <div>
-            <label className="block text-xs font-bold text-neutral-700 mb-1">Invite code</label>
-            <input
-              className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
-              value={inviteCode}
-              onChange={(e) => setInviteCode(e.target.value)}
-              placeholder="e.g. CHART-7F3KQ"
-              autoCapitalize="characters"
-            />
+        {pending ? (
+          <div className="mt-3 rounded-2xl border border-neutral-200 bg-neutral-50 p-3 text-sm text-neutral-800">
+            We’re finishing your society setup. If nothing happens, refresh this page.
           </div>
-
-          <div>
-            <label className="block text-xs font-bold text-neutral-700 mb-1">Society name</label>
-            <input
-              className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
-              value={newSocietyName}
-              onChange={(e) => setNewSocietyName(e.target.value)}
-              placeholder="e.g. Den Society"
-            />
+        ) : (
+          <div className="mt-3 rounded-2xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+            You don’t have access to any societies yet.
           </div>
+        )}
 
-          <div>
-            <label className="block text-xs font-bold text-neutral-700 mb-1">Slug (optional)</label>
-            <input
-              className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
-              value={newSocietySlug}
-              onChange={(e) => setNewSocietySlug(e.target.value)}
-              placeholder="e.g. den-society"
-            />
-            <div className="text-xs text-neutral-500 mt-1">
-              Used for friendly URLs. Leave blank to auto-generate.
-            </div>
+        {msg ? (
+          <div className="mt-3 text-sm rounded-xl px-3 py-2 border border-neutral-200 bg-neutral-50">
+            {msg}
           </div>
+        ) : null}
 
-          {msg ? (
-            <div className="text-sm rounded-xl px-3 py-2 border border-neutral-200 bg-neutral-50">
-              {msg}
-            </div>
-          ) : null}
+        <button
+          className="mt-4 w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
+          onClick={() => { clearPendingCreate(); setLandingTab("create"); window.location.href = SITE_URL; }}
+        >
+          Create a new society
+        </button>
 
-          <button
-            className="w-full rounded-xl bg-black text-white px-4 py-2.5 font-bold disabled:opacity-60"
-            disabled={creating}
-          >
-            {creating ? "Creating…" : "Create society"}
-          </button>
-
-          <button
-            type="button"
-            className="w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
-            onClick={() => {
-              setMsg("");
-              setCreateMode(false);
-            }}
-          >
-            Back
-          </button>
-
-          <button
-            type="button"
-            className="w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
-            onClick={signOut}
-          >
-            Sign out
-          </button>
-        </form>
+        <button
+          className="mt-3 w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
+          onClick={signOut}
+        >
+          Sign out
+        </button>
       </CenterCard>
     );
   }
@@ -707,9 +810,7 @@ export default function AuthGate() {
   if (pickerOpen) {
     return (
       <CenterCard>
-        <div className="text-xs font-black tracking-widest uppercase text-neutral-400">
-          Choose society
-        </div>
+        <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Choose society</div>
         <div className="text-lg font-black text-neutral-900 mt-1">{session.user.email}</div>
 
         <div className="mt-4 space-y-2">
@@ -743,8 +844,7 @@ export default function AuthGate() {
   }
 
   const activeSoc = options.find((s) => String(s.id) === String(activeSocietyId));
-  const role =
-    memberships.find((m) => String(m.society_id) === String(activeSocietyId))?.role || "player";
+  const role = memberships.find((m) => String(m.society_id) === String(activeSocietyId))?.role || "player";
 
   return (
     <React.Suspense fallback={<CenterCard><div>Loading…</div></CenterCard>}>
