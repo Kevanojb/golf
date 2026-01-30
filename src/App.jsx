@@ -3058,6 +3058,11 @@ function AdminView({
   addEventToSeason,
   removeEventFromSeason,
   clearSeason,
+  seasonsDef,
+  leagueSeasonYear,
+  setLeagueSeasonYear,
+  activeSocietyId,
+  activeSocietySlug,
   user,
   handleLogin,
   handleLogout,
@@ -3070,6 +3075,155 @@ function AdminView({
   const isAdmin = !!user && (isSuperAdmin || role === "admin" || role === "captain");
   const adminLabel = isAdmin ? (user.email || "Admin") : "Not signed in";
   const hasLoadedEvent = !!(computed && computed.length);
+
+  function slugify(s) {
+    return String(s || "")
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "");
+  }
+
+  const seasons = Array.isArray(seasonsDef) ? seasonsDef : [];
+  const seasonsSorted = seasons
+    .slice()
+    .sort((a, b) => String(a?.label || a?.season_id || "").localeCompare(String(b?.label || b?.season_id || "")));
+
+  const [createSeasonOpen, setCreateSeasonOpen] = React.useState(false);
+  const [seasonLabel, setSeasonLabel] = React.useState("");
+  const [seasonCompetition, setSeasonCompetition] = React.useState("season");
+  const [seasonStart, setSeasonStart] = React.useState("");
+  const [seasonEnd, setSeasonEnd] = React.useState("");
+  const [seasonBusy, setSeasonBusy] = React.useState(false);
+
+  const [createSocietyOpen, setCreateSocietyOpen] = React.useState(false);
+  const [societyName, setSocietyName] = React.useState("");
+  const [societySlug, setSocietySlug] = React.useState("");
+  const [societyFirstSeason, setSocietyFirstSeason] = React.useState("");
+  const [societyCompetition, setSocietyCompetition] = React.useState("season");
+  const [societyBusy, setSocietyBusy] = React.useState(false);
+
+  React.useEffect(() => {
+    if (!societyName) return;
+    if (societySlug) return;
+    setSocietySlug(slugify(societyName));
+  }, [societyName, societySlug]);
+
+  async function handleCreateSeason() {
+    if (!isAdmin) return;
+    const supabase = window.__supabase_client__;
+    if (!supabase) {
+      setActionStatus("Supabase client missing.");
+      return;
+    }
+
+    const label = (seasonLabel || "").trim();
+    if (!label) {
+      setActionStatus("Enter a season name.");
+      return;
+    }
+
+    const competition = (seasonCompetition || "season").trim();
+    const season_id = slugify(label) || `season-${Date.now()}`;
+
+    // Default dates: today -> +1 year (safe minimum; captains can edit later in Supabase if they want)
+    const today = new Date();
+    const yyyyMmDd = (d) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    };
+    const start_date = (seasonStart || "").trim() || yyyyMmDd(today);
+    const end = new Date(today);
+    end.setFullYear(end.getFullYear() + 1);
+    const end_date = (seasonEnd || "").trim() || yyyyMmDd(end);
+
+    setSeasonBusy(true);
+    setActionStatus("Creating season…");
+    try {
+      const { error } = await supabase.from("seasons").insert([
+        {
+          society_id: activeSocietyId,
+          competition,
+          season_id,
+          label,
+          start_date,
+          end_date,
+          is_active: false,
+        },
+      ]);
+      if (error) throw error;
+
+      setActionStatus(`✅ Season created: ${label}`);
+      setCreateSeasonOpen(false);
+      setSeasonLabel("");
+      setSeasonStart("");
+      setSeasonEnd("");
+      // Select the new season for follow-up actions
+      setLeagueSeasonYear(season_id);
+    } catch (e) {
+      setActionStatus(e?.message || String(e));
+    } finally {
+      setSeasonBusy(false);
+    }
+  }
+
+  async function handleCreateSociety() {
+    if (!isAdmin) return;
+    const supabase = window.__supabase_client__;
+    if (!supabase) {
+      setActionStatus("Supabase client missing.");
+      return;
+    }
+
+    // The idea: any existing captain can create a new society quickly.
+    // This needs a SECURITY DEFINER RPC in Supabase (see note in status message if it fails).
+    const name = (societyName || "").trim();
+    const slug = ((societySlug || "") || slugify(name)).trim();
+    const firstSeason = (societyFirstSeason || "").trim();
+    if (!name) return setActionStatus("Enter a society name.");
+    if (!slug) return setActionStatus("Enter a slug (or let it auto-generate).");
+
+    setSocietyBusy(true);
+    setActionStatus("Creating society…");
+    try {
+      const { data, error } = await supabase.rpc("create_society_as_captain", {
+        society_name: name,
+        society_slug: slug,
+        first_season_name: firstSeason || null,
+        competition: (societyCompetition || "season").trim(),
+      });
+      if (error) throw error;
+
+      const newSocId = String(data || "");
+      if (!newSocId) {
+        throw new Error("Create society RPC returned no id.");
+      }
+
+      setActionStatus(`✅ Society created: ${name}`);
+      setCreateSocietyOpen(false);
+      setSocietyName("");
+      setSocietySlug("");
+      setSocietyFirstSeason("");
+
+      // Jump to the new society URL (viewer link style). AuthGate will then pick it up.
+      const base = (import.meta?.env?.BASE_URL || "/").replace(/\/+$/, "/");
+      window.location.href = `${base}${slug}`;
+    } catch (e) {
+      const msg = e?.message || String(e);
+      // Make the failure actionable.
+      if (/create_society_as_captain/i.test(msg) || /function .* does not exist/i.test(msg)) {
+        setActionStatus(
+          "Create society needs a Supabase SQL RPC called create_society_as_captain (security definer). If you haven’t added it yet, ask me for the SQL and I’ll give you a copy/paste migration."
+        );
+      } else {
+        setActionStatus(msg);
+      }
+    } finally {
+      setSocietyBusy(false);
+    }
+  }
 
   return (
     <section className="content-card p-4 md:p-6 hm-stage">
@@ -3161,13 +3315,235 @@ function AdminView({
         </button>
 
         <button
-          className={"btn-secondary w-full " + (!isAdmin ? "opacity-50 cursor-not-allowed" : "")}
-          onClick={() => isAdmin && clearSeason && clearSeason()}
-          disabled={!isAdmin}
-          title={!isAdmin ? "Sign in first" : "Deletes ALL season standings rows"}
+          className={"btn-secondary w-full " + (!isAdmin || !leagueSeasonYear ? "opacity-50 cursor-not-allowed" : "")}
+          onClick={() => (isAdmin && leagueSeasonYear && clearSeason ? clearSeason() : null)}
+          disabled={!isAdmin || !leagueSeasonYear}
+          title={!isAdmin ? "Sign in first" : !leagueSeasonYear ? "Pick a season first" : "Deletes the selected season's data"}
         >
-          🗑️ Delete Season
+          🗑️ Delete whole season
         </button>
+      </div>
+
+      {/* Season picker (used by Add game to season + Delete season) */}
+      <div className="mt-4 glass-card p-4 border border-neutral-200">
+        <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Season / competition</div>
+        <div className="mt-1 text-sm font-extrabold text-neutral-900">Choose a season</div>
+        <div className="mt-3">
+          <select
+            className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+            value={leagueSeasonYear || ""}
+            onChange={(e) => setLeagueSeasonYear && setLeagueSeasonYear(e.target.value)}
+            disabled={!isAdmin}
+            title={!isAdmin ? "Sign in first" : "Select the season you want to work on"}
+          >
+            <option value="">-- Select season --</option>
+            {(seasonsSorted || []).map((s) => {
+              const key = String(s.season_id || "");
+              const label = String(s.label || s.season_id || "(unnamed)");
+              const comp = String(s.competition || "");
+              return (
+                <option key={key} value={key}>
+                  {label}{comp ? ` (${comp})` : ""}
+                </option>
+              );
+            })}
+          </select>
+          <div className="mt-2 text-xs text-neutral-500">
+            This selection is used by <span className="font-black">Add game to season</span> and <span className="font-black">Delete whole season</span>.
+          </div>
+        </div>
+      </div>
+
+      {/* Create season */}
+      <div className="mt-4 glass-card p-4 border border-neutral-200">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Season</div>
+            <div className="mt-1 text-sm font-extrabold text-neutral-900">Create a new season</div>
+            <div className="text-xs text-neutral-500">Creates a new season in the current society.</div>
+          </div>
+          <button
+            className={"btn-primary " + (!isAdmin ? "opacity-50 cursor-not-allowed" : "")}
+            onClick={() => (isAdmin ? setCreateSeasonOpen(true) : null)}
+            disabled={!isAdmin}
+            title={!isAdmin ? "Sign in first" : "Create a new season"}
+          >
+            ➕ Create a new season
+          </button>
+        </div>
+
+        {createSeasonOpen ? (
+          <form className="mt-4 grid gap-2" onSubmit={createSeason}>
+            <label className="text-xs font-black text-neutral-600">Season / Competition label</label>
+            <input
+              className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+              value={newSeasonLabel}
+              onChange={(e) => setNewSeasonLabel(e.target.value)}
+              placeholder="e.g. Winter League 2026"
+            />
+
+            <label className="text-xs font-black text-neutral-600 mt-2">Competition type</label>
+            <select
+              className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+              value={newSeasonCompetition}
+              onChange={(e) => setNewSeasonCompetition(e.target.value)}
+            >
+              <option value="season">season</option>
+              <option value="winter">winter</option>
+              <option value="league">league</option>
+            </select>
+
+            <div className="grid grid-cols-2 gap-2 mt-2">
+              <div>
+                <label className="text-xs font-black text-neutral-600">Start date</label>
+                <input
+                  className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+                  type="date"
+                  value={newSeasonStart}
+                  onChange={(e) => setNewSeasonStart(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-black text-neutral-600">End date</label>
+                <input
+                  className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+                  type="date"
+                  value={newSeasonEnd}
+                  onChange={(e) => setNewSeasonEnd(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {createMsg ? (
+              <div className="mt-2 text-xs rounded-xl px-3 py-2 border border-neutral-200 bg-neutral-50">{createMsg}</div>
+            ) : null}
+
+            <div className="flex items-center justify-between gap-2 mt-2">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setCreateMsg("");
+                  setCreateSeasonOpen(false);
+                }}
+              >
+                Back
+              </button>
+              <button className="btn-primary" disabled={creatingSeason}>
+                {creatingSeason ? "Creating…" : "Create season"}
+              </button>
+            </div>
+          </form>
+        ) : null}
+      </div>
+
+      {/* Create society */}
+      <div className="mt-4 glass-card p-4 border border-neutral-200">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Society</div>
+            <div className="mt-1 text-sm font-extrabold text-neutral-900">Create a new society</div>
+            <div className="text-xs text-neutral-500">
+              Captains can create a new society quickly — no invite code required.
+            </div>
+          </div>
+          <button
+            className={"btn-primary " + (!isAdmin ? "opacity-50 cursor-not-allowed" : "")}
+            onClick={() => (isAdmin ? setCreateSocietyOpen(true) : null)}
+            disabled={!isAdmin}
+            title={!isAdmin ? "Sign in first" : "Create a new society"}
+          >
+            🏁 Create a new Society
+          </button>
+        </div>
+
+        {createSocietyOpen ? (
+          <form className="mt-4 grid gap-2" onSubmit={createSociety}>
+            <label className="text-xs font-black text-neutral-600">Society name</label>
+            <input
+              className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+              value={newSocietyName}
+              onChange={(e) => setNewSocietyName(e.target.value)}
+              placeholder="e.g. Dennis The Menace"
+            />
+
+            <label className="text-xs font-black text-neutral-600 mt-2">Slug (optional)</label>
+            <input
+              className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+              value={newSocietySlug}
+              onChange={(e) => setNewSocietySlug(e.target.value)}
+              placeholder="e.g. dennis-the-menace"
+            />
+            <div className="text-xs text-neutral-500">
+              This becomes the golfer link: <span className="font-mono">/golf/&lt;slug&gt;</span>
+            </div>
+
+            <label className="text-xs font-black text-neutral-600 mt-2">First season label</label>
+            <input
+              className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+              value={newSocietySeasonLabel}
+              onChange={(e) => setNewSocietySeasonLabel(e.target.value)}
+              placeholder="e.g. Holiday"
+            />
+
+            <label className="text-xs font-black text-neutral-600 mt-2">Competition type</label>
+            <select
+              className="w-full rounded-xl border border-neutral-200 bg-white px-3 py-2 text-sm"
+              value={newSocietyCompetition}
+              onChange={(e) => setNewSocietyCompetition(e.target.value)}
+            >
+              <option value="season">season</option>
+              <option value="winter">winter</option>
+              <option value="league">league</option>
+            </select>
+
+            {createMsg ? (
+              <div className="mt-2 text-xs rounded-xl px-3 py-2 border border-neutral-200 bg-neutral-50">{createMsg}</div>
+            ) : null}
+
+            <div className="flex items-center justify-between gap-2 mt-2">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => {
+                  setCreateMsg("");
+                  setCreateSocietyOpen(false);
+                }}
+              >
+                Back
+              </button>
+              <button className="btn-primary" disabled={creatingSociety}>
+                {creatingSociety ? "Creating…" : "Create society"}
+              </button>
+            </div>
+
+            <div className="mt-2 text-xs text-neutral-500">
+              Note: this uses a Supabase RPC called <span className="font-mono">create_society_as_captain</span>.
+              If you haven't created that function yet, this will fail.
+            </div>
+          </form>
+        ) : null}
+      </div>
+
+      {/* Player link */}
+      <div className="mt-4 glass-card p-4 border border-neutral-200">
+        <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Players view</div>
+        <div className="mt-1 text-sm font-extrabold text-neutral-900">Share this link with golfers</div>
+        <div className="mt-2 text-sm">
+          <a
+            className="underline font-mono"
+            href={`https://kevanojb.github.io/golf/${String(activeSocietySlug || "")}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {`https://kevanojb.github.io/golf/${String(activeSocietySlug || "")}`}
+          </a>
+        </div>
+        {!activeSocietySlug ? (
+          <div className="mt-2 text-xs text-amber-700">
+            This society has no slug set — please set a slug so golfers can use a friendly URL.
+          </div>
+        ) : null}
       </div>
 
       <div className="mt-4 glass-card p-4 border border-neutral-200">
@@ -14751,7 +15127,15 @@ if (res.error) toast("Error: " + res.error.message);
     computed={computedFiltered}
     addEventToSeason={addEventToSeason}
     removeEventFromSeason={removeEventFromSeason}
-    clearSeason={clearSeason} user={user} activeRole={ACTIVE.role} isSuperAdmin={isSuperAdmin}
+    clearSeason={clearSeason}
+    seasonsDef={seasonsDef}
+    leagueSeasonYear={leagueSeasonYear}
+    setLeagueSeasonYear={setLeagueSeasonYear}
+    activeSocietyId={String(ACTIVE?.id || "")}
+    activeSocietySlug={String(ACTIVE?.slug || "")}
+    user={user}
+    activeRole={ACTIVE.role}
+    isSuperAdmin={isSuperAdmin}
     handleLogin={handleLogin}
     handleLogout={handleLogout}
             handleSwitchSociety={handleSwitchSociety}
