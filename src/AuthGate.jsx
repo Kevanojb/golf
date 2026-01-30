@@ -349,11 +349,6 @@ function readPendingCreate() {
   }
 }
 
-function clearPendingCreate() {
-  try {
-    localStorage.removeItem(LS_PENDING_CREATE);
-  } catch {}
-}
 
 export default function AuthGate() {
   const envOk = Boolean(SUPA_URL && SUPA_KEY);
