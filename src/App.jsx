@@ -4916,44 +4916,76 @@ for (let i = 0; i < holes; i++) {
 
           const wantSeason = (seasonYear && String(seasonYear).toLowerCase() !== "all") ? String(seasonYear) : null;
 
-          const getSeasonId = (round) => {
-            const s = (round && (round.seasonId ?? round.season_id)) ??
-              (round && round.parsed && (round.parsed.seasonId ?? round.parsed.season_id)) ??
-              (round && round.meta && (round.meta.seasonId ?? round.meta.season_id));
+          const getSeasonId = (sr) => {
+            const s =
+              (sr && (sr.seasonId ?? sr.season_id)) ??
+              (sr && sr.parsed && (sr.parsed.seasonId ?? sr.parsed.season_id)) ??
+              (sr && sr.parsed && sr.parsed.meta && (sr.parsed.meta.seasonId ?? sr.parsed.meta.season_id)) ??
+              (sr && sr.meta && (sr.meta.seasonId ?? sr.meta.season_id));
             return (s === undefined || s === null) ? "" : String(s);
           };
 
-          const getPlayerName = (round) =>
-            (round && (round.name ?? round.playerName ?? round.player ?? round.player_name)) || "";
-
-          const sumGross = (round) => {
-            const arr = (round && (round.imputedGrossPerHole ?? round.grossPerHole ?? round.gross_per_hole ?? round.grossHoles)) || null;
-            if (Array.isArray(arr) && arr.length) {
-              let s = 0;
-              for (const v of arr) {
-                const n = Number(v);
-                if (Number.isFinite(n)) s += n;
-              }
-              return s > 0 ? s : NaN;
+          const sumFromArray = (arr) => {
+            if (!Array.isArray(arr) || !arr.length) return NaN;
+            let s = 0;
+            let seen = 0;
+            for (const v of arr) {
+              const n = Number(v);
+              if (Number.isFinite(n) && n > 0) { s += n; seen += 1; }
             }
-            const direct = Number(round?.grossTotal ?? round?.gross_total ?? round?.totalGross ?? round?.total_gross ?? round?.strokes ?? round?.totalStrokes ?? round?.total_strokes);
-            return Number.isFinite(direct) ? direct : NaN;
+            return seen ? s : NaN;
           };
 
-          for (const r of (seasonRounds || [])) {
+          for (const sr of (seasonRounds || [])) {
             if (wantSeason) {
-              const sid = getSeasonId(r);
+              const sid = getSeasonId(sr);
               if (sid && sid !== wantSeason) continue;
-              // If round has no season id, we can't safely include it for a specific season selection.
-              if (!sid) continue;
+              if (!sid) continue; // can't safely assign to a specific season
             }
-            const name = String(getPlayerName(r) || "").trim();
-            if (!name || isTeamLike(name)) continue;
 
-            const g = sumGross(r);
-            if (!Number.isFinite(g)) continue;
+            const parsed = (sr && sr.parsed) ? sr.parsed : sr;
+            const playersList =
+              (parsed && (parsed.players ?? parsed.finalPlayers ?? parsed.playerRows ?? parsed.playerResults)) || [];
 
-            map[name] = (Number(map[name]) || 0) + g;
+            if (!Array.isArray(playersList) || !playersList.length) continue;
+
+            for (const p of playersList) {
+              const name = String(p?.name ?? p?.playerName ?? p?.player ?? p?.player_name ?? "").trim();
+              if (!name || isTeamLike(name)) continue;
+
+              const arr =
+                p?.imputedGrossPerHole ??
+                p?.grossPerHole ??
+                p?.gross_per_hole ??
+                p?.grossHoles ??
+                p?.card?.imputedGrossPerHole ??
+                p?.card?.grossPerHole ??
+                p?.card?.gross_per_hole ??
+                null;
+
+              let g = sumFromArray(arr);
+
+              if (!Number.isFinite(g)) {
+                const direct = Number(
+                  p?.grossTotal ??
+                  p?.gross_total ??
+                  p?.totalGross ??
+                  p?.total_gross ??
+                  p?.strokes ??
+                  p?.totalStrokes ??
+                  p?.total_strokes ??
+                  p?.total ??
+                  p?.gross ??
+                  parsed?.grossTotal ??
+                  parsed?.totalStrokes
+                );
+                g = Number.isFinite(direct) && direct > 0 ? direct : NaN;
+              }
+
+              if (!Number.isFinite(g)) continue;
+
+              map[name] = (Number(map[name]) || 0) + g;
+            }
           }
 
           return map;
