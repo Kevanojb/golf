@@ -3543,8 +3543,8 @@ function AdminView({
               >
                 Back
               </button>
-              <button className="btn-primary" disabled={creatingSociety}>
-                {creatingSociety ? "Creating…" : "Create society"}
+              <button className="btn-primary" disabled={societyBusy}>
+                {societyBusy ? "Creating…" : "Create society"}
               </button>
             </div>
 
