@@ -4905,207 +4905,14 @@ for (let i = 0; i < holes; i++) {
         );
       }
 
-      function Standings({ season, setView, seasonsDef, seasonYear, setSeasonYear, seasonRounds, client, sharedGroups }) {
+      function Standings({ season, setView, seasonsDef, seasonYear, setSeasonYear }) {
         // League standings can be shown as Stableford (default) or Gross.
         // Gross totals are optional — if a player doesn't have gross season totals
         // (older seasons / not yet scanned), we'll show "—".
         const [leagueScoreMode, setLeagueScoreMode] = React.useState("stableford"); // "stableford" | "gross"
 
-        // If seasonRounds isn't populated (common if you haven't run the season scan),
-        // we can still compute Gross standings by parsing the same CSV scorecards
-        // the app already has in Storage (sharedGroups).
-        const [grossAsyncMap, setGrossAsyncMap] = React.useState(null);
-        const [grossAsyncKey, setGrossAsyncKey] = React.useState("");
-        const [grossAsyncBusy, setGrossAsyncBusy] = React.useState(false);
-
-        React.useEffect(() => {
-          let cancelled = false;
-          async function run() {
-            try {
-              const wantSeason = (seasonYear && String(seasonYear).toLowerCase() !== "all") ? String(seasonYear) : "All";
-              const needScan = leagueScoreMode === "gross" && (!seasonRounds || seasonRounds.length === 0);
-              if (!needScan) return;
-              if (!client || !sharedGroups || !Array.isArray(sharedGroups) || sharedGroups.length === 0) return;
-              if (grossAsyncBusy) return;
-              if (grossAsyncMap && grossAsyncKey === wantSeason) return;
-
-              setGrossAsyncBusy(true);
-
-              const events = [];
-              for (const g of sharedGroups) {
-                const evs = Array.isArray(g?.events) ? g.events : [];
-                for (const e of evs) {
-                  if (!e?.path) continue;
-                  if (wantSeason !== "All") {
-                    const sid = (e?.seasonId ?? e?.season_id);
-                    if (!sid || String(sid) !== wantSeason) continue;
-                  }
-                  events.push(e);
-                }
-              }
-
-              const map = Object.create(null);
-
-              const sumFromArray = (arr) => {
-                if (!Array.isArray(arr) || !arr.length) return NaN;
-                let s = 0, seen = 0;
-                for (const v of arr) {
-                  const n = Number(v);
-                  if (Number.isFinite(n) && n > 0) { s += n; seen += 1; }
-                }
-                return seen ? s : NaN;
-              };
-
-              for (const e of events) {
-                if (cancelled) break;
-                try {
-                  const dl = await client.storage.from(BUCKET).download(e.path);
-                  if (dl?.error || !dl?.data) continue;
-                  const csvText = await dl.data.text();
-                  const parsed = parseSquabbitCSV(csvText);
-                  const playersList = (parsed && (parsed.players ?? parsed.finalPlayers ?? parsed.playerRows ?? parsed.playerResults)) || [];
-                  if (!Array.isArray(playersList) || !playersList.length) continue;
-
-                  for (const p of playersList) {
-                    const name = String(p?.name ?? p?.playerName ?? p?.player ?? p?.player_name ?? "").trim();
-                    if (!name || isTeamLike(name)) continue;
-
-                    const arr =
-                      p?.imputedGrossPerHole ??
-                      p?.grossPerHole ??
-                      p?.gross_per_hole ??
-                      p?.grossHoles ??
-                      p?.card?.imputedGrossPerHole ??
-                      p?.card?.grossPerHole ??
-                      p?.card?.gross_per_hole ??
-                      null;
-
-                    let gtot = sumFromArray(arr);
-
-                    if (!Number.isFinite(gtot)) {
-                      const direct = Number(
-                        p?.grossTotal ??
-                        p?.gross_total ??
-                        p?.totalGross ??
-                        p?.total_gross ??
-                        p?.strokes ??
-                        p?.totalStrokes ??
-                        p?.total_strokes ??
-                        p?.total ??
-                        p?.gross
-                      );
-                      gtot = Number.isFinite(direct) && direct > 0 ? direct : NaN;
-                    }
-
-                    if (!Number.isFinite(gtot)) continue;
-                    map[name] = (Number(map[name]) || 0) + gtot;
-                  }
-                } catch (e2) {
-                  // ignore individual file failures
-                }
-              }
-
-              if (!cancelled) {
-                setGrossAsyncMap(map);
-                setGrossAsyncKey(wantSeason);
-              }
-            } finally {
-              if (!cancelled) setGrossAsyncBusy(false);
-            }
-          }
-          run();
-          return () => { cancelled = true; };
-        }, [leagueScoreMode, seasonYear, seasonRounds, client, sharedGroups, grossAsyncKey, grossAsyncMap, grossAsyncBusy]);
-
-        const grossTotalsByName = React.useMemo(() => {
-          const map = Object.create(null);
-
-          const wantSeason = (seasonYear && String(seasonYear).toLowerCase() !== "all") ? String(seasonYear) : null;
-
-          const getSeasonId = (sr) => {
-            const s =
-              (sr && (sr.seasonId ?? sr.season_id)) ??
-              (sr && sr.parsed && (sr.parsed.seasonId ?? sr.parsed.season_id)) ??
-              (sr && sr.parsed && sr.parsed.meta && (sr.parsed.meta.seasonId ?? sr.parsed.meta.season_id)) ??
-              (sr && sr.meta && (sr.meta.seasonId ?? sr.meta.season_id));
-            return (s === undefined || s === null) ? "" : String(s);
-          };
-
-          const sumFromArray = (arr) => {
-            if (!Array.isArray(arr) || !arr.length) return NaN;
-            let s = 0;
-            let seen = 0;
-            for (const v of arr) {
-              const n = Number(v);
-              if (Number.isFinite(n) && n > 0) { s += n; seen += 1; }
-            }
-            return seen ? s : NaN;
-          };
-
-          for (const sr of (seasonRounds || [])) {
-            if (wantSeason) {
-              const sid = getSeasonId(sr);
-              if (sid && sid !== wantSeason) continue;
-              if (!sid) continue; // can't safely assign to a specific season
-            }
-
-            const parsed = (sr && sr.parsed) ? sr.parsed : sr;
-            const playersList =
-              (parsed && (parsed.players ?? parsed.finalPlayers ?? parsed.playerRows ?? parsed.playerResults)) || [];
-
-            if (!Array.isArray(playersList) || !playersList.length) continue;
-
-            for (const p of playersList) {
-              const name = String(p?.name ?? p?.playerName ?? p?.player ?? p?.player_name ?? "").trim();
-              if (!name || isTeamLike(name)) continue;
-
-              const arr =
-                p?.imputedGrossPerHole ??
-                p?.grossPerHole ??
-                p?.gross_per_hole ??
-                p?.grossHoles ??
-                p?.card?.imputedGrossPerHole ??
-                p?.card?.grossPerHole ??
-                p?.card?.gross_per_hole ??
-                null;
-
-              let g = sumFromArray(arr);
-
-              if (!Number.isFinite(g)) {
-                const direct = Number(
-                  p?.grossTotal ??
-                  p?.gross_total ??
-                  p?.totalGross ??
-                  p?.total_gross ??
-                  p?.strokes ??
-                  p?.totalStrokes ??
-                  p?.total_strokes ??
-                  p?.total ??
-                  p?.gross ??
-                  parsed?.grossTotal ??
-                  parsed?.totalStrokes
-                );
-                g = Number.isFinite(direct) && direct > 0 ? direct : NaN;
-              }
-
-              if (!Number.isFinite(g)) continue;
-
-              map[name] = (Number(map[name]) || 0) + g;
-            }
-          }
-
-          return map;
-        }, [seasonRounds, seasonYear]);
-
         const _grossTotal = (r) => {
-          const name = String(r?.name || "").trim();
-          const fromRounds = Number(grossTotalsByName[name]);
-          if (Number.isFinite(fromRounds)) return fromRounds;
-
-          const fromAsync = Number(grossAsyncMap && grossAsyncMap[name]);
-          if (Number.isFinite(fromAsync)) return fromAsync;
-
-          // Fallback: Support a few possible field names on the season row itself.
+          // Support a few possible field names so this works with older/newer schemas.
           const v = Number(
             r?.totalGross ?? r?.total_gross ?? r?.totalStrokes ?? r?.total_strokes ?? r?.grossTotal ?? r?.gross_total
           );
@@ -15542,7 +15349,10 @@ if (res.error) toast("Error: " + res.error.message);
 
 {view === "ratings" && <Ratings computed={computedFiltered} courseTees={courseTees} setView={setView} />}
               {view === "standings" && (
-  <Standings season={seasonFiltered} setView={setView} seasonsDef={seasonsDef} seasonYear={leagueSeasonYear} setSeasonYear={setLeagueSeasonYear} seasonRounds={seasonRounds} client={client} sharedGroups={sharedGroups} />
+  <Standings season={seasonFiltered} setView={setView} seasonsDef={seasonsDef} seasonYear={leagueSeasonYear} setSeasonYear={setLeagueSeasonYear} />
+)}
+              {view === "eclectic" && (
+  <Eclectic season={seasonFiltered} setView={setView} seasonsDef={seasonsDef} seasonYear={leagueSeasonYear} setSeasonYear={setLeagueSeasonYear} />
 )}
               {view === "graphs" && <Graphs computed={computedFiltered} courseTees={courseTees} setView={setView} />}
 
