@@ -3815,8 +3815,7 @@ function PastEvents({ sharedGroups, loadShared, setView }) {
     const p = (async () => {
       try {
         if (!window.__supabase_client__) return null;
-        const client = window.__supabase_client__;
-
+        
         const { data, error } = await client
           .from("courses")
           .select("photo_urls")
