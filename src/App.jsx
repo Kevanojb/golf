@@ -1,12 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { createClient } from "@supabase/supabase-js";
 
-// Supabase client alias used by module-level helpers.
-// Some helpers reference `client` directly; this ensures it exists at runtime.
-// The real instance is attached to window.__supabase_client__ elsewhere in the app.
-var client = (typeof window !== "undefined" && window.__supabase_client__) || null;
-
-
 const SUPER_ADMIN_EMAILS = ["kevanojb@icloud.com"]; // global admin(s)
 
 
@@ -3821,7 +3815,8 @@ function PastEvents({ sharedGroups, loadShared, setView }) {
     const p = (async () => {
       try {
         if (!window.__supabase_client__) return null;
-        
+        const client = window.__supabase_client__;
+
         const { data, error } = await client
           .from("courses")
           .select("photo_urls")
@@ -4910,223 +4905,23 @@ for (let i = 0; i < holes; i++) {
         );
       }
 
-      function Standings({ season, setView, seasonsDef, seasonYear, setSeasonYear, sharedGroups, client }) {
-        const [mode, setMode] = React.useState("stableford"); // stableford | gross
-        const [grossSeason, setGrossSeason] = React.useState(null); // { [name]: { totalGross, events, bestEventGross, bestHoleGross } }
-        const [grossLoading, setGrossLoading] = React.useState(false);
-        const [grossError, setGrossError] = React.useState("");
-
-        // Compute gross standings DIRECTLY from stored CSVs when user selects Gross mode.
-        // This avoids relying on "seasonRounds" (which is often empty unless you run Season Analysis).
-        React.useEffect(() => {
-          if (mode !== "gross") return;
-
-          let cancelled = false;
-
-          async function run() {
-            try {
-              setGrossLoading(true);
-              setGrossError("");
-
-              if (!client) {
-                setGrossError("Supabase client not ready");
-                return;
-              }
-
-              const seasonKey = (seasonYear && String(seasonYear).toLowerCase() !== "all") ? String(seasonYear) : "All";
-              const societyKey = (season && (season.society_id || season.societyId)) || "";
-              const competitionKey = (season && (season.competition || season.competition_name || season.competitionName)) || "";
-              const cacheKey = `${String(societyKey)}|${String(competitionKey)}|${seasonKey}`;
-
-              try { window.__leagueGrossCache = window.__leagueGrossCache || {}; } catch (e) {}
-              try {
-                const cached = window.__leagueGrossCache && window.__leagueGrossCache[cacheKey];
-                if (cached) {
-                  if (!cancelled) setGrossSeason(cached);
-                  return;
-                }
-              } catch (e) {}
-
-              // Flatten storage file list from Past Events
-              const allEvents = (Array.isArray(sharedGroups) ? sharedGroups : [])
-                .flatMap((g) => Array.isArray(g?.events) ? g.events : []);
-
-              const chosenEvents = seasonKey === "All"
-                ? allEvents
-                : allEvents.filter((e) => String(e?.seasonId || e?.season_id || "") === seasonKey);
-
-              const agg = {}; // name -> totals
-
-              // Helper: sum gross from per-hole array
-              const sumGross = (arr) => {
-                if (!Array.isArray(arr)) return NaN;
-                let s = 0;
-                let any = false;
-                for (const v of arr) {
-                  const n = Number(v);
-                  if (Number.isFinite(n) && n > 0) { s += n; any = true; }
-                }
-                return any ? s : NaN;
-              };
-
-              for (const ev of chosenEvents) {
-                if (cancelled) break;
-
-                const path = ev?.path || (ev?.file ? `${PREFIX}/${ev.file}` : "");
-                if (!path) continue;
-
-                try {
-                  const dl = await client.storage.from(BUCKET).download(path);
-                  if (dl?.error) continue;
-                  const text = await dl.data.text();
-
-                  const parsed = parseSquabbitCSV(text);
-                  const pls = Array.isArray(parsed?.players) ? parsed.players : [];
-
-                  for (const pl of pls) {
-                    if (!pl) continue;
-                    const nm = String(pl.name || "").trim();
-                    if (!nm || isTeamLike(nm)) continue;
-
-                    const holes = (pl.imputedGrossPerHole || pl.grossPerHole || pl.gross || null);
-                    const total = sumGross(holes);
-                    if (!Number.isFinite(total)) continue;
-
-                    const prev = agg[nm] || {
-                      name: nm,
-                      totalGross: 0,
-                      events: 0,
-                      bestEventGross: Infinity,
-                      bestHoleGross: Infinity,
-                    };
-
-                    prev.totalGross += total;
-                    prev.events += 1;
-                    if (total < prev.bestEventGross) prev.bestEventGross = total;
-
-                    if (Array.isArray(holes)) {
-                      for (const v of holes) {
-                        const n = Number(v);
-                        if (Number.isFinite(n) && n > 0 && n < prev.bestHoleGross) prev.bestHoleGross = n;
-                      }
-                    }
-
-                    agg[nm] = prev;
-                  }
-                } catch (e) {
-                  // ignore a single bad file
-                }
-              }
-
-              // Normalise Infinity fields to null
-              const final = {};
-              for (const k of Object.keys(agg)) {
-                const r = agg[k];
-                final[k] = {
-                  ...r,
-                  bestEventGross: Number.isFinite(r.bestEventGross) ? r.bestEventGross : null,
-                  bestHoleGross: Number.isFinite(r.bestHoleGross) ? r.bestHoleGross : null,
-                };
-              }
-
-              try {
-                window.__leagueGrossCache = window.__leagueGrossCache || {};
-                window.__leagueGrossCache[cacheKey] = final;
-              } catch (e) {}
-
-              if (!cancelled) setGrossSeason(final);
-            } catch (e) {
-              if (!cancelled) setGrossError(String(e?.message || e));
-            } finally {
-              if (!cancelled) setGrossLoading(false);
-            }
-          }
-
-          run();
-          return () => { cancelled = true; };
-        }, [mode, seasonYear, client, sharedGroups]);
-
-        // Merge stableford season (from DB) with computed gross season (from CSVs)
-        const merged = React.useMemo(() => {
-          const a = season || {};
-          const b = grossSeason || {};
-          const names = new Set([...Object.keys(a), ...Object.keys(b)]);
-          const out = [];
-          for (const name of names) {
-            const sa = a[name] || { name, totalPoints: 0, events: 0, bestEventPoints: 0, bestHolePoints: 0, eclecticTotal: 0 };
-            const gb = b[name] || {};
-            out.push({ ...sa, ...gb, name });
-          }
-          return out;
-        }, [season, grossSeason]);
-
-        const list = React.useMemo(() => {
-          const base = merged.filter((r) => r && r.name && !isTeamLike(r.name));
-          if (mode === "gross") {
-            return base
-              .filter((r) => Number.isFinite(Number(r.totalGross)) || (r.events || 0) > 0)
-              .sort((a, b) => (Number(a.totalGross) - Number(b.totalGross)) || (Number(b.totalPoints||0) - Number(a.totalPoints||0)) || a.name.localeCompare(b.name));
-          }
-          return base.sort((a, b) => Number(b.totalPoints||0) - Number(a.totalPoints||0) || a.name.localeCompare(b.name));
-        }, [merged, mode]);
-
-        const rightControls = (
-          <div className="flex items-center gap-2 flex-wrap">
-            <SeasonPicker seasonsDef={seasonsDef} seasonYear={seasonYear} setSeasonYear={setSeasonYear} leagueTitle={LEAGUE_TITLE} />
-            <select
-              value={mode}
-              onChange={(e) => setMode(e.target.value)}
-              className="px-2 py-1 rounded-lg border border-squab-200 bg-white text-sm"
-              title="League mode"
-            >
-              <option value="stableford">Stableford</option>
-              <option value="gross">Gross</option>
-            </select>
-          </div>
-        );
-
+      function Standings({ season, setView, seasonsDef, seasonYear, setSeasonYear }) {
+        const list = Object.values(season).filter((r) => !isTeamLike(r.name)).sort((a, b) => b.totalPoints - a.totalPoints || a.name.localeCompare(b.name));
         return (
           <section className="content-card p-3 md:p-5 hm-stage">
-            <SoloNav setView={setView} right={rightControls} />
+            <SoloNav setView={setView} right={<SeasonPicker seasonsDef={seasonsDef} seasonYear={seasonYear} setSeasonYear={setSeasonYear} leagueTitle={LEAGUE_TITLE} />} />
             <h2 className="section-title mb-3">League</h2>
-
-            {mode === "gross" && (grossLoading || grossError) && (
-              <div className="mb-3 text-sm">
-                {grossLoading && <span className="text-neutral-600">Calculating gross standings from saved CSVs…</span>}
-                {grossError && <span className="text-red-700">Gross error: {grossError}</span>}
-              </div>
-            )}
-
             <div className="overflow-auto table-wrap">
               <table className="min-w-full text-sm table-zebra">
-                <thead>
-                  <tr className="border-b border-squab-200 text-left">
-                    <th>Rank</th><th>Name</th><th>Events</th>
-                    <th>{mode === "gross" ? "Total Gross" : "Total"}</th>
-                    <th>{mode === "gross" ? "Best Round" : "Best Event"}</th>
-                    <th>{mode === "gross" ? "Best Hole" : "Best Hole"}</th>
-                    <th>Eclectic</th>
-                  </tr>
-                </thead>
+                <thead><tr className="border-b border-squab-200 text-left"><th>Rank</th><th>Name</th><th>Events</th><th>Total</th><th>Best Event</th><th>Best Hole</th><th>Eclectic</th></tr></thead>
                 <tbody className="[&_tr:nth-child(even)]:bg-squab-50/50">
                   {list.map((r, i) => (
                     <tr key={r.name} className={"border-b border-squab-200 " + (i === 0 ? "bg-emerald-50" : i < 3 ? "bg-squab-50" : "")}>
                       <td className="font-semibold">{i === 0 ? "🥇" : i === 1 ? "🥈" : i === 2 ? "🥉" : i + 1}</td>
-                      <td>{r.name}</td>
-                      <td>{r.events || 0}</td>
-                      <td>{mode === "gross" ? (Number.isFinite(Number(r.totalGross)) ? Math.round(Number(r.totalGross)) : "—") : (r.totalPoints || 0)}</td>
-                      <td>{mode === "gross" ? (Number.isFinite(Number(r.bestEventGross)) ? Math.round(Number(r.bestEventGross)) : "—") : (r.bestEventPoints || 0)}</td>
-                      <td>{mode === "gross" ? (Number.isFinite(Number(r.bestHoleGross)) ? Math.round(Number(r.bestHoleGross)) : "—") : (r.bestHolePoints || 0)}</td>
-                      <td>{r.eclecticTotal ?? "—"}</td>
+                      <td>{r.name}</td><td>{r.events}</td><td>{r.totalPoints}</td><td>{r.bestEventPoints}</td><td>{r.bestHolePoints}</td><td>{r.eclecticTotal}</td>
                     </tr>
                   ))}
-                  {list.length === 0 && (
-                    <tr>
-                      <td colSpan="7" className="py-3 text-neutral-600">
-                        {mode === "gross" ? "No gross data found in stored CSVs for this season." : "No season data yet."}
-                      </td>
-                    </tr>
-                  )}
+                  {list.length === 0 && <tr><td colSpan="7" className="py-3 text-neutral-600">No season data yet.</td></tr>}
                 </tbody>
               </table>
             </div>
@@ -12924,7 +12719,7 @@ function App(props) {
 const [tenantTick, setTenantTick] = useState(0);
 
 
-  // Supabase client (provided globally elsewhere in the app)
+
 // CSV import metadata (persist event_date to Supabase)
 const [loadedEventDateMs, setLoadedEventDateMs] = useState(null);
 const [loadedEventFileName, setLoadedEventFileName] = useState("");
@@ -15494,10 +15289,7 @@ if (res.error) toast("Error: " + res.error.message);
 
 {view === "ratings" && <Ratings computed={computedFiltered} courseTees={courseTees} setView={setView} />}
               {view === "standings" && (
-  <Standings season={seasonFiltered} setView={setView} seasonsDef={seasonsDef} seasonYear={leagueSeasonYear} setSeasonYear={setLeagueSeasonYear} 
-    sharedGroups={sharedGroups}
-    client={client}
-  />
+  <Standings season={seasonFiltered} setView={setView} seasonsDef={seasonsDef} seasonYear={leagueSeasonYear} setSeasonYear={setLeagueSeasonYear} />
 )}
               {view === "eclectic" && (
   <Eclectic season={seasonFiltered} setView={setView} seasonsDef={seasonsDef} seasonYear={leagueSeasonYear} setSeasonYear={setLeagueSeasonYear} />
