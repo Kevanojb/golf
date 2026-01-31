@@ -4905,7 +4905,7 @@ for (let i = 0; i < holes; i++) {
         );
       }
 
-      function Standings({ season, setView, seasonsDef, seasonYear, setSeasonYear }) {
+      function Standings({ season, setView, seasonsDef, seasonYear, setSeasonYear, seasonRounds }) {
         // League standings can be shown as Stableford (default) or Gross.
         // Gross totals are optional — if a player doesn't have gross season totals
         // (older seasons / not yet scanned), we'll show "—".
@@ -15401,10 +15401,7 @@ if (res.error) toast("Error: " + res.error.message);
 
 {view === "ratings" && <Ratings computed={computedFiltered} courseTees={courseTees} setView={setView} />}
               {view === "standings" && (
-  <Standings season={seasonFiltered} setView={setView} seasonsDef={seasonsDef} seasonYear={leagueSeasonYear} setSeasonYear={setLeagueSeasonYear} />
-)}
-              {view === "eclectic" && (
-  <Eclectic season={seasonFiltered} setView={setView} seasonsDef={seasonsDef} seasonYear={leagueSeasonYear} setSeasonYear={setLeagueSeasonYear} />
+  <Standings season={seasonFiltered} setView={setView} seasonsDef={seasonsDef} seasonYear={leagueSeasonYear} setSeasonYear={setLeagueSeasonYear} seasonRounds={seasonRounds} />
 )}
               {view === "graphs" && <Graphs computed={computedFiltered} courseTees={courseTees} setView={setView} />}
 
