@@ -1,15 +1,13 @@
-import React from "react";
-import ReactDOM from "react-dom/client";
-import { HashRouter } from "react-router-dom";
+<script>
+  (function () {
+    var base = "/golf/";
+    var path = window.location.pathname;
 
-import Bootstrap from "./Bootstrap.jsx";
-import "./index.css";
-import "./legacy.css";
+    // If someone hits /golf/<slug>, convert to /golf/#/<slug>
+    if (path.startsWith(base) && path !== base && path !== base + "index.html") {
+      var slug = path.slice(base.length); // everything after /golf/
+      window.location.replace(base + "#/" + slug + window.location.search + window.location.hash);
+    }
+  })();
+</script>
 
-ReactDOM.createRoot(document.getElementById("root")).render(
-  <React.StrictMode>
-    <HashRouter basename={import.meta.env.BASE_URL}>
-      <Bootstrap />
-    </HashRouter>
-  </React.StrictMode>
-);
