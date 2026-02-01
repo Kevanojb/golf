@@ -28,14 +28,20 @@
     />
 
     <meta name="theme-color" content="#0f172a" />
-    <link rel="manifest" href="./manifest.webmanifest" />
 
-    <!-- iOS home screen icons -->
-    <link rel="apple-touch-icon" sizes="192x192" href="./pwa-192.png" />
-    <link rel="apple-touch-icon" sizes="512x512" href="./pwa-512.png" />
+    <!-- ✅ PWA/Standalone DISABLED so iOS "Add to Home Screen" keeps the exact slug URL
+         If you re-enable these, iOS will likely pin /golf/index.html again. -->
+    <!--
+    <link rel="manifest" href="./manifest.webmanifest" />
 
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    -->
+
+    <!-- Optional: keep these if you still want a nice icon when adding the shortcut.
+         Comment them too if you prefer. -->
+    <link rel="apple-touch-icon" sizes="192x192" href="./pwa-192.png" />
+    <link rel="apple-touch-icon" sizes="512x512" href="./pwa-512.png" />
   </head>
 
   <body>
