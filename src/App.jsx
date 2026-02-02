@@ -7138,18 +7138,21 @@ const parLeaders = React.useMemo(() => {
     return (f > b) ? "You score stronger on the front 9." : "You score stronger on the back 9.";
   })();
 
-  const _overallPPH = (() => {
-    const vals = [];
+  const _overallPPHMeta = (() => {
+    let sum = 0;
+    let n = 0;
     for (const r of (_windowSeriesPP || [])) {
       const ph = Array.isArray(r?.perHole) ? r.perHole : null;
       if (!ph) continue;
       for (const x of ph) {
         const v = _num(x, NaN);
-        if (Number.isFinite(v)) vals.push(v);
+        if (Number.isFinite(v)) { sum += v; n += 1; }
       }
     }
-    return vals.length ? (vals.reduce((a,b)=>a+b,0) / vals.length) : NaN;
+    return { pph: n ? (sum / n) : NaN, n };
   })();
+
+  const _overallPPH = _overallPPHMeta.pph;
 
   const _rangeAvgTotal = (a, b) => {
     const totals = [];
@@ -7167,8 +7170,29 @@ const parLeaders = React.useMemo(() => {
     return totals.length ? (totals.reduce((x,y)=>x+y,0) / totals.length) : NaN;
   };
 
+  const _rangeNHoles = (a, b) => {
+    // Count how many hole-values are considered in _rangeAvgTotal (missing treated as 0).
+    let rounds = 0;
+    for (const r of (_windowSeriesPP || [])) {
+      const ph = Array.isArray(r?.perHole) ? r.perHole : null;
+      if (!ph || ph.length < b) continue;
+      // Require at least one finite value in the range to count the round (mirrors _rangeAvgTotal).
+      let ok = false;
+      for (let i = a; i < b; i++) {
+        const v = _num(ph[i], NaN);
+        if (Number.isFinite(v)) { ok = true; break; }
+      }
+      if (ok) rounds += 1;
+    }
+    return rounds * (b - a);
+  };
+
+
   const _first3AvgPts = _rangeAvgTotal(0, 3);       // holes 1-3
   const _last3AvgPts  = _rangeAvgTotal(15, 18);     // holes 16-18
+
+  const _first3NHoles = _rangeNHoles(0, 3);
+  const _last3NHoles  = _rangeNHoles(15, 18);
 
   const _fastStart = (() => {
     if (!Number.isFinite(_first3AvgPts) || !Number.isFinite(_overallPPH)) return null;
@@ -7206,7 +7230,8 @@ const parLeaders = React.useMemo(() => {
   const _fmtSignedNum = (x, d=1, invert=false) => {
     const v = Number(x);
     if (!Number.isFinite(v)) return "—";
-    const w = invert ? -v : v;
+    let w = invert ? -v : v;
+    if (Math.abs(w) < 1e-6) w = 0; // avoid "-0"
     const s = (w > 0) ? "+" : "";
     return s + PR_fmt(w, d);
   };
@@ -8205,19 +8230,23 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
               <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
                 <div className="text-xs font-black tracking-widest uppercase text-neutral-500">Start & Finish</div>
 
-                <div className="mt-2 text-sm text-neutral-600">Fast starter (holes 1–3)</div>
+                <div className="mt-2 text-sm text-neutral-600">
+                  Fast starter (holes 1–3{_first3NHoles ? `, n=${_first3NHoles} holes` : ""})
+                </div>
                 <div className="text-lg font-extrabold text-neutral-900 tabular-nums">
                   {_fastStart ? (_fastStart.is ? "Yes" : "No") : "—"}
                   <span className="ml-2 text-sm font-bold text-neutral-500">
-                    ({Number.isFinite(_first3AvgPts) ? PR_fmt(_first3AvgPts/3,2) : "—"} pts/h, {_fastStart ? _fmtSignedNum(_fastStart.delta,2) : "—"} vs avg)
+                    ({_fastStart ? PR_fmt(_fastStart.pph,2) : "—"} pts/h, {_fastStart ? _fmtSignedNum(_fastStart.delta,2) : "—"} vs avg {Number.isFinite(_overallPPH) ? PR_fmt(_overallPPH,2) : "—"})
                   </span>
                 </div>
 
-                <div className="mt-3 text-sm text-neutral-600">Clutch finisher (holes 16–18)</div>
+                <div className="mt-3 text-sm text-neutral-600">
+                  Clutch finisher (holes 16–18{_last3NHoles ? `, n=${_last3NHoles} holes` : ""})
+                </div>
                 <div className="text-lg font-extrabold text-neutral-900 tabular-nums">
                   {_clutchFinish ? (_clutchFinish.is ? "Yes" : "No") : "—"}
                   <span className="ml-2 text-sm font-bold text-neutral-500">
-                    ({Number.isFinite(_last3AvgPts) ? PR_fmt(_last3AvgPts/3,2) : "—"} pts/h, {_clutchFinish ? _fmtSignedNum(_clutchFinish.delta,2) : "—"} vs avg)
+                    ({_clutchFinish ? PR_fmt(_clutchFinish.pph,2) : "—"} pts/h, {_clutchFinish ? _fmtSignedNum(_clutchFinish.delta,2) : "—"} vs avg {Number.isFinite(_overallPPH) ? PR_fmt(_overallPPH,2) : "—"})
                   </span>
                 </div>
               </div>
