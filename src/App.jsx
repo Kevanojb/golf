@@ -4050,6 +4050,9 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
 
    // --- EVENT SCREEN (WITH CALCULATOR) ---
    function EventScreen({ computed, setView, courseSlope, setCourseSlope, courseRating, setCourseRating, startHcapMode, setStartHcapMode, nextHcapMode, setNextHcapMode, oddsMaxRounds, setOddsMaxRounds, seasonRoundsFiltered, seasonRoundsAll, seasonModelAll }) {
+          // Supabase client is created in AuthGate/App and is also stashed on window for convenience.
+          // This screen needs it for the Winner Odds hide/unhide toggle.
+          const client = (typeof window !== "undefined" && window.__supabase_client__) ? window.__supabase_client__ : null;
           
 
           const [showModelInternals, setShowModelInternals] = useState(false);
@@ -13982,6 +13985,7 @@ function _extractDateMsFromCsvText(csvText) {
 }
 
 async function loadAllGamesAndBuildPlayerModel(opts = {}) {
+  const client = (typeof window !== "undefined" && window.__supabase_client__) ? window.__supabase_client__ : null;
   if (!client) { alert("Supabase client not ready"); return; }
 
   setSeasonError("");
