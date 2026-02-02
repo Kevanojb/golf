@@ -4292,31 +4292,32 @@ const rows = Array.from(leagueKeys).map(k => {
     })
     .filter(Boolean);
 
-  const last12 = resHist.slice(-12); // chronological already
+  const _oddsMaxN = Math.max(3, Math.min(12, Number(oddsMaxRounds) || 12));
+  const lastN = resHist.slice(-_oddsMaxN); // chronological already
 
   // Exponentially weighted mean of residuals (recent form matters more)
   const decay = 0.85;
   let wsum = 0, rsum = 0;
-  for (let i=0;i<last12.length;i++){
-    const age = (last12.length-1)-i;
+  for (let i=0;i<lastN.length;i++){
+    const age = (lastN.length-1)-i;
     const w = Math.pow(decay, age);
     wsum += w;
-    rsum += w * last12[i].res;
+    rsum += w * lastN[i].res;
   }
   const rawResMu = wsum>0 ? (rsum/wsum) : 0;
 
   // Small-sample shrinkage toward 0 (league-average) so newcomers don't get silly odds
-  const n = last12.length;
+  const n = lastN.length;
   const shrink = n / (n + 6); // 0..1
   const resMu = rawResMu * shrink;
 
   // Weighted residual sigma (with a gentle prior)
   let vW = 0, vS = 0;
-  for (let i=0;i<last12.length;i++){
-    const age = (last12.length-1)-i;
+  for (let i=0;i<lastN.length;i++){
+    const age = (lastN.length-1)-i;
     const w = Math.pow(decay, age);
     vW += w;
-    vS += w * Math.pow(last12[i].res - rawResMu, 2);
+    vS += w * Math.pow(lastN[i].res - rawResMu, 2);
   }
   const rawResSigma = (vW>0 ? Math.sqrt(vS/vW) : 3.8);
   const resSigma = Math.max(1.2, Math.min(7.5, (rawResSigma*(0.6+0.4*shrink)) + (1-shrink)*3.0));
@@ -4329,7 +4330,7 @@ const rows = Array.from(leagueKeys).map(k => {
       const age = (n-1)-i;
       const w = Math.pow(decay, age);
       const x = i;           // 0..n-1 (older -> smaller i)
-      const y = last12[i].res;
+      const y = lastN[i].res;
       sw += w; sx += w*x; sy += w*y; sxx += w*x*x; sxy += w*x*y;
     }
     const denom = (sw*sxx - sx*sx);
@@ -4642,7 +4643,7 @@ for (let s = 0; s < sims; s++){
               c4,
               gap,
             };
-          }, [computed, nextHcapMode, seasonRoundsAll, seasonRoundsFiltered]);
+          }, [computed, nextHcapMode, oddsMaxRounds, seasonRoundsAll, seasonRoundsFiltered, seasonModelAll]);
 return (
             <section className="content-card p-4 md:p-6">
               <Breadcrumbs items={[{ label: "Round Leaderboard" }]} />
@@ -13059,6 +13060,19 @@ const handleAdminPassword = React.useCallback((pw) => {
           );
         }, [seasonRounds, seasonYear]);
 
+// All rounds across all seasons (ignores seasonYear/seasonLimit) for Winner Odds.
+// This lets the "Rounds" dropdown on the Event screen override season filtering just for odds.
+const seasonRoundsAllForOdds = React.useMemo(() => {
+  try { return Array.isArray(seasonRounds) ? seasonRounds.slice() : []; } catch { return []; }
+}, [seasonRounds]);
+
+// Winner Odds should respect admin-hidden players, but should NOT be constrained by season filters.
+const seasonModelOddsAll = React.useMemo(() => {
+  try { return buildSeasonPlayerModel(seasonRoundsAllForOdds, { hiddenKeys: hiddenKeySet }); }
+  catch { try { return buildSeasonPlayerModel(seasonRoundsAllForOdds); } catch { return null; } }
+}, [seasonRoundsAllForOdds, hiddenPlayerKeys]);
+
+
 const [seasonLoading, setSeasonLoading] = useState(false);
         // Auto-load season rounds so Winner Odds can include all league players (from season rounds)
         React.useEffect(() => {
@@ -15339,7 +15353,7 @@ if (res.error) toast("Error: " + res.error.message);
   />
 )}
 {view === "past" && <PastEvents sharedGroups={sharedGroups} loadShared={loadShared} setView={setView} />}
-              {view === "event" && <EventScreen computed={computedFiltered} setView={setView} courseSlope={courseSlope} setCourseSlope={setCourseSlope} courseRating={courseRating} setCourseRating={setCourseRating} startHcapMode={startHcapMode} setStartHcapMode={setStartHcapMode} nextHcapMode={nextHcapMode} setNextHcapMode={setNextHcapMode} oddsMaxRounds={oddsMaxRounds} setOddsMaxRounds={setOddsMaxRounds} seasonRoundsFiltered={seasonRoundsFiltered} seasonRoundsAll={seasonRoundsInSeasonAll} seasonModelAll={seasonModelAll} />}
+              {view === "event" && <EventScreen computed={computedFiltered} setView={setView} courseSlope={courseSlope} setCourseSlope={setCourseSlope} courseRating={courseRating} setCourseRating={setCourseRating} startHcapMode={startHcapMode} setStartHcapMode={setStartHcapMode} nextHcapMode={nextHcapMode} setNextHcapMode={setNextHcapMode} oddsMaxRounds={oddsMaxRounds} setOddsMaxRounds={setOddsMaxRounds} seasonRoundsFiltered={seasonRoundsFiltered} seasonRoundsAll={seasonRoundsAllForOdds} seasonModelAll={seasonModelOddsAll} />}
               {view === "banter" && <BanterStats computed={computedFiltered} setView={setView} />}
               {view === "guide" && <GuideView setView={setView} leagueTitle={LEAGUE_TITLE} />}
               {view === "mirror_read" && <MirrorReadView setView={setView} />}
