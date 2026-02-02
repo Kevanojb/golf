@@ -4049,7 +4049,7 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
 }
 
    // --- EVENT SCREEN (WITH CALCULATOR) ---
-   function EventScreen({ computed, setView, courseSlope, setCourseSlope, courseRating, setCourseRating, startHcapMode, setStartHcapMode, nextHcapMode, setNextHcapMode, seasonRoundsFiltered, seasonRoundsAll, seasonModelAll }) {
+   function EventScreen({ computed, setView, courseSlope, setCourseSlope, courseRating, setCourseRating, startHcapMode, setStartHcapMode, nextHcapMode, setNextHcapMode, oddsMaxRounds, setOddsMaxRounds, seasonRoundsFiltered, seasonRoundsAll, seasonModelAll }) {
           
 
           const [showModelInternals, setShowModelInternals] = useState(false);
@@ -4742,12 +4742,25 @@ return (
                     <div className="text-xs uppercase tracking-wider text-neutral-500 font-bold">Next Society Stableford</div>
                     <div className="text-lg font-black text-neutral-900">Winner odds (next HI)</div>
                     <div className="text-xs text-neutral-500 mt-1">
-                      Based on each player’s last up to <b>12</b> rounds in the current filters, using <b>points − 36</b> form + volatility.
+                      Based on each player’s last up to <b>{oddsMaxRounds}</b> rounds in the current filters, using <b>points − 36</b> form + volatility.
                     </div>
                   </div>
                   <div className="flex items-center gap-3 text-xs text-neutral-500">
                     <div>
                       Sims: <span className="font-mono font-bold">{winnerOdds.sims}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-neutral-500">Rounds</span>
+                      <select
+                        className="rounded-lg border border-neutral-200 bg-white px-2 py-1 text-xs font-bold text-neutral-800"
+                        value={oddsMaxRounds}
+                        onChange={(e) => setOddsMaxRounds(Math.max(3, Math.min(12, Number(e.target.value) || 12)))}
+                        title="How many recent rounds to use in the winner odds model"
+                      >
+                        {[3,4,5,6,7,8,9,10,11,12].map(n => (
+                          <option key={n} value={n}>{n}</option>
+                        ))}
+                      </select>
                     </div>
                     <div className="flex items-center gap-2">
                       <span className="text-neutral-500">Model internals</span>
@@ -14105,6 +14118,8 @@ setSeasonRounds(rounds);
         const [startHcapMode, setStartHcapMode] = useState("raw");
         const [nextHcapMode, setNextHcapMode] = useState("den");
 
+        const [oddsMaxRounds, setOddsMaxRounds] = useState(12);
+
         useEffect(() => {
           let cancelled = false;
           async function boot() {
@@ -14834,7 +14849,7 @@ if (_cur.length) groups.push(_cur);
                 ptsHistLocal.sort((a,b)=>a.t-b.t);
 
                 // Build last up to 12 rounds, then prefer those within ±4 HI of the *next* handicap
-                const lastAll = ptsHistLocal.slice(-12);
+                const lastAll = ptsHistLocal.slice(-Math.max(3, Math.min(12, Number(oddsMaxRounds) || 12)));
 
                 const targetHI = (Number.isFinite(Number(nextExactNum)) ? Number(nextExactNum) : Number(r.startExact));
                 const similar = lastAll.filter(x => Number.isFinite(Number(x.h)) && Math.abs(Number(x.h) - targetHI) <= 4);
@@ -14932,7 +14947,7 @@ if (_cur.length) groups.push(_cur);
             pos += g.length;
           }
           return out.sort((a, b) => a.position - b.position);
-        }, [players, courseTees, courseSlope, courseRating, startHcapMode, nextHcapMode, seasonRounds]);
+        }, [players, courseTees, courseSlope, courseRating, startHcapMode, nextHcapMode, seasonRounds, oddsMaxRounds]);
 
         
 async function ensureSeasonExists(client) {
@@ -15324,7 +15339,7 @@ if (res.error) toast("Error: " + res.error.message);
   />
 )}
 {view === "past" && <PastEvents sharedGroups={sharedGroups} loadShared={loadShared} setView={setView} />}
-              {view === "event" && <EventScreen computed={computedFiltered} setView={setView} courseSlope={courseSlope} setCourseSlope={setCourseSlope} courseRating={courseRating} setCourseRating={setCourseRating} startHcapMode={startHcapMode} setStartHcapMode={setStartHcapMode} nextHcapMode={nextHcapMode} setNextHcapMode={setNextHcapMode} seasonRoundsFiltered={seasonRoundsFiltered} seasonRoundsAll={seasonRoundsInSeasonAll} seasonModelAll={seasonModelAll} />}
+              {view === "event" && <EventScreen computed={computedFiltered} setView={setView} courseSlope={courseSlope} setCourseSlope={setCourseSlope} courseRating={courseRating} setCourseRating={setCourseRating} startHcapMode={startHcapMode} setStartHcapMode={setStartHcapMode} nextHcapMode={nextHcapMode} setNextHcapMode={setNextHcapMode} oddsMaxRounds={oddsMaxRounds} setOddsMaxRounds={setOddsMaxRounds} seasonRoundsFiltered={seasonRoundsFiltered} seasonRoundsAll={seasonRoundsInSeasonAll} seasonModelAll={seasonModelAll} />}
               {view === "banter" && <BanterStats computed={computedFiltered} setView={setView} />}
               {view === "guide" && <GuideView setView={setView} leagueTitle={LEAGUE_TITLE} />}
               {view === "mirror_read" && <MirrorReadView setView={setView} />}
