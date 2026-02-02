@@ -1406,6 +1406,11 @@ function PR_fmt(v, opts){
   if (!Number.isFinite(n)) return "—";
 
   const o = opts && typeof opts === "object" ? opts : {};
+  // Back-compat: allow PR_fmt(x, 2) to mean 2 decimal places
+  if (typeof opts === "number" && Number.isFinite(opts)) {
+    o.min = opts;
+    o.max = opts;
+  }
   const min = Number.isFinite(o.min) ? o.min : 0;
   const max = Number.isFinite(o.max) ? o.max : (Number.isFinite(o.dp) ? o.dp : min);
   const sign = o.sign === true;
