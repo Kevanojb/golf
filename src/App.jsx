@@ -4370,11 +4370,11 @@ let hiMean = prevStartExact;
 let hiSlope = leagueHiSlope; // shrink toward league estimate by default
 try {
   let wH=0, xS=0, yS=0;
-  for (let i=0;i<last12.length;i++){
-    const age = (last12.length-1)-i;
+  for (let i=0;i<lastN.length;i++){
+    const age = (lastN.length-1)-i;
     const w = Math.pow(decay, age);
-    const x = Number(last12[i].hi);
-    const y = Number(last12[i].res);
+    const x = Number(lastN[i].hi);
+    const y = Number(lastN[i].res);
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
     wH += w;
     xS += w * x;
@@ -4386,11 +4386,11 @@ try {
     hiMean = mx;
 
     let sxx=0, sxy=0, nPairs=0;
-    for (let i=0;i<last12.length;i++){
-      const age = (last12.length-1)-i;
+    for (let i=0;i<lastN.length;i++){
+      const age = (lastN.length-1)-i;
       const w = Math.pow(decay, age);
-      const x = Number(last12[i].hi);
-      const y = Number(last12[i].res);
+      const x = Number(lastN[i].hi);
+      const y = Number(lastN[i].res);
       if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
       const dx = x - mx;
       const dy = y - my;
