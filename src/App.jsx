@@ -4877,8 +4877,8 @@ return (
                             <input
                               type="checkbox"
                               className="h-4 w-4 accent-black"
-                              checked={false}
-                              onChange={() => setExcludeFromOdds(r.name, true)}
+                              checked={!!(oddsExcludeMap && oddsExcludeMap[normalizeName(r.name)])}
+                              onChange={(e) => setExcludeFromOdds(r.name, !!e.target.checked)}
                               title="Hide this golfer from winner odds"
                             />
                           </td>
