@@ -14198,20 +14198,42 @@ setSeasonRounds(rounds);
     setLoginBusy(false);
   }
 }
+        
         async function handleSwitchSociety() {
-          // Keeps the Supabase session, but forces AuthGate to rerun so you can pick another society.
-          // (If your AuthGate remembers a selection, you may need to clear its key there too.)
+          // Keep the Supabase session, but clear any persisted "active society" selection
+          // and navigate back to the app root so the society picker / slug bootstrap can run cleanly.
           try {
             if (typeof window !== "undefined") {
+              // Clear in-memory globals used by App/AuthGate variants
               window.__activeSocietyId = "";
               window.__activeSocietySlug = "";
               window.__activeSocietyName = "";
               window.__activeSocietyRole = "";
             }
           } catch (e) {}
-          // Hard reload so module-scope tenant constants re-evaluate
-          try { window.location.reload(); } catch (e) {}
+
+          try {
+            // Clear persisted selections (support both older and newer keys)
+            sessionStorage.removeItem("dsl_active_society_id");
+            sessionStorage.removeItem("dsl_active_society_slug");
+            sessionStorage.removeItem("dsl_active_society_name");
+
+            localStorage.removeItem("den_active_society_id_v1");
+            localStorage.removeItem("dsl_active_society_id");
+            localStorage.removeItem("dsl_active_society_slug");
+            localStorage.removeItem("dsl_active_society_name");
+          } catch (e) {}
+
+          // IMPORTANT: don't reload the current /<society-slug>/ URL, because slug bootstrapping
+          // will immediately select the same society again.
+          try {
+            const base = (import.meta && import.meta.env && import.meta.env.BASE_URL) ? String(import.meta.env.BASE_URL) : "/golf/";
+            window.location.href = base.endsWith("/") ? base : (base + "/");
+          } catch (e) {
+            try { window.location.href = "/golf/"; } catch (e2) {}
+          }
         }
+
 
         async function handleLogout() {
           try { await client.auth.signOut(); } catch (e) {}
