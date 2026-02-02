@@ -4049,18 +4049,14 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
 }
 
    // --- EVENT SCREEN (WITH CALCULATOR) ---
-   function EventScreen({ computed, setView, courseSlope, setCourseSlope, courseRating, setCourseRating, startHcapMode, setStartHcapMode, nextHcapMode, setNextHcapMode, oddsMaxRounds, setOddsMaxRounds, seasonRoundsFiltered, seasonRoundsAll, seasonModelAll, oddsExcludeMap, oddsExcludedNames, setExcludeFromOdds }) {
+   function EventScreen({ computed, setView, courseSlope, setCourseSlope, courseRating, setCourseRating, startHcapMode, setStartHcapMode, nextHcapMode, setNextHcapMode, oddsMaxRounds, setOddsMaxRounds, seasonRoundsFiltered, seasonRoundsAll, seasonModelAll }) {
           
 
           const [showModelInternals, setShowModelInternals] = useState(false);
 
           // ---- Next Event Winner Odds (Deterministic Monte Carlo, Stableford points) ----
           const winnerOdds = useMemo(() => {
-            const isExcludedName = (nm) => {
-              const k = normalizeName(String(nm || ""));
-              return !!(k && oddsExcludeMap && oddsExcludeMap[k]);
-            };
-            const currentRows = (Array.isArray(computed) ? computed : []).filter(r => r && r.name && !isExcludedName(r.name));
+            const currentRows = (Array.isArray(computed) ? computed : []).filter(r => r && r.name);
             // season history is derived below (prefer seasonModelAll; fall back to seasonRounds*)
             // NOTE: odds use full season history (seasonRoundsAll) to avoid tiny sample sizes; filters only affect on-screen leaderboard.
             // League roster = anyone who has appeared in season rounds, plus anyone in the current round
@@ -4094,7 +4090,6 @@ if (seasonModelAll && Array.isArray(seasonModelAll.players) && seasonModelAll.pl
     const nm = String(p?.name || "").trim();
     const k = normalizeName(nm);
     if (!k) continue;
-    if (isExcludedName(nm)) continue;
 
     const series = Array.isArray(p?.series) ? p.series : [];
     for (const s of series) {
@@ -4181,7 +4176,6 @@ if (seasonModelAll && Array.isArray(seasonModelAll.players) && seasonModelAll.pl
       const nm = String(p?.name || p?.player || p?.playerName || "").trim();
       const k = normalizeName(nm);
       if (!k) return;
-      if (isExcludedName(nm)) return;
 
       const pts = _pushPts(p);
       const hi = Number(p?.startExact ?? p?.index ?? p?.hi ?? p?.handicap ?? p?.exact ?? p?.hiExact);
@@ -4752,30 +4746,6 @@ return (
                       Based on each player’s last up to <b>{oddsMaxRounds}</b> rounds in the current filters, using <b>points − 36</b> form + volatility.
                     </div>
                   </div>
-
-                  {Array.isArray(oddsExcludedNames) && oddsExcludedNames.length ? (
-                    <div className="mt-2 text-[11px] text-neutral-600">
-                      Hidden from odds (tap to re-include):
-                      <div className="mt-1 flex flex-wrap gap-2">
-                        {oddsExcludedNames.slice(0, 80).map((nm) => (
-                          <label key={nm} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full border border-neutral-200 bg-white">
-                            <input
-                              type="checkbox"
-                              className="h-3 w-3 accent-black"
-                              checked={true}
-                              onChange={(e) => setExcludeFromOdds(nm, false)}
-                              title="Show this golfer in winner odds"
-                            />
-                            <span>{nm}</span>
-                          </label>
-                        ))}
-                        {oddsExcludedNames.length > 80 ? (
-                          <span className="text-neutral-400">(+{oddsExcludedNames.length - 80} more)</span>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
-
                   <div className="flex items-center gap-3 text-xs text-neutral-500">
                     <div>
                       Sims: <span className="font-mono font-bold">{winnerOdds.sims}</span>
@@ -4856,7 +4826,6 @@ return (
                       <tr>
                         <th className="py-2 px-3 text-left">#</th>
                         <th className="py-2 px-3 text-left">Player</th>
-                        <th className="py-2 px-3 text-center" title="Hide this golfer from winner odds">Hide</th>
                         <th className="py-2 px-3 text-right">Win%</th>
                         <th className="py-2 px-3 text-right">Top 3%</th>
                         <th className="py-2 px-3 text-right">Top 4%</th>
@@ -4873,15 +4842,6 @@ return (
                         <tr key={r.name}>
                           <td className="py-2 px-3 text-neutral-500 font-mono text-xs">{i+1}</td>
                           <td className="py-2 px-3 font-bold text-neutral-900">{r.name}</td>
-                          <td className="py-2 px-3 text-center">
-                            <input
-                              type="checkbox"
-                              className="h-4 w-4 accent-black"
-                              checked={false}
-                              onChange={() => setExcludeFromOdds(r.name, true)}
-                              title="Hide this golfer from winner odds"
-                            />
-                          </td>
                           <td className="py-2 px-3 text-right font-black text-neutral-900">{r.winPct.toFixed(1)}%</td>
                           <td className="py-2 px-3 text-right font-bold text-neutral-700">{r.top3Pct.toFixed(1)}%</td>
                           <td className="py-2 px-3 text-right font-bold text-neutral-700">{r.top4Pct.toFixed(1)}%</td>
@@ -14174,11 +14134,6 @@ setSeasonRounds(rounds);
 
         const [oddsMaxRounds, setOddsMaxRounds] = useState(12);
 
-        // Per-society: keep inactive golfers in leagues/history but hide them from Winner Odds.
-        // Map key = normalizeName(name) => true
-        const [oddsExcludeMap, setOddsExcludeMap] = useState({});
-        const [oddsExcludedNames, setOddsExcludedNames] = useState([]);
-
         useEffect(() => {
           let cancelled = false;
           async function boot() {
@@ -14244,7 +14199,6 @@ setSeasonRounds(rounds);
                 await refreshShared(c);
                 await fetchSeasons(c);
                 await fetchSeason(c);
-                await fetchOddsExclusions(c);
                 await fetchAvailableCourses(c);
                 await fetchPlayerVisibility(c);
               }
@@ -14654,57 +14608,6 @@ async function refreshShared(c) {
           }
           setSeason(map);
         }
-
-        async function fetchOddsExclusions(c) {
-          c = c || client; if (!c) return;
-          try {
-            const r = await c
-              .from(STANDINGS_TABLE)
-              .select("name,exclude_from_odds")
-              .eq("competition", COMPETITION)
-              .eq("society_id", SOCIETY_ID)
-              .neq("name", "");
-            if (r.error) return;
-            const m = {};
-            const names = [];
-            for (const rec of (r.data || [])) {
-              const nm = String(rec?.name || "").trim();
-              if (!nm) continue;
-              const k = normalizeName(nm);
-              if (!k) continue;
-              if (rec?.exclude_from_odds) { m[k] = true; names.push(nm); }
-            }
-            setOddsExcludeMap(m);
-            setOddsExcludedNames(names);
-          } catch (e) {
-            // ignore
-          }
-        }
-
-        async function setExcludeFromOdds(name, exclude) {
-          const nm = String(name || "").trim();
-          if (!nm) return;
-          const k = normalizeName(nm);
-          if (!k) return;
-          // Optimistic UI: remove immediately
-          setOddsExcludeMap((prev) => ({ ...(prev || {}), [k]: !!exclude }));
-          try {
-            const up = await client
-              .from(STANDINGS_TABLE)
-              .update({ exclude_from_odds: !!exclude })
-              .eq("competition", COMPETITION)
-              .eq("society_id", SOCIETY_ID)
-              .eq("name", nm);
-            if (up?.error) {
-              toast("Could not update odds visibility: " + up.error.message);
-            }
-          } catch (e) {
-            toast("Could not update odds visibility");
-          } finally {
-            try { await fetchOddsExclusions(client); } catch {}
-          }
-        }
-
         function importLocalCSV(text, filename, fileObj) {
           let parsed;
           try { parsed = parseSquabbitCSV(text); } catch (err) { alert(err?.message || "Failed to parse CSV."); return; }
@@ -15450,7 +15353,7 @@ if (res.error) toast("Error: " + res.error.message);
   />
 )}
 {view === "past" && <PastEvents sharedGroups={sharedGroups} loadShared={loadShared} setView={setView} />}
-              {view === "event" && <EventScreen computed={computedFiltered} setView={setView} courseSlope={courseSlope} setCourseSlope={setCourseSlope} courseRating={courseRating} setCourseRating={setCourseRating} startHcapMode={startHcapMode} setStartHcapMode={setStartHcapMode} nextHcapMode={nextHcapMode} setNextHcapMode={setNextHcapMode} oddsMaxRounds={oddsMaxRounds} setOddsMaxRounds={setOddsMaxRounds} seasonRoundsFiltered={seasonRoundsFiltered} seasonRoundsAll={seasonRoundsAllForOdds} seasonModelAll={seasonModelOddsAll} oddsExcludeMap={oddsExcludeMap} oddsExcludedNames={oddsExcludedNames} setExcludeFromOdds={setExcludeFromOdds} />}
+              {view === "event" && <EventScreen computed={computedFiltered} setView={setView} courseSlope={courseSlope} setCourseSlope={setCourseSlope} courseRating={courseRating} setCourseRating={setCourseRating} startHcapMode={startHcapMode} setStartHcapMode={setStartHcapMode} nextHcapMode={nextHcapMode} setNextHcapMode={setNextHcapMode} oddsMaxRounds={oddsMaxRounds} setOddsMaxRounds={setOddsMaxRounds} seasonRoundsFiltered={seasonRoundsFiltered} seasonRoundsAll={seasonRoundsAllForOdds} seasonModelAll={seasonModelOddsAll} />}
               {view === "banter" && <BanterStats computed={computedFiltered} setView={setView} />}
               {view === "guide" && <GuideView setView={setView} leagueTitle={LEAGUE_TITLE} />}
               {view === "mirror_read" && <MirrorReadView setView={setView} />}
