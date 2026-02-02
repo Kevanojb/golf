@@ -7138,6 +7138,52 @@ const parLeaders = React.useMemo(() => {
     return (f > b) ? "You score stronger on the front 9." : "You score stronger on the back 9.";
   })();
 
+  const _overallPPH = (() => {
+    const vals = [];
+    for (const r of (_windowSeriesPP || [])) {
+      const ph = Array.isArray(r?.perHole) ? r.perHole : null;
+      if (!ph) continue;
+      for (const x of ph) {
+        const v = _num(x, NaN);
+        if (Number.isFinite(v)) vals.push(v);
+      }
+    }
+    return vals.length ? (vals.reduce((a,b)=>a+b,0) / vals.length) : NaN;
+  })();
+
+  const _rangeAvgTotal = (a, b) => {
+    const totals = [];
+    for (const r of (_windowSeriesPP || [])) {
+      const ph = Array.isArray(r?.perHole) ? r.perHole : null;
+      if (!ph || ph.length < b) continue;
+      let s = 0;
+      let ok = false;
+      for (let i = a; i < b; i++) {
+        const v = _num(ph[i], NaN);
+        if (Number.isFinite(v)) { s += v; ok = true; } else { /* treat missing as 0 */ }
+      }
+      if (ok) totals.push(s);
+    }
+    return totals.length ? (totals.reduce((x,y)=>x+y,0) / totals.length) : NaN;
+  };
+
+  const _first3AvgPts = _rangeAvgTotal(0, 3);       // holes 1-3
+  const _last3AvgPts  = _rangeAvgTotal(15, 18);     // holes 16-18
+
+  const _fastStart = (() => {
+    if (!Number.isFinite(_first3AvgPts) || !Number.isFinite(_overallPPH)) return null;
+    const pph = _first3AvgPts / 3;
+    const delta = pph - _overallPPH;
+    return { pph, delta, is: delta >= 0.15 };
+  })();
+
+  const _clutchFinish = (() => {
+    if (!Number.isFinite(_last3AvgPts) || !Number.isFinite(_overallPPH)) return null;
+    const pph = _last3AvgPts / 3;
+    const delta = pph - _overallPPH;
+    return { pph, delta, is: delta >= 0.15 };
+  })();
+
   const _proTrendLabel = (() => {
     if (!Number.isFinite(vel)) return "Not enough data";
     if (scoringMode === "gross") {
@@ -8108,7 +8154,7 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
           </div>
 
           <div className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm lg:col-span-2">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
                 <div className="text-xs font-black tracking-widest uppercase text-neutral-500">Rounds analysed</div>
                 <div className="mt-2 text-2xl font-black text-neutral-900 tabular-nums">{games || 0}</div>
@@ -8156,6 +8202,27 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
                 <div className="mt-3 text-sm text-neutral-600">Better early or late</div>
                 <div className="text-sm font-extrabold text-neutral-900">{_frontBackLine}</div>
               </div>
+              <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+                <div className="text-xs font-black tracking-widest uppercase text-neutral-500">Start & Finish</div>
+
+                <div className="mt-2 text-sm text-neutral-600">Fast starter (holes 1–3)</div>
+                <div className="text-lg font-extrabold text-neutral-900 tabular-nums">
+                  {_fastStart ? (_fastStart.is ? "Yes" : "No") : "—"}
+                  <span className="ml-2 text-sm font-bold text-neutral-500">
+                    ({Number.isFinite(_first3AvgPts) ? PR_fmt(_first3AvgPts/3,2) : "—"} pts/h, {_fastStart ? _fmtSignedNum(_fastStart.delta,2) : "—"} vs avg)
+                  </span>
+                </div>
+
+                <div className="mt-3 text-sm text-neutral-600">Clutch finisher (holes 16–18)</div>
+                <div className="text-lg font-extrabold text-neutral-900 tabular-nums">
+                  {_clutchFinish ? (_clutchFinish.is ? "Yes" : "No") : "—"}
+                  <span className="ml-2 text-sm font-bold text-neutral-500">
+                    ({Number.isFinite(_last3AvgPts) ? PR_fmt(_last3AvgPts/3,2) : "—"} pts/h, {_clutchFinish ? _fmtSignedNum(_clutchFinish.delta,2) : "—"} vs avg)
+                  </span>
+                </div>
+              </div>
+
+
             </div>
           </div>
         </div>
