@@ -14590,7 +14590,7 @@ if(fileObj) setCurrentFile(fileObj);
           if (aL6 !== bL6) return bL6 - aL6;
           const aL3 = sum(pa, 15, 18), bL3 = sum(pb, 15, 18);
           if (aL3 !== bL3) return bL3 - aL3;
-          return NaN;
+          return 0;
 }
         const computed = useMemo(() => {
           if (!players.length) return [];
@@ -14639,13 +14639,33 @@ return {
              };
           });
           const base = [...rows].sort((a, b) => b.points - a.points || compareByCountback(a, b));
-          const groups = []; const used = new Set();
-          for (const r of base) {
-            if (used.has(r.idx)) continue;
-            const grpIdxs = base.filter((x) => x.points === r.points).map((x) => x.idx);
-            grpIdxs.forEach((id) => used.add(id));
-            groups.push(grpIdxs);
-          }
+
+// Group ties using BOTH total points AND countback buckets (back 9, last 6, last 3).
+// This means countback breaks ties for league positions/points.
+// Only if all buckets match do players remain joint.
+const _cbKey = (r) => {
+  const ph = Array.isArray(r?.perHole) ? r.perHole : [];
+  const sum = (s, e) => ph.slice(s, e).reduce((x, y) => x + (Number(y) || 0), 0);
+  const b9 = sum(9, 18);
+  const l6 = sum(12, 18);
+  const l3 = sum(15, 18);
+  return `${Number(r?.points) || 0}|${b9}|${l6}|${l3}`;
+};
+
+const groups = [];
+let _cur = [];
+let _prevKey = null;
+for (const r of base) {
+  const k = _cbKey(r);
+  if (_prevKey === null || k === _prevKey) {
+    _cur.push(r.idx);
+  } else {
+    groups.push(_cur);
+    _cur = [r.idx];
+  }
+  _prevKey = k;
+}
+if (_cur.length) groups.push(_cur);
           const topGroup = groups[0]?.map((i) => rows.find((r) => r.idx === i)) || [];
           let best = topGroup.length ? [topGroup[0]] : [];
           for (let k = 1; k < topGroup.length; k++) {
