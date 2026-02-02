@@ -2452,6 +2452,252 @@ const finalPlayers = players.filter(p => p.name && !/^player$/i.test(p.name.trim
         }
         return { players: finalPlayers, courseTees: teesFinal, courseName: detectedCourseName };
       }
+// --- Generic CSV scorecard parser (wide / matrix formats) ---
+// Keeps Squabbit parsing unchanged; used only as a fallback when parseScorecardCSV() throws.
+function parseGenericScorecardCSV(csvText) {
+  const text = String(csvText || "");
+  const lines = text.split(/\r?\n/).map(l => l.trimEnd()).filter(l => l.length > 0);
+  if (!lines.length) throw new Error("CSV is empty.");
+
+  const rows = lines.map(splitSmart);
+
+  const norm = (s) => String(s || "").trim().toLowerCase().replace(/\s+/g, " ").replace(/[.]/g, "");
+  const isNum = (v) => v !== null && v !== undefined && v !== "" && !Number.isNaN(Number(v));
+  const toNum = (v) => {
+    const n = Number(String(v || "").replace(/[^\d.-]/g, ""));
+    return Number.isFinite(n) ? n : NaN;
+  };
+
+  // 1) Metadata: Course name
+  let courseName = "";
+  for (const r of rows.slice(0, 10)) {
+    if (!r || !r.length) continue;
+    const a0 = norm(r[0]);
+    if (a0 === "course name" || a0 === "course") {
+      for (let j = 1; j < r.length; j++) {
+        const v = String(r[j] || "").trim();
+        if (v) { courseName = v; break; }
+      }
+      if (courseName) break;
+    }
+  }
+  // Also accept "Course Name,XYZ,,Location,..." format
+  if (!courseName) {
+    const r0 = rows[0] || [];
+    if (norm(r0[0]) === "course name") {
+      courseName = String(r0.find((x, i) => i > 0 && String(x || "").trim()) || "").trim();
+    }
+  }
+
+  // 2) Find hole header row: "Hole,1,2,...,18"
+  let holeRowIdx = -1;
+  let holeColIdxs = []; // indices of columns for holes 1..18 in order
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i] || [];
+    if (!r.length) continue;
+    if (norm(r[0]) !== "hole") continue;
+    // Build mapping from hole number -> column index
+    const map = {};
+    for (let j = 1; j < r.length; j++) {
+      const cell = String(r[j] || "").trim();
+      const hn = parseInt(cell, 10);
+      if (hn >= 1 && hn <= 18) map[hn] = j;
+    }
+    if (Object.keys(map).length >= 9) {
+      holeRowIdx = i;
+      holeColIdxs = Array.from({ length: 18 }, (_, k) => map[k + 1]).filter(Boolean);
+      // Ensure we have 18 if possible; if only 9, keep 9.
+      break;
+    }
+  }
+  if (holeRowIdx < 0 || holeColIdxs.length < 9) {
+    throw new Error("Unrecognised CSV format (could not locate Hole 1–18 header row).");
+  }
+
+  const holesCount = holeColIdxs.length; // 9 or 18
+  const holeNums = Array.from({ length: holesCount }, (_, i) => i + 1);
+
+  // 3) Par / SI / Yards rows (matrix formats)
+  const findMatrixRow = (labelSet) => {
+    for (let i = 0; i < rows.length; i++) {
+      const r = rows[i] || [];
+      const a0 = norm(r[0]);
+      if (labelSet.has(a0)) return i;
+    }
+    return -1;
+  };
+
+  const parIdx = findMatrixRow(new Set(["par"]));
+  const siIdx = findMatrixRow(new Set(["si", "s i", "stroke index", "hcp", "handicap"]));
+  const yardsIdx = findMatrixRow(new Set(["yards", "yds", "yd", "yardage"]));
+  const metersIdx = findMatrixRow(new Set(["meters", "metres", "m"]));
+
+  const pars = parIdx >= 0 ? holeColIdxs.map(ci => toNum((rows[parIdx] || [])[ci])) : [];
+  const sis = siIdx >= 0 ? holeColIdxs.map(ci => toNum((rows[siIdx] || [])[ci])) : [];
+  const yards = yardsIdx >= 0 ? holeColIdxs.map(ci => toNum((rows[yardsIdx] || [])[ci])) :
+               (metersIdx >= 0 ? holeColIdxs.map(ci => {
+                 const m = toNum((rows[metersIdx] || [])[ci]);
+                 return Number.isFinite(m) ? Math.round(m * 1.09361) : NaN;
+               }) : []);
+
+  // 4) Find player header row if present: "Player,Tee,1,2,..."
+  let playerHeaderIdx = -1;
+  let playerNameCol = 0;
+  let teeCol = -1;
+  for (let i = 0; i < rows.length; i++) {
+    const r = rows[i] || [];
+    if (!r.length) continue;
+    const a0 = norm(r[0]);
+    if (a0 !== "player" && a0 !== "name") continue;
+
+    playerHeaderIdx = i;
+    playerNameCol = 0;
+
+    // detect tee column if present
+    for (let j = 0; j < r.length; j++) {
+      if (norm(r[j]) === "tee" || norm(r[j]) === "tees") { teeCol = j; break; }
+    }
+    // In "Player,Tee,1,2..." the tee is typically col 1
+    if (teeCol < 0 && r.length > 2 && (norm(r[1]) === "tee" || norm(r[1]) === "tees")) teeCol = 1;
+    break;
+  }
+
+  const normalizeNameKey = (s) => norm(String(s || "")).replace(/\s+/g, " ").trim();
+  const stripParens = (s) => String(s || "").replace(/\s*\(.*?\)\s*/g, " ").replace(/\s+/g, " ").trim();
+
+  const isTeamLike = (name) => /team|best\s*ball|scramble|fourball|foursomes/i.test(String(name || ""));
+  const isPointsRow = (name) => /stableford|net\s*pts|net\s*points|points/i.test(String(name || ""));
+
+  const extractEmbedded = (nameCell) => {
+    const raw = String(nameCell || "");
+    let name = raw;
+    // split at first "(" to get base display name
+    if (raw.includes("(")) name = raw.split("(")[0].trim();
+    name = name.trim();
+    let tee = "";
+    let hcp = NaN;
+
+    const mT = raw.match(/tee\s*:\s*([a-z0-9]+)/i);
+    if (mT && mT[1]) tee = String(mT[1]).trim();
+    const mH = raw.match(/hcp\s*:\s*([0-9]+(?:\.[0-9]+)?)/i);
+    if (mH && mH[1]) hcp = toNum(mH[1]);
+
+    return { name, tee, hcp };
+  };
+
+  const playersMap = new Map(); // key -> player obj under construction
+  const pointsMap = new Map();  // key -> per-hole stableford array
+
+  const readHoleVals = (r, offset) => {
+    // r is array, offset is where hole1 starts (column index)
+    const vals = [];
+    for (let k = 0; k < holesCount; k++) {
+      const ci = holeColIdxs[k];
+      vals.push(toNum(r[ci]));
+    }
+    return vals;
+  };
+
+  // 5) Iterate player rows
+  const startIdx = playerHeaderIdx >= 0 ? (playerHeaderIdx + 1) : (Math.max(holeRowIdx, parIdx, siIdx, yardsIdx, metersIdx) + 1);
+
+  for (let i = startIdx; i < rows.length; i++) {
+    const r = rows[i] || [];
+    if (!r.length) continue;
+
+    const label0 = String(r[0] || "").trim();
+    if (!label0) continue;
+
+    // stop if we hit another section header
+    const a0 = norm(label0);
+    if (["hole", "par", "si", "s i", "players"].includes(a0)) continue;
+
+    // Must contain at least some numeric hole values
+    const sampleNums = holeColIdxs.slice(0, Math.min(holesCount, 6)).map(ci => r[ci]).filter(isNum).length;
+    if (sampleNums < 2) continue;
+
+    // Determine row type + base key
+    let embedded = extractEmbedded(label0);
+    let name = embedded.name || label0;
+    const tee = (teeCol >= 0 ? String(r[teeCol] || "").trim() : embedded.tee) || "";
+    const hcp = embedded.hcp;
+
+    if (isTeamLike(name)) continue;
+
+    if (isPointsRow(label0)) {
+      // points row, map to base player name (strip stableford/points words)
+      const base = stripParens(label0)
+        .replace(/net\s*pts\s*\(.*?\)/i, "")
+        .replace(/net\s*pts/i, "")
+        .replace(/net\s*points/i, "")
+        .replace(/\(.*stableford.*\)/i, "")
+        .replace(/stableford/i, "")
+        .replace(/points?/i, "")
+        .trim();
+      const key = normalizeNameKey(base || name);
+      const perHolePts = readHoleVals(r);
+      pointsMap.set(key, perHolePts);
+      continue;
+    }
+
+    const key = normalizeNameKey(name);
+    const grossPerHole = readHoleVals(r);
+
+    const existing = playersMap.get(key) || { name, gender: "M", teeLabel: tee, handicap: NaN, courseHandicap: NaN, grossPerHole: Array(18).fill(NaN), perHole: [], points: 0, back9: 0, pars: null, sis: null };
+    existing.name = name;
+    if (tee) existing.teeLabel = tee;
+    if (Number.isFinite(hcp)) { existing.handicap = hcp; existing.courseHandicap = hcp; }
+    // place gross values into first holesCount positions
+    const g = existing.grossPerHole.slice();
+    for (let k = 0; k < holesCount; k++) g[k] = grossPerHole[k];
+    existing.grossPerHole = g;
+
+    playersMap.set(key, existing);
+  }
+
+  // 6) Merge points rows onto players, compute totals/back9
+  const finalPlayers = Array.from(playersMap.entries()).map(([key, p]) => {
+    const pts = pointsMap.get(key);
+    if (Array.isArray(pts) && pts.length) {
+      p.perHole = pts.slice();
+      p.points = pts.reduce((a, b) => a + (Number(b) || 0), 0);
+      p.back9 = pts.slice(9, 18).reduce((a, b) => a + (Number(b) || 0), 0);
+    } else {
+      p.perHole = [];
+      p.points = 0;
+      p.back9 = 0;
+    }
+    p.pars = (pars && pars.length === holesCount) ? pars.slice() : null;
+    p.sis = (sis && sis.length === holesCount) ? sis.slice() : null;
+    if (!Number.isFinite(p.courseHandicap)) p.courseHandicap = Number.isFinite(p.handicap) ? p.handicap : 0;
+    if (!Number.isFinite(p.handicap)) p.handicap = 0;
+    return p;
+  }).filter(p => p.name && !isTeamLike(p.name));
+
+  // 7) courseTees: one tee per unique teeLabel (kept minimal; Supabase will enrich after import)
+  const teeSet = new Set(finalPlayers.map(p => String(p.teeLabel || "").trim()).filter(Boolean));
+  const courseTees = Array.from(teeSet).map(tn => ({
+    teeName: tn,
+    gender: "M",
+    pars: (pars && pars.length === holesCount) ? pars.slice() : [],
+    yards: (yards && yards.length === holesCount) ? yards.slice() : [],
+    si: (sis && sis.length === holesCount) ? sis.slice() : [],
+  }));
+
+  return { players: finalPlayers, courseTees, courseName };
+}
+
+// Parses either Squabbit CSV (preferred) or a generic scorecard CSV as a fallback.
+// DOES NOT change Squabbit behaviour; only runs generic parser if Squabbit parsing throws.
+function parseScorecardCSV(csvText) {
+  try {
+    // Keep Squabbit parsing strict and unchanged
+    return parseSquabbitCSV(String(csvText || ""));
+  } catch (err) {
+    // Fallback: wide/matrix scorecard formats from other apps
+    return parseGenericScorecardCSV(String(csvText || ""));
+  }
+}
 
 function simpleRank(players){
   return [...players].map(p=>{
@@ -6892,6 +7138,52 @@ const parLeaders = React.useMemo(() => {
     return (f > b) ? "You score stronger on the front 9." : "You score stronger on the back 9.";
   })();
 
+  const _overallPPH = (() => {
+    const vals = [];
+    for (const r of (_windowSeriesPP || [])) {
+      const ph = Array.isArray(r?.perHole) ? r.perHole : null;
+      if (!ph) continue;
+      for (const x of ph) {
+        const v = _num(x, NaN);
+        if (Number.isFinite(v)) vals.push(v);
+      }
+    }
+    return vals.length ? (vals.reduce((a,b)=>a+b,0) / vals.length) : NaN;
+  })();
+
+  const _rangeAvgTotal = (a, b) => {
+    const totals = [];
+    for (const r of (_windowSeriesPP || [])) {
+      const ph = Array.isArray(r?.perHole) ? r.perHole : null;
+      if (!ph || ph.length < b) continue;
+      let s = 0;
+      let ok = false;
+      for (let i = a; i < b; i++) {
+        const v = _num(ph[i], NaN);
+        if (Number.isFinite(v)) { s += v; ok = true; } else { /* treat missing as 0 */ }
+      }
+      if (ok) totals.push(s);
+    }
+    return totals.length ? (totals.reduce((x,y)=>x+y,0) / totals.length) : NaN;
+  };
+
+  const _first3AvgPts = _rangeAvgTotal(0, 3);       // holes 1-3
+  const _last3AvgPts  = _rangeAvgTotal(15, 18);     // holes 16-18
+
+  const _fastStart = (() => {
+    if (!Number.isFinite(_first3AvgPts) || !Number.isFinite(_overallPPH)) return null;
+    const pph = _first3AvgPts / 3;
+    const delta = pph - _overallPPH;
+    return { pph, delta, is: delta >= 0.15 };
+  })();
+
+  const _clutchFinish = (() => {
+    if (!Number.isFinite(_last3AvgPts) || !Number.isFinite(_overallPPH)) return null;
+    const pph = _last3AvgPts / 3;
+    const delta = pph - _overallPPH;
+    return { pph, delta, is: delta >= 0.15 };
+  })();
+
   const _proTrendLabel = (() => {
     if (!Number.isFinite(vel)) return "Not enough data";
     if (scoringMode === "gross") {
@@ -7862,7 +8154,7 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
           </div>
 
           <div className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm lg:col-span-2">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
                 <div className="text-xs font-black tracking-widest uppercase text-neutral-500">Rounds analysed</div>
                 <div className="mt-2 text-2xl font-black text-neutral-900 tabular-nums">{games || 0}</div>
@@ -7910,6 +8202,27 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
                 <div className="mt-3 text-sm text-neutral-600">Better early or late</div>
                 <div className="text-sm font-extrabold text-neutral-900">{_frontBackLine}</div>
               </div>
+              <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+                <div className="text-xs font-black tracking-widest uppercase text-neutral-500">Start & Finish</div>
+
+                <div className="mt-2 text-sm text-neutral-600">Fast starter (holes 1–3)</div>
+                <div className="text-lg font-extrabold text-neutral-900 tabular-nums">
+                  {_fastStart ? (_fastStart.is ? "Yes" : "No") : "—"}
+                  <span className="ml-2 text-sm font-bold text-neutral-500">
+                    ({Number.isFinite(_first3AvgPts) ? PR_fmt(_first3AvgPts/3,2) : "—"} pts/h, {_fastStart ? _fmtSignedNum(_fastStart.delta,2) : "—"} vs avg)
+                  </span>
+                </div>
+
+                <div className="mt-3 text-sm text-neutral-600">Clutch finisher (holes 16–18)</div>
+                <div className="text-lg font-extrabold text-neutral-900 tabular-nums">
+                  {_clutchFinish ? (_clutchFinish.is ? "Yes" : "No") : "—"}
+                  <span className="ml-2 text-sm font-bold text-neutral-500">
+                    ({Number.isFinite(_last3AvgPts) ? PR_fmt(_last3AvgPts/3,2) : "—"} pts/h, {_clutchFinish ? _fmtSignedNum(_clutchFinish.delta,2) : "—"} vs avg)
+                  </span>
+                </div>
+              </div>
+
+
             </div>
           </div>
         </div>
@@ -14057,7 +14370,7 @@ async function getTeesForCourseName(courseName) {
         // Extract an in-CSV date (same method as the dropdown list)
         const extractedDateMs = _extractDateMsFromCsvText(csvText) || _extractDateMsFromPath(f.path) || null;
         let parsed = null;
-        try { parsed = parseSquabbitCSV(csvText); 
+        try { parsed = parseScorecardCSV(csvText); 
                 const dbTees = await getTeesForCourseName(parsed.courseName || parsed.internalCourseName || "");
                 if (dbTees && dbTees.length) parsed.courseTees = dbTees;
 } catch (e) { parsed = null; }
@@ -14591,7 +14904,7 @@ async function refreshShared(c) {
 
               // Course: the CSV already contains it — parse just once here so the picker can show a nice name.
               try {
-                const parsed = parseSquabbitCSV(text);
+                const parsed = parseScorecardCSV(text);
                 f.courseName = parsed?.courseName || parsed?.internalCourseName || "";
                 // Optional: if your parser exposes format, surface it too (safe fallback).
                 f.format = parsed?.format || parsed?.gameFormat || parsed?.formatName || "";
@@ -14611,7 +14924,7 @@ async function refreshShared(c) {
           if (r.error) { alert("Download failed: " + r.error.message); return; }
           const text = await r.data.text();
           let parsed;
-          try { parsed = parseSquabbitCSV(text); } catch (err) { alert(err?.message || "Failed to parse CSV."); return; }
+          try { parsed = parseScorecardCSV(text); } catch (err) { alert(err?.message || "Failed to parse CSV."); return; }
           setPlayers(parsed.players || []);
           setSelectedPlayer(parsed.players[0]?.name || "");
           setEventName(item.name);
@@ -14707,7 +15020,7 @@ async function refreshShared(c) {
 
         function importLocalCSV(text, filename, fileObj) {
           let parsed;
-          try { parsed = parseSquabbitCSV(text); } catch (err) { alert(err?.message || "Failed to parse CSV."); return; }
+          try { parsed = parseScorecardCSV(text); } catch (err) { alert(err?.message || "Failed to parse CSV."); return; }
           setPlayers(parsed.players || []);
           setSelectedPlayer(parsed.players[0]?.name || "");
           setEventName((filename || "").replace(/\.[^.]+$/, ""));
