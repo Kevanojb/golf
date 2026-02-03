@@ -6453,6 +6453,13 @@ function PlayerProgressView({
   const [ppBarsMode, setPpBarsMode] = React.useState(() => {
     try { return localStorage.getItem("dsl_lens") || "pointsField"; } catch(e){ return "pointsField"; }
   }); // pointsField | strokesField | strokesPar
+
+  const [trendMetric, setTrendMetric] = React.useState(() => {
+    try { return localStorage.getItem("dsl_trendMetric") || "overall"; } catch(e){ return "overall"; }
+  }); // overall | p3 | p4 | p5
+  React.useEffect(() => {
+    try { localStorage.setItem("dsl_trendMetric", String(trendMetric || "overall")); } catch(e){}
+  }, [trendMetric]);
   const progressCompare = (ppBarsMode === "strokesPar") ? "par" : "field"; // "field" | "par"
   // Lens (single source of truth):
   // pointsField => Stableford Points vs Field
@@ -6990,8 +6997,48 @@ const parLeaders = React.useMemo(() => {
   const _limitNPP = _isAllLimitPP ? 0 : Number(seasonLimit);
   const _windowPP = (_limitNPP && _limitNPP > 0) ? series.slice(-_limitNPP) : series.slice();
 
-  const _roundMetricPP = (s) => {
+  
+  const _roundMetricPP = (s, metricKey) => {
     if (!s) return NaN;
+
+    const key = String(metricKey || "overall");
+
+    // Pull per-hole par layout for this round (needed for par-type splits)
+    const ps = _tryGetParsSI(s);
+    const pars = Array.isArray(ps?.pArr) ? ps.pArr : (Array.isArray(s?.parsPerHole) ? s.parsPerHole.map(Number) : (Array.isArray(s?.parPerHole) ? s.parPerHole.map(Number) : null));
+
+    const wantPar = (key === "p3") ? 3 : (key === "p4") ? 4 : (key === "p5") ? 5 : null;
+
+    if (wantPar && Array.isArray(pars) && pars.length) {
+      if (scoringMode === "gross") {
+        const gh = Array.isArray(s?.grossPerHole) ? s.grossPerHole : null;
+        if (!Array.isArray(gh) || !gh.length) return NaN;
+        let sumG = 0, sumP = 0, ok = 0;
+        for (let i=0;i<Math.min(gh.length, pars.length);i++){
+          if (Number(pars[i]) !== wantPar) continue;
+          const g = _num(gh[i], NaN);
+          if (!Number.isFinite(g)) continue;
+          sumG += g;
+          sumP += Number(pars[i]) || 0;
+          ok += 1;
+        }
+        return ok ? (sumG - sumP) : NaN; // strokes-over-par on selected par type
+      } else {
+        const ph = Array.isArray(s?.perHole) ? s.perHole : (Array.isArray(s?.ptsPerHole) ? s.ptsPerHole : (Array.isArray(s?.pointsPerHole) ? s.pointsPerHole : null));
+        if (!Array.isArray(ph) || !ph.length) return NaN;
+        let sum = 0, ok = 0;
+        for (let i=0;i<Math.min(ph.length, pars.length);i++){
+          if (Number(pars[i]) !== wantPar) continue;
+          const v = _num(ph[i], NaN);
+          if (!Number.isFinite(v)) continue;
+          sum += v;
+          ok += 1;
+        }
+        return ok ? sum : NaN; // total Stableford points on selected par type
+      }
+    }
+
+    // Default: overall per-round metric
     if (scoringMode === "gross") {
       const g = _num(s.gross, NaN);
       const parT = _num(s.parTotal, NaN);
@@ -7000,7 +7047,7 @@ const parLeaders = React.useMemo(() => {
     return _num(s.pts, NaN);
   };
 
-  const _yPlayerPP = _windowPP.map(_roundMetricPP);
+  const _yPlayerPP = _windowPP.map(r => _roundMetricPP(r, trendMetric));
   const _xLabelsPP = _windowPP.map((r, i) => {
     if (Number.isFinite(Number(r?.dateMs)) && Number(r.dateMs) > 0) {
       const d = new Date(Number(r.dateMs));
@@ -7008,6 +7055,14 @@ const parLeaders = React.useMemo(() => {
     }
     return `G${(Number(r?.idx)||i)+1}`;
   });
+
+  const _trendNamePP = (trendMetric === "p3") ? "Par 3" : (trendMetric === "p4") ? "Par 4" : (trendMetric === "p5") ? "Par 5" : "Overall";
+  const _trendDescPP = (() => {
+    const base = (_trendNamePP === "Overall") ? "" : `${_trendNamePP} only — `;
+    if (ppBarsMode === "pointsField") return base + "Stableford points per round compared to the field average. Higher is better.";
+    if (ppBarsMode === "strokesField") return base + "Score per round compared to the field average. Lower is better.";
+    return base + "Strokes over par per round. Lower is better.";
+  })();
 
   // Field/cohort average per round (excluding current player)
   const _yFieldPP = (() => {
@@ -7020,19 +7075,34 @@ const parLeaders = React.useMemo(() => {
       for (const p of peers) {
         const s = __filterSeries(p?.series);
         const match = s.find(x => x?.file === key);
-        const v = _roundMetricPP(match);
+        const v = _roundMetricPP(match, trendMetric);
         if (Number.isFinite(v)) vals.push(v);
       }
       return vals.length ? _mean(vals) : NaN;
     });
   })()
-  const _yParPP = _windowPP.map(() => (scoringMode === "gross" ? 0 : 36));
+  
+  const _yParPP = _windowPP.map((r) => {
+    if (scoringMode === "gross") return 0;
+    const key = String(trendMetric || "overall");
+    if (key === "overall") return 36;
+
+    const ps = _tryGetParsSI(r);
+    const pars = Array.isArray(ps?.pArr) ? ps.pArr : (Array.isArray(r?.parsPerHole) ? r.parsPerHole.map(Number) : (Array.isArray(r?.parPerHole) ? r.parPerHole.map(Number) : null));
+    const wantPar = (key === "p3") ? 3 : (key === "p4") ? 4 : (key === "p5") ? 5 : null;
+    if (!wantPar || !Array.isArray(pars) || !pars.length) return NaN;
+
+    let n = 0;
+    for (let i=0;i<pars.length;i++) if (Number(pars[i]) === wantPar) n += 1;
+    return n ? (2 * n) : NaN; // 2pts/hole baseline
+  });
+
 
 ;
 
 
   const lastN = _windowPP.slice(); // use selected window (seasonLimit)
-  const lastMetric = (scoringMode === "gross") ? (lastN.map(s => _num(s.gross, NaN) - _num(s.parTotal, NaN)).filter(Number.isFinite)) : (lastN.map(s => _num(s.pts, NaN)).filter(Number.isFinite));
+  const lastMetric = lastN.map(r => _roundMetricPP(r, trendMetric)).filter(Number.isFinite);
   const lastAvg = _mean(lastMetric);
 
   const vol = (scoringMode === "gross") ? _std(series.map(s => _num(s.gross, NaN) - _num(s.parTotal, NaN))) : _std(series.map(s => _num(s.pts, NaN)));
@@ -7118,6 +7188,134 @@ const parLeaders = React.useMemo(() => {
     catch(e){ return { birdiePlusRate: NaN, parRate: NaN, bogeyRate: NaN, badRate: NaN }; }
   }, [scoringMode, fieldWindowSeriesPP]);
 
+
+  // -------------------------
+  // Player Archetype (no shot history needed)
+  // -------------------------
+  const archetypePP = React.useMemo(() => {
+    const isGross = (scoringMode === "gross");
+    const siMe   = isGross ? (cur?.bySIGross || {}) : (cur?.bySI || {});
+    const siFld  = isGross ? (compField?.bySIGross || {}) : (compField?.bySI || {});
+    const parMe  = isGross ? (cur?.byParGross || {}) : (cur?.byPar || {});
+    const parFld = isGross ? (compField?.byParGross || {}) : (compField?.byPar || {});
+
+    const perf = (agg) => {
+      if (!agg) return NaN;
+      return isGross ? (-avgOverParPH(agg)) : (avgPtsPH(agg)); // higher is better in both cases
+    };
+
+    const pickKey = (obj, candidates) => {
+      for (const k of candidates) if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return k;
+      return candidates[0];
+    };
+
+    const kHard = pickKey(siMe, ["1–6","1-6","1–6 ","SI 1–6","SI 1-6"]);
+    const kEasy = pickKey(siMe, ["13–18","13-18","13–18 ","SI 13–18","SI 13-18"]);
+
+    const meHard = perf(siMe?.[kHard]);
+    const meEasy = perf(siMe?.[kEasy]);
+    const fdHard = perf(siFld?.[kHard]);
+    const fdEasy = perf(siFld?.[kEasy]);
+
+    const meP3 = perf(parMe?.[pickKey(parMe, ["Par 3","P3","par3","3"])]);
+    const meP4 = perf(parMe?.[pickKey(parMe, ["Par 4","P4","par4","4"])]);
+    const meP5 = perf(parMe?.[pickKey(parMe, ["Par 5","P5","par5","5"])]);
+    const fdP3 = perf(parFld?.[pickKey(parFld, ["Par 3","P3","par3","3"])]);
+    const fdP4 = perf(parFld?.[pickKey(parFld, ["Par 4","P4","par4","4"])]);
+    const fdP5 = perf(parFld?.[pickKey(parFld, ["Par 5","P5","par5","5"])]);
+
+    const thr = isGross ? 0.08 : 0.12; // per-hole swing that feels meaningful
+    const dHard = (Number.isFinite(meHard) && Number.isFinite(fdHard)) ? (meHard - fdHard) : NaN;
+    const dEasy = (Number.isFinite(meEasy) && Number.isFinite(fdEasy)) ? (meEasy - fdEasy) : NaN;
+    const dP3 = (Number.isFinite(meP3) && Number.isFinite(fdP3)) ? (meP3 - fdP3) : NaN;
+    const dP5 = (Number.isFinite(meP5) && Number.isFinite(fdP5)) ? (meP5 - fdP5) : NaN;
+
+    const score = (x) => {
+      if (!Number.isFinite(x)) return 0;
+      return Math.max(0, Math.min(3, Math.abs(x) / thr));
+    };
+
+    const candidates = [];
+
+    // Waster: bleeds on easy holes (and often doesn't show the same leak on hard holes)
+    if (Number.isFinite(dEasy) && dEasy < -thr) {
+      const extra = Number.isFinite(dHard) ? Math.max(0, (dHard - dEasy) / thr) : 0;
+      candidates.push({
+        key: "waster",
+        name: "The Waster",
+        icon: "🧩",
+        why: "Easy holes (SI 13–18) are costing you more than the field. That usually means giving away points with short-game mistakes or poor ‘safe-miss’ decisions.",
+        tip: "Default to centre-green targets on SI 13–18 and protect par first. Birdies come from boring golf.",
+        s: score(dEasy) + 0.5*extra,
+      });
+    }
+
+    // Survivor: strong on hard holes, weak on easy holes
+    if (Number.isFinite(dHard) && Number.isFinite(dEasy) && dHard > thr && dEasy < -thr) {
+      candidates.push({
+        key: "survivor",
+        name: "The Survivor",
+        icon: "🛡️",
+        why: "You hang in there on the toughest holes, but you leak points on the ‘scoring’ holes.",
+        tip: "Treat easy holes as ‘no big number’ holes: aim fat, avoid short-side, two-putt and move on.",
+        s: score(dHard) + score(dEasy),
+      });
+    }
+
+    // Par 3 victim
+    if (Number.isFinite(dP3) && dP3 < -thr) {
+      candidates.push({
+        key: "p3",
+        name: "The Par 3 Victim",
+        icon: "🎯",
+        why: "You lose more than the field on par 3s — usually start-line / club selection / commitment.",
+        tip: "On par 3s: pick a bigger target (middle), choose the longer club if between, and commit to one start line.",
+        s: score(dP3),
+      });
+    }
+
+    // Par 5 butcher
+    if (Number.isFinite(dP5) && dP5 < -thr) {
+      candidates.push({
+        key: "p5",
+        name: "The Par 5 Butcher",
+        icon: "🚀",
+        why: "Par 5s should be your scoring holes, but they’re costing you more than the field — often from hero shots or poor wedge numbers.",
+        tip: "Make par 5s a 3-shot plan: safe tee ball → lay up to a favourite wedge → fat green.",
+        s: score(dP5),
+      });
+    }
+
+    // Steady bogey player: low volatility + low birdie-plus
+    const birdMe = Number.isFinite(outcomeMixPP?.birdiePlusRate) ? outcomeMixPP.birdiePlusRate : NaN;
+    const birdFd = Number.isFinite(fieldOutcomeMixPP?.birdiePlusRate) ? fieldOutcomeMixPP.birdiePlusRate : NaN;
+    const volMe  = Number.isFinite(vol) ? vol : NaN;
+    const volFd  = Number.isFinite(volField) ? volField : NaN;
+    if (Number.isFinite(volMe) && Number.isFinite(volFd) && volMe <= volFd * 0.8) {
+      const birdGap = (Number.isFinite(birdMe) && Number.isFinite(birdFd)) ? (birdMe - birdFd) : NaN;
+      candidates.push({
+        key: "steady",
+        name: "The Steady Bogey Player",
+        icon: "🧱",
+        why: "Your scoring is consistent (low volatility). That’s a strength — but you may not be creating enough birdie chances to move the needle.",
+        tip: "Keep the safety, add upside: pick 1–2 holes per round to be aggressive (only when the miss is safe).",
+        s: 0.8 + (Number.isFinite(birdGap) && birdGap < 0 ? score(birdGap) : 0),
+      });
+    }
+
+    if (!candidates.length) {
+      return {
+        name: "No clear archetype yet",
+        icon: "🧭",
+        why: "Not enough data to confidently label a pattern. Get a few more rounds in and this will sharpen up.",
+        tip: "For now: reduce doubles on SI 1–6 and protect par on SI 13–18.",
+      };
+    }
+
+    candidates.sort((a,b)=> (b.s||0) - (a.s||0));
+    const best = candidates[0];
+    return best;
+  }, [scoringMode, cur, compField, vol, volField, outcomeMixPP, fieldOutcomeMixPP]);
 
   const _meanFinite = (arr) => {
     const xs = (arr || []).map(Number).filter(Number.isFinite);
@@ -8586,17 +8784,22 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
           <div>
             <div className="text-[11px] uppercase tracking-widest font-black text-neutral-500">Trend over time</div>
-            <div className="text-sm text-neutral-700 mt-1">
-  {ppBarsMode === "pointsField"
-    ? "Stableford points per round — compared to the field average. Higher is better."
-    : (ppBarsMode === "strokesField"
-        ? "Score per round — compared to the field average. Lower is better."
-        : "Strokes over par per round — no field comparison. Lower is better.")}
-</div>
+            <div className="text-sm text-neutral-700 mt-1">{_trendDescPP}</div>
           </div>
           <div className="flex items-center gap-3">
             
+          
           <UX_ChipBar
+            value={trendMetric}
+            onChange={(v) => setTrendMetric(String(v))}
+            options={[
+              { label: "Overall", value: "overall" },
+              { label: "Par 3", value: "p3" },
+              { label: "Par 4", value: "p4" },
+              { label: "Par 5", value: "p5" },
+            ]}
+          />
+<UX_ChipBar
             value={seasonLimit}
             onChange={(v) => setSeasonLimit(String(v))}
             options={[
@@ -8623,6 +8826,35 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
           </div>
         </div>
       </div>
+
+
+{/* ===== Player archetype ===== */}
+<div className="mt-6 rounded-3xl border border-neutral-200 bg-white p-4 md:p-5 shadow-sm" data-reveal>
+  <div className="flex items-start justify-between gap-3">
+    <div className="min-w-0">
+      <div className="text-[11px] uppercase tracking-widest font-black text-neutral-500">Player archetype</div>
+      <div className="mt-1 text-xl md:text-2xl font-black text-neutral-900 flex items-center gap-2">
+        <span className="text-2xl">{archetypePP?.icon || "🧭"}</span>
+        <span className="truncate">{archetypePP?.name || "—"}</span>
+      </div>
+      <div className="mt-2 text-sm text-neutral-600">
+        {archetypePP?.why || "—"}
+      </div>
+      <div className="mt-3 rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
+        <div className="text-[11px] font-black uppercase tracking-widest text-neutral-500">How to flip it</div>
+        <div className="mt-1 text-sm text-neutral-700">{archetypePP?.tip || "—"}</div>
+      </div>
+    </div>
+    <div className="shrink-0 text-right">
+      <div className="text-[10px] uppercase tracking-widest font-black text-neutral-400">Based on</div>
+      <div className="mt-1 inline-flex flex-wrap justify-end gap-2">
+        <span className="chip">SI bands</span>
+        <span className="chip">Par types</span>
+        <span className="chip">Trend window</span>
+      </div>
+    </div>
+  </div>
+</div>
 
 {/* Edge Map (single source of truth) */}
       
