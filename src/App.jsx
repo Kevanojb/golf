@@ -7317,6 +7317,277 @@ const parLeaders = React.useMemo(() => {
     return best;
   }, [scoringMode, cur, compField, vol, volField, outcomeMixPP, fieldOutcomeMixPP]);
 
+// -------------------------
+// Comfort Zone Yardage (vs expected) + Round Pattern (Golf DNA)
+// Uses only: per-hole scores/points, pars, SI, yards, playing handicap
+// -------------------------
+const _getYardsArr = (r) => {
+  const y =
+    (r && (r.yardsPerHole || r.ydsPerHole || r.yardsArr || r.yards || r.holeYards || r.yardages || r.yardage)) ||
+    null;
+  return Array.isArray(y) ? y.map((v) => _safeNum(v, NaN)) : null;
+};
+
+const _getGrossArr = (r) => {
+  const g =
+    (r && (r.grossPerHole || r.grossHoles || r.holeGross || r.scoresPerHole || r.scores || r.grossArr)) ||
+    null;
+  return Array.isArray(g) ? g.map((v) => _safeNum(v, NaN)) : null;
+};
+
+const _getPtsArr = (r) => {
+  const p =
+    (r && (r.perHole || r.perHolePts || r.pointsPerHole || r.ptsPerHole || r.stablefordPerHole || r.stablefordHoles)) ||
+    null;
+  return Array.isArray(p) ? p.map((v) => _safeNum(v, NaN)) : null;
+};
+
+// Per-hole performance delta vs expectation:
+//  - Stableford: pts - 2 (net par baseline)
+//  - Gross: gross - (par + strokesReceived)  (net par baseline in strokes)
+const _holeDeltaVsExpected = (round, holeIdx) => {
+  const ps = _tryGetParsSI(round);
+  const pars = Array.isArray(ps?.pArr) ? ps.pArr : null;
+  const si = Array.isArray(ps?.sArr) ? ps.sArr : null;
+
+  if (scoringMode === "gross") {
+    const g = _getGrossArr(round);
+    if (!g || !pars || !si) return NaN;
+
+    const gross = _safeNum(g[holeIdx], NaN);
+    const par = _safeNum(pars[holeIdx], NaN);
+    const s = _safeNum(si[holeIdx], NaN);
+    if (!Number.isFinite(gross) || !Number.isFinite(par) || !Number.isFinite(s)) return NaN;
+
+    const playingHcap = Math.round(_safeNum(round?.hcap ?? round?.playingHcap ?? round?.startExact ?? round?.handicap ?? cur?.playingHcap ?? cur?.startExact ?? cur?.handicap ?? NaN, NaN));
+    const sr = WHS_strokesReceivedOnHole(playingHcap, s);
+    const expected = par + sr;
+    return gross - expected; // + = worse than expected
+  }
+
+  const pts = _getPtsArr(round);
+  if (!pts) return NaN;
+  const v = _safeNum(pts[holeIdx], NaN);
+  if (!Number.isFinite(v)) return NaN;
+  return v - 2; // + = better than expected
+};
+
+const _fmtDelta = (x) => {
+  if (!Number.isFinite(x)) return "—";
+  if (scoringMode === "gross") {
+    // strokes over expected (lower better)
+    if (Math.abs(x) < 0.05) return "0.0";
+    return (x > 0 ? "+" : "") + _fmt(x, 1);
+  }
+  // points vs expected (higher better)
+  if (Math.abs(x) < 0.05) return "0.0";
+  return (x > 0 ? "+" : "") + _fmt(x, 1);
+};
+
+const comfortZonePP = React.useMemo(() => {
+  const rounds = Array.isArray(_windowSeriesPP) ? _windowSeriesPP : [];
+  const buckets = {
+    all: [
+      { k: "short", label: "Short", sum: 0, n: 0 },
+      { k: "mid", label: "Mid", sum: 0, n: 0 },
+      { k: "long", label: "Long", sum: 0, n: 0 },
+    ],
+    p3: [
+      { k: "short", label: "<150y", sum: 0, n: 0 },
+      { k: "mid", label: "150–175y", sum: 0, n: 0 },
+      { k: "long", label: "176y+", sum: 0, n: 0 },
+    ],
+    p4: [
+      { k: "short", label: "<360y", sum: 0, n: 0 },
+      { k: "mid", label: "360–410y", sum: 0, n: 0 },
+      { k: "long", label: "411y+", sum: 0, n: 0 },
+    ],
+    p5: [
+      { k: "short", label: "<500y", sum: 0, n: 0 },
+      { k: "mid", label: "500–540y", sum: 0, n: 0 },
+      { k: "long", label: "541y+", sum: 0, n: 0 },
+    ],
+  };
+
+  const pickBucket = (par, y) => {
+    if (!Number.isFinite(y) || !Number.isFinite(par)) return null;
+    if (par === 3) {
+      if (y < 150) return "short";
+      if (y <= 175) return "mid";
+      return "long";
+    }
+    if (par === 4) {
+      if (y < 360) return "short";
+      if (y <= 410) return "mid";
+      return "long";
+    }
+    if (par === 5) {
+      if (y < 500) return "short";
+      if (y <= 540) return "mid";
+      return "long";
+    }
+    // fallback for unexpected pars: coarse buckets
+    if (y < 170) return "short";
+    if (y <= 400) return "mid";
+    return "long";
+  };
+
+  for (const r of rounds) {
+    const ps = _tryGetParsSI(r);
+    const pars = Array.isArray(ps?.pArr) ? ps.pArr : null;
+    const yards = _getYardsArr(r);
+    if (!pars || !yards) continue;
+
+    const holesN = Math.min(pars.length, yards.length, 18);
+    for (let i = 0; i < holesN; i++) {
+      const par = _safeNum(pars[i], NaN);
+      const y = _safeNum(yards[i], NaN);
+      const b = pickBucket(par, y);
+      if (!b) continue;
+
+      const d = _holeDeltaVsExpected(r, i);
+      if (!Number.isFinite(d)) continue;
+
+      // all-par bucket
+      const allRow = buckets.all.find((x) => x.k === b);
+      if (allRow) { allRow.sum += d; allRow.n += 1; }
+
+      // per-par bucket
+      const key = (par === 3) ? "p3" : (par === 4) ? "p4" : (par === 5) ? "p5" : null;
+      if (!key) continue;
+      const row = buckets[key].find((x) => x.k === b);
+      if (row) { row.sum += d; row.n += 1; }
+    }
+  }
+
+  const out = {};
+  Object.keys(buckets).forEach((k) => {
+    out[k] = buckets[k].map((b) => ({
+      ...b,
+      avg: b.n ? (b.sum / b.n) : NaN,
+    }));
+  });
+
+  // headline helper
+  const makeHeadline = (rows, parLabel) => {
+    const rs = (rows || []).filter((x) => Number.isFinite(x.avg) && (x.n || 0) >= 6);
+    if (!rs.length) return "Not enough hole data in this window yet.";
+    // In gross, higher avg is worse; in stableford, lower avg is worse.
+    const worst = rs.slice().sort((a,b) => {
+      if (scoringMode === "gross") return (b.avg - a.avg);
+      return (a.avg - b.avg);
+    })[0];
+    const threshold = (scoringMode === "gross") ? 0.4 : -0.4; // meaningful per-hole swing
+    const bad = (scoringMode === "gross") ? (worst.avg >= threshold) : (worst.avg <= threshold);
+    if (!bad) return `No obvious drop-off by yardage (${parLabel}).`;
+    const desc = scoringMode === "gross"
+      ? `You struggle most on ${parLabel} in the ${worst.label} bucket (${_fmtDelta(worst.avg)} strokes vs expected per hole).`
+      : `You struggle most on ${parLabel} in the ${worst.label} bucket (${_fmtDelta(worst.avg)} pts vs expected per hole).`;
+    return desc;
+  };
+
+  out.headlines = {
+    all: makeHeadline(out.all, "all pars"),
+    p3: makeHeadline(out.p3, "Par 3s"),
+    p4: makeHeadline(out.p4, "Par 4s"),
+    p5: makeHeadline(out.p5, "Par 5s"),
+  };
+
+  return out;
+}, [_windowSeriesPP, scoringMode, cur]);
+
+const golfDNAPP = React.useMemo(() => {
+  const rounds = Array.isArray(_windowSeriesPP) ? _windowSeriesPP : [];
+  if (!rounds.length) return { label: "—", why: "No rounds in this window.", holes: [], phase: null, holeAvg: [] };
+
+  // Phase split: 1-6, 7-12, 13-18 (supports 9-hole by using available holes)
+  const phaseSums = [0,0,0];
+  const phaseNs = [0,0,0];
+
+  const holeSum = Array.from({length: 18}).map(()=>0);
+  const holeN = Array.from({length: 18}).map(()=>0);
+
+  for (const r of rounds) {
+    // infer hole count from pars/perHole
+    const ps = _tryGetParsSI(r);
+    const pars = Array.isArray(ps?.pArr) ? ps.pArr : null;
+    const pts = _getPtsArr(r);
+    const gross = _getGrossArr(r);
+    const nH = Math.min(18,
+      Array.isArray(pars) ? pars.length : 18,
+      Array.isArray(pts) ? pts.length : 18,
+      Array.isArray(gross) ? gross.length : 18
+    );
+
+    for (let i=0;i<nH;i++){
+      const d = _holeDeltaVsExpected(r, i);
+      if (!Number.isFinite(d)) continue;
+
+      // hole fingerprint
+      holeSum[i] += d;
+      holeN[i] += 1;
+
+      // phase
+      const ph = (i < 6) ? 0 : (i < 12) ? 1 : 2;
+      phaseSums[ph] += d;
+      phaseNs[ph] += 1;
+    }
+  }
+
+  const phaseAvg = phaseSums.map((s,i)=> phaseNs[i] ? (s/phaseNs[i]) : NaN);
+  const holeAvg = holeSum.map((s,i)=> holeN[i] ? (s/holeN[i]) : NaN);
+
+  const span = (() => {
+    const xs = phaseAvg.filter(Number.isFinite);
+    if (xs.length < 2) return NaN;
+    return Math.max(...xs) - Math.min(...xs);
+  })();
+
+  const thr = (scoringMode === "gross") ? 0.35 : 0.35; // per-hole meaningful phase swing
+  let label = "Steady Engine";
+  let why = "Your scoring pattern is fairly even across the round.";
+
+  if (Number.isFinite(span) && span >= thr) {
+    // Determine which phase is best/worst (remember: gross lower is better, stable higher is better)
+    const scorePhase = (v) => scoringMode === "gross" ? -v : v; // higher is better
+    const scored = phaseAvg.map((v,i)=> ({i, v, s: scorePhase(v)})).filter(x=>Number.isFinite(x.v));
+    scored.sort((a,b)=> b.s - a.s);
+    const best = scored[0];
+    const worst = scored[scored.length-1];
+
+    if (best.i===0 && worst.i===2) {
+      label = "Fast Starter";
+      why = "You tend to score best early, then drift later. A tighter routine on holes 13–18 usually pays off.";
+    } else if (best.i===2 && worst.i===0) {
+      label = "Slow Cooker";
+      why = "You often start slow and finish strong. A sharper warm-up and first-tee plan could unlock quick wins.";
+    } else if (worst.i===1) {
+      label = "Mid‑Round Wobble";
+      why = "Holes 7–12 are your soft spot. That’s often focus/tempo or one bad stretch compounding.";
+    } else if (worst.i===2) {
+      label = "Late Collapse";
+      why = "Your last 6 holes cost you most. Keep it boring late: big targets, avoid short-side, protect par.";
+    } else {
+      label = "Rollercoaster";
+      why = "Your best and worst phases are far apart. The goal is fewer big swings: commit to safer targets and one tempo.";
+    }
+  }
+
+  // top strength/leak holes (based on long-term avg delta)
+  const byHole = holeAvg.map((v,i)=> ({hole:i+1, v, n: holeN[i]||0}))
+    .filter(x=>Number.isFinite(x.v) && x.n>=3);
+
+  const scoreHole = (v) => scoringMode === "gross" ? -v : v;
+  const strengths = byHole.slice().sort((a,b)=> scoreHole(b.v) - scoreHole(a.v)).slice(0,3);
+  const leaks = byHole.slice().sort((a,b)=> scoreHole(a.v) - scoreHole(b.v)).slice(0,3);
+
+  return { label, why, phaseAvg, holeAvg, strengths, leaks };
+}, [_windowSeriesPP, scoringMode, cur]);
+
+const [comfortTab, setComfortTab] = useState("all");
+const [dnaMode, setDnaMode] = useState("phase"); // 'phase' | 'holes'
+
+
   const _meanFinite = (arr) => {
     const xs = (arr || []).map(Number).filter(Number.isFinite);
     return xs.length ? xs.reduce((a,b)=>a+b,0) / xs.length : NaN;
@@ -8856,6 +9127,159 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
       </div>
     </div>
   </div>
+</div>
+
+
+
+{/* ===== Comfort Zone Yardage ===== */}
+<div className="mt-6 rounded-3xl border border-neutral-200 bg-white p-4 lg:p-5 shadow-sm" data-reveal>
+  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+    <div className="min-w-0">
+      <div className="text-[11px] uppercase tracking-widest font-black text-neutral-500">Comfort zone yardage</div>
+      <div className="mt-1 text-sm text-neutral-600">
+        Performance by distance buckets using only hole yardage (vs expected in this window).
+      </div>
+    </div>
+
+    <div className="flex items-center gap-2">
+      <UX_ChipBar
+        value={comfortTab}
+        onChange={(v) => setComfortTab(String(v))}
+        options={[
+          { label: "All", value: "all" },
+          { label: "Par 3", value: "p3" },
+          { label: "Par 4", value: "p4" },
+          { label: "Par 5", value: "p5" },
+        ]}
+      />
+    </div>
+  </div>
+
+  <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+    {(comfortZonePP?.[comfortTab] || []).map((row) => {
+      const avg = row?.avg;
+      const good = Number.isFinite(avg)
+        ? (scoringMode === "gross" ? (avg <= 0) : (avg >= 0))
+        : false;
+      const cls = good ? "border-emerald-200 bg-emerald-50/40" : "border-rose-200 bg-rose-50/40";
+      return (
+        <div key={row.k} className={`rounded-2xl border ${cls} p-4`}>
+          <div className="text-sm font-black text-neutral-900">{row.label}</div>
+          <div className="mt-1 text-2xl font-black tabular-nums">
+            {_fmtDelta(avg)}
+            <span className="text-xs font-black text-neutral-400 ml-2">
+              {scoringMode === "gross" ? "strokes/hole" : "pts/hole"}
+            </span>
+          </div>
+          <div className="mt-1 text-xs text-neutral-500">
+            n={Number.isFinite(row.n) ? Math.round(row.n) : 0} holes
+          </div>
+        </div>
+      );
+    })}
+  </div>
+
+  <div className="mt-3 rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
+    <div className="text-[11px] font-black uppercase tracking-widest text-neutral-500">Takeaway</div>
+    <div className="mt-1 text-sm text-neutral-700">
+      {comfortZonePP?.headlines?.[comfortTab] || "—"}
+    </div>
+  </div>
+</div>
+
+{/* ===== Golf DNA (Round Pattern Template) ===== */}
+<div className="mt-6 rounded-3xl border border-neutral-200 bg-white p-4 lg:p-5 shadow-sm" data-reveal>
+  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+    <div className="min-w-0">
+      <div className="text-[11px] uppercase tracking-widest font-black text-neutral-500">Golf DNA</div>
+      <div className="mt-1 text-xl lg:text-2xl font-black text-neutral-900">
+        {golfDNAPP?.label || "—"}
+      </div>
+      <div className="mt-1 text-sm text-neutral-600">
+        {golfDNAPP?.why || "—"}
+      </div>
+    </div>
+
+    <div className="flex items-center gap-2">
+      <UX_ChipBar
+        value={dnaMode}
+        onChange={(v) => setDnaMode(String(v))}
+        options={[
+          { label: "Phases", value: "phase" },
+          { label: "Holes 1–18", value: "holes" },
+        ]}
+      />
+    </div>
+  </div>
+
+  {dnaMode === "phase" ? (
+    <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+      {[
+        { label: "Holes 1–6", v: golfDNAPP?.phaseAvg?.[0] },
+        { label: "Holes 7–12", v: golfDNAPP?.phaseAvg?.[1] },
+        { label: "Holes 13–18", v: golfDNAPP?.phaseAvg?.[2] },
+      ].map((r) => {
+        const v = r.v;
+        const good = Number.isFinite(v)
+          ? (scoringMode === "gross" ? (v <= 0) : (v >= 0))
+          : false;
+        const cls = good ? "border-emerald-200 bg-emerald-50/40" : "border-rose-200 bg-rose-50/40";
+        return (
+          <div key={r.label} className={`rounded-2xl border ${cls} p-4`}>
+            <div className="text-sm font-black text-neutral-900">{r.label}</div>
+            <div className="mt-1 text-2xl font-black tabular-nums">
+              {_fmtDelta(v)}
+              <span className="text-xs font-black text-neutral-400 ml-2">
+                {scoringMode === "gross" ? "strokes/hole" : "pts/hole"}
+              </span>
+            </div>
+            <div className="mt-1 text-xs text-neutral-500">Vs expected (window)</div>
+          </div>
+        );
+      })}
+    </div>
+  ) : (
+    <div className="mt-4">
+      <div className="text-xs font-black uppercase tracking-widest text-neutral-500 mb-2">Hole fingerprint</div>
+      <div className="grid grid-cols-9 gap-1">
+        {Array.from({ length: 18 }).map((_, i) => {
+          const v = golfDNAPP?.holeAvg?.[i];
+          const ok = Number.isFinite(v);
+          const good = ok ? (scoringMode === "gross" ? (v <= 0) : (v >= 0)) : false;
+          const cls = !ok
+            ? "bg-neutral-100 border-neutral-200"
+            : good
+              ? "bg-emerald-100 border-emerald-200"
+              : "bg-rose-100 border-rose-200";
+          return (
+            <div key={i} className={`rounded-md border ${cls} py-2 text-center`}>
+              <div className="text-[10px] font-black text-neutral-600">{i + 1}</div>
+              <div className="text-[10px] font-black tabular-nums text-neutral-900">{_fmtDelta(v)}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
+          <div className="text-[11px] font-black uppercase tracking-widest text-neutral-500">Repeat strengths</div>
+          <div className="mt-1 text-sm text-neutral-700">
+            {(golfDNAPP?.strengths || []).length
+              ? (golfDNAPP.strengths.map(h => `#${h.hole}`).join(", ") + " (where you most often beat expectation)")
+              : "Not enough data yet."}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
+          <div className="text-[11px] font-black uppercase tracking-widest text-neutral-500">Repeat leaks</div>
+          <div className="mt-1 text-sm text-neutral-700">
+            {(golfDNAPP?.leaks || []).length
+              ? (golfDNAPP.leaks.map(h => `#${h.hole}`).join(", ") + " (where you most often miss expectation)")
+              : "Not enough data yet."}
+          </div>
+        </div>
+      </div>
+    </div>
+  )}
 </div>
 
 {/* Edge Map (single source of truth) */}
