@@ -8829,13 +8829,15 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
 
 
 {/* ===== Player archetype ===== */}
-<div className="mt-6 rounded-3xl border border-neutral-200 bg-white p-4 md:p-5 shadow-sm" data-reveal>
-  <div className="flex items-start justify-between gap-3">
+<div className="mt-6 rounded-3xl border border-neutral-200 bg-white p-4 lg:p-5 shadow-sm" data-reveal>
+  {/* On small screens, stack the 'Based on' chips under the content so the copy doesn't collapse into a skinny column */}
+  <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-3">
     <div className="min-w-0">
       <div className="text-[11px] uppercase tracking-widest font-black text-neutral-500">Player archetype</div>
-      <div className="mt-1 text-xl md:text-2xl font-black text-neutral-900 flex items-center gap-2">
+      <div className="mt-1 text-xl lg:text-2xl font-black text-neutral-900 flex items-center gap-2">
         <span className="text-2xl">{archetypePP?.icon || "🧭"}</span>
-        <span className="truncate">{archetypePP?.name || "—"}</span>
+        {/* Allow the name to wrap on small screens, but keep truncation on larger layouts */}
+        <span className="block lg:truncate break-words">{archetypePP?.name || "—"}</span>
       </div>
       <div className="mt-2 text-sm text-neutral-600">
         {archetypePP?.why || "—"}
@@ -8845,9 +8847,9 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
         <div className="mt-1 text-sm text-neutral-700">{archetypePP?.tip || "—"}</div>
       </div>
     </div>
-    <div className="shrink-0 text-right">
+    <div className="w-full lg:w-auto lg:shrink-0 lg:text-right">
       <div className="text-[10px] uppercase tracking-widest font-black text-neutral-400">Based on</div>
-      <div className="mt-1 inline-flex flex-wrap justify-end gap-2">
+      <div className="mt-1 inline-flex flex-wrap gap-2 lg:justify-end">
         <span className="chip">SI bands</span>
         <span className="chip">Par types</span>
         <span className="chip">Trend window</span>
