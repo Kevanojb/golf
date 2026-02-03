@@ -7828,6 +7828,141 @@ const [dnaMode, setDnaMode] = useState("phase"); // 'phase' | 'holes'
     return { pph, delta, is: delta >= 0.15 };
   })();
 
+  // -------------------------
+  // After a bad hole (Resilience)
+  // Trigger: a hole where gross is >= (par + strokesRec + 2) i.e. net double bogey or worse.
+  // Metric: how the *next hole* performs vs the player's normal baseline.
+  //  - Points: avg(next hole pts) - avg(all hole pts)
+  //  - Strokes: avg(next hole (gross - expectedNetPar)) - avg(all hole (gross - expectedNetPar))
+  // NOTE: uses only CSV data already available in series: perHole (Stableford), grossPerHole (WHS-filled), parsArr, siArr, hcap.
+  const _afterBadHole = (() => {
+    try {
+      const rounds = Array.isArray(_windowSeriesPP) ? _windowSeriesPP : [];
+      if (!rounds.length) return null;
+
+      const allPts = [];
+      const allDeltaStr = [];
+      const nextPts = [];
+      const nextDeltaStr = [];
+      let triggers = 0;
+
+      for (const r of rounds) {
+        const ph = Array.isArray(r?.perHole) ? r.perHole.slice(0, 18) : null;
+        const gph = Array.isArray(r?.grossPerHole) ? r.grossPerHole.slice(0, 18) : null;
+        const pars = Array.isArray(r?.parsArr) ? r.parsArr.slice(0, 18) : (Array.isArray(r?.parsPerHole) ? r.parsPerHole.slice(0, 18) : null);
+        const si = Array.isArray(r?.siArr) ? r.siArr.slice(0, 18) : (Array.isArray(r?.siPerHole) ? r.siPerHole.slice(0, 18) : null);
+        const hcap = _num(r?.hcap, NaN);
+        if (!ph || !gph || !pars || !si) continue;
+
+        const strokesRecAt = (siVal) => {
+          if (!Number.isFinite(hcap) || !Number.isFinite(siVal)) return 0;
+          const fullRounds = Math.floor(hcap / 18);
+          const remainder = hcap % 18;
+          return fullRounds + (remainder >= siVal ? 1 : 0);
+        };
+
+        // Baselines (all played holes)
+        for (let i = 0; i < 18; i++) {
+          const pts = _safeNum(ph[i], NaN);
+          const g = _safeNum(gph[i], NaN);
+          const par = _safeNum(pars[i], NaN);
+          const siVal = _safeNum(si[i], NaN);
+          const played = Number.isFinite(pts) || Number.isFinite(g);
+          if (!played) continue;
+          if (Number.isFinite(pts)) allPts.push(pts);
+          if (Number.isFinite(g) && Number.isFinite(par)) {
+            const exp = par + strokesRecAt(siVal);
+            allDeltaStr.push(g - exp);
+          }
+        }
+
+        // Triggers + next-hole outcomes
+        for (let i = 0; i < 17; i++) {
+          const g = _safeNum(gph[i], NaN);
+          const par = _safeNum(pars[i], NaN);
+          const siVal = _safeNum(si[i], NaN);
+          if (!Number.isFinite(g) || !Number.isFinite(par)) continue;
+          const exp = par + strokesRecAt(siVal);
+          const delta = g - exp;
+          if (!(delta >= 2)) continue; // net double bogey or worse
+
+          // Ensure next hole is played
+          const ptsN = _safeNum(ph[i + 1], NaN);
+          const gN = _safeNum(gph[i + 1], NaN);
+          const parN = _safeNum(pars[i + 1], NaN);
+          const siN = _safeNum(si[i + 1], NaN);
+          const playedNext = Number.isFinite(ptsN) || Number.isFinite(gN);
+          if (!playedNext) continue;
+
+          triggers += 1;
+          if (Number.isFinite(ptsN)) nextPts.push(ptsN);
+          if (Number.isFinite(gN) && Number.isFinite(parN)) {
+            const expN = parN + strokesRecAt(siN);
+            nextDeltaStr.push(gN - expN);
+          }
+        }
+      }
+
+      const basePPH = allPts.length ? _meanFinite(allPts) : NaN;
+      const baseDelta = allDeltaStr.length ? _meanFinite(allDeltaStr) : NaN;
+      const nPts = nextPts.length;
+      const nStr = nextDeltaStr.length;
+
+      // Require a minimum sample so this doesn't shout noise.
+      const n = Math.max(nPts, nStr, triggers);
+      if (!n || n < 4) return null;
+
+      const nextPPH = nPts ? _meanFinite(nextPts) : NaN;
+      const nextDelta = nStr ? _meanFinite(nextDeltaStr) : NaN;
+
+      const resiliencePts = (Number.isFinite(nextPPH) && Number.isFinite(basePPH)) ? (nextPPH - basePPH) : NaN;
+      const resilienceStr = (Number.isFinite(nextDelta) && Number.isFinite(baseDelta)) ? (nextDelta - baseDelta) : NaN;
+
+      const label = (() => {
+        // Use points if available; otherwise strokes (lower is better).
+        if (Number.isFinite(resiliencePts)) {
+          if (resiliencePts <= -0.10) return "Ice cold";
+          if (resiliencePts <= -0.03) return "Resilient";
+          if (resiliencePts >= 0.10) return "Spiraler";
+          if (resiliencePts >= 0.03) return "Wobbly";
+          return "Neutral";
+        }
+        if (Number.isFinite(resilienceStr)) {
+          if (resilienceStr <= -0.10) return "Ice cold";
+          if (resilienceStr <= -0.03) return "Resilient";
+          if (resilienceStr >= 0.10) return "Spiraler";
+          if (resilienceStr >= 0.03) return "Wobbly";
+          return "Neutral";
+        }
+        return "Neutral";
+      })();
+
+      const summary = (() => {
+        // Message aligned with how golfers talk.
+        const usePts = Number.isFinite(resiliencePts);
+        const x = usePts ? resiliencePts : resilienceStr;
+        if (!Number.isFinite(x)) return "Not enough data.";
+        if (x >= 0.10) return "You tend to carry mistakes forward. Reset routine needed.";
+        if (x >= 0.03) return "A small dip after mistakes — quick reset helps.";
+        if (x <= -0.10) return "You bounce back strongly — that’s a scoring superpower.";
+        if (x <= -0.03) return "You recover well after mistakes.";
+        return "You’re steady after mistakes.";
+      })();
+
+      return {
+        triggers,
+        nPts,
+        nStr,
+        resiliencePts,
+        resilienceStr,
+        label,
+        summary,
+      };
+    } catch (e) {
+      return null;
+    }
+  })();
+
 
 const _courseFit = React.useMemo(() => {
   try {
@@ -8966,6 +9101,45 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
                   <span className="ml-2 text-sm font-bold text-neutral-500">
                     ({_clutchFinish ? PR_fmt(_clutchFinish.pph,2) : "—"} pts/h, {_clutchFinish ? _fmtSignedNum(_clutchFinish.delta,2) : "—"} vs avg {Number.isFinite(_overallPPH) ? PR_fmt(_overallPPH,2) : "—"})
                   </span>
+                </div>
+              </div>
+
+              <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="text-xs font-black tracking-widest uppercase text-neutral-500">After a bad hole</div>
+                  <div className="text-[11px] font-black text-neutral-500">{_afterBadHole ? _afterBadHole.label : "—"}</div>
+                </div>
+
+                <div className="mt-2 text-sm text-neutral-600">When you make a double bogey or worse, what happens next?</div>
+
+                <div className="mt-2 text-lg font-extrabold text-neutral-900 tabular-nums">
+                  Resilience score (next hole vs your average)
+                </div>
+
+                <div className="mt-1 text-lg font-extrabold text-neutral-900 tabular-nums">
+                  {(_afterBadHole && Number.isFinite(_afterBadHole.resiliencePts)) ? (
+                    <>
+                      {_fmtSignedNum(_afterBadHole.resiliencePts, 2)} pts
+                      <span className="text-neutral-300"> / </span>
+                      {(_afterBadHole && Number.isFinite(_afterBadHole.resilienceStr))
+                        ? `${_fmtSignedNum(_afterBadHole.resilienceStr, 2, true)} str`
+                        : "—"}
+                    </>
+                  ) : (_afterBadHole && Number.isFinite(_afterBadHole.resilienceStr)) ? (
+                    <>
+                      — <span className="text-neutral-300">/</span> {_fmtSignedNum(_afterBadHole.resilienceStr, 2, true)} str
+                    </>
+                  ) : (
+                    "—"
+                  )}
+                </div>
+
+                <div className="mt-2 text-sm font-extrabold text-neutral-900">
+                  {_afterBadHole ? _afterBadHole.summary : "Not enough data."}
+                </div>
+
+                <div className="mt-1 text-[11px] text-neutral-500">
+                  {_afterBadHole ? `Based on ${Math.max(_afterBadHole.triggers||0, _afterBadHole.nPts||0, _afterBadHole.nStr||0)} follow-ups after double+ holes.` : ""}
                 </div>
               </div>
 
