@@ -7385,6 +7385,142 @@ const _fmtDelta = (x) => {
   return (x > 0 ? "+" : "") + _fmt(x, 1);
 };
 
+
+
+  // -------------------------
+  // FIX THIS (single main improvement lever)
+  // Uses only per-hole scores/points + pars + SI + yards + playing handicap
+  // -------------------------
+  const fixThisPP = React.useMemo(() => {
+    const rounds = Array.isArray(_windowSeriesPP) ? _windowSeriesPP : [];
+    if (!rounds.length) {
+      return {
+        status: "none",
+        title: "NOTHING OBVIOUS TO FIX",
+        headline: "No real weaknesses identified.",
+        gain: NaN,
+        unit: (scoringMode === "gross" ? "strokes/round" : "pts/round"),
+        detail: "Add a few more rounds and this will get sharper.",
+      };
+    }
+
+    const isGross = (scoringMode === "gross");
+    const unit = isGross ? "strokes/round" : "pts/round";
+
+    // Gather per-area totals: we treat "leak" as positive (bad)
+    const areas = {
+      easy: { key: "easy", label: "Stop leaking on easy holes (SI 13–18)", sumLeak: 0, holes: 0, rounds: 0 },
+      hard: { key: "hard", label: "Reduce big numbers on hard holes (SI 1–6)", sumLeak: 0, holes: 0, rounds: 0 },
+      p3:   { key: "p3",   label: "Par 3s are costing you", sumLeak: 0, holes: 0, rounds: 0 },
+      p5:   { key: "p5",   label: "You’re not scoring on par 5s", sumLeak: 0, holes: 0, rounds: 0 },
+      longP4:{key:"longP4",label:"Long par 4s (411y+) hurt you", sumLeak: 0, holes: 0, rounds: 0 },
+    };
+
+    const add = (a, delta) => {
+      if (!Number.isFinite(delta)) return;
+      // In gross: +delta = worse. In stableford: -delta = worse (since delta = pts-2)
+      const leak = isGross ? delta : (-delta);
+      a.sumLeak += leak;
+      a.holes += 1;
+    };
+
+    rounds.forEach((r) => {
+      const ps = _tryGetParsSI(r);
+      const pars = Array.isArray(ps?.pArr) ? ps.pArr : [];
+      const sis  = Array.isArray(ps?.sArr) ? ps.sArr : [];
+      const yards = _getYardsArr(r) || [];
+      const holes = Math.max(pars.length, sis.length, yards.length, 18);
+
+      let touched = { easy:false, hard:false, p3:false, p5:false, longP4:false };
+
+      for (let i=0;i<holes;i++){
+        const par = _safeNum(pars[i], NaN);
+        const si  = _safeNum(sis[i], NaN);
+        const y   = _safeNum(yards[i], NaN);
+
+        const delta = _holeDeltaVsExpected(r, i); // gross: strokes over expected; stableford: pts-2
+        if (!Number.isFinite(delta)) continue;
+
+        if (Number.isFinite(si) && si >= 13 && si <= 18) { add(areas.easy, delta); touched.easy = true; }
+        if (Number.isFinite(si) && si >= 1  && si <= 6)  { add(areas.hard, delta); touched.hard = true; }
+
+        if (Number.isFinite(par) && par === 3) { add(areas.p3, delta); touched.p3 = true; }
+        if (Number.isFinite(par) && par === 5) { add(areas.p5, delta); touched.p5 = true; }
+        if (Number.isFinite(par) && par === 4 && Number.isFinite(y) && y >= 411) { add(areas.longP4, delta); touched.longP4 = true; }
+      }
+
+      // Round-counts help us estimate "holes per round" for that area
+      Object.keys(touched).forEach(k => { if (touched[k]) areas[k].rounds += 1; });
+    });
+
+    const toGain = (a) => {
+      if (!a || !a.holes) return { gain: NaN, avgLeakPH: NaN, holesPerRound: NaN };
+      const avgLeakPH = a.sumLeak / a.holes; // positive = bad
+      const holesPerRound = a.rounds ? (a.holes / a.rounds) : NaN;
+      const gain = Number.isFinite(holesPerRound) ? (avgLeakPH * holesPerRound) : NaN; // per round
+      return { gain, avgLeakPH, holesPerRound };
+    };
+
+    const scored = Object.values(areas).map(a => {
+      const t = toGain(a);
+      return { ...a, ...t };
+    });
+
+    // Confidence gates to avoid noise
+    const MIN_HOLES = 18;     // at least ~1 full round worth in that bucket across window
+    const MIN_GAIN  = isGross ? 0.7 : 1.4; // pts scale is ~2x strokes-ish; keep it meaningful
+
+    const viable = scored
+      .filter(a => Number.isFinite(a.gain) && a.holes >= MIN_HOLES && a.gain >= MIN_GAIN)
+      .sort((x,y) => (y.gain||0) - (x.gain||0));
+
+    if (!viable.length) {
+      return {
+        status: "none",
+        title: "NOTHING OBVIOUS TO FIX",
+        headline: "No real weaknesses identified.",
+        gain: NaN,
+        unit,
+        detail: "You’re pretty balanced in this window. Biggest gains come from general consistency (fewer doubles).",
+      };
+    }
+
+    const best = viable[0];
+
+    // Round gain display (conservative, rounded)
+    const round05 = (v) => {
+      if (!Number.isFinite(v)) return NaN;
+      const clamped = Math.max(0.5, Math.min(3.5, v));
+      return Math.round(clamped * 2) / 2;
+    };
+
+    const gainShow = round05(best.gain);
+
+    // Copy: one-liner + practical nudge
+    const copy = {
+      easy: "These are advantage holes. Play boring golf: fat target, avoid short-side, bank par first.",
+      hard: "Cut doubles. Choose safer lines and accept bogey—protect against the big number.",
+      p3:   "Centre-green targets and committed swings. If between clubs, take the longer one.",
+      p5:   "Make it a 3-shot plan: safe tee ball → lay up to a favourite wedge → fat green.",
+      longP4:"Prioritise position over power. Take trouble out of play and keep the next shot simple.",
+    };
+
+    const headline =
+      `${best.label} \u2192 gain ~${Number.isFinite(gainShow) ? gainShow.toFixed(1) : "—"} ${unit}`;
+
+    return {
+      status: "fix",
+      title: "FIX THIS",
+      headline,
+      gain: gainShow,
+      unit,
+      detail: copy[best.key] || "Focus here for the quickest gains.",
+      key: best.key,
+      sample: { holes: best.holes, rounds: best.rounds }
+    };
+  }, [scoringMode, _windowSeriesPP, cur]);
+
+
 const comfortZonePP = React.useMemo(() => {
   const rounds = Array.isArray(_windowSeriesPP) ? _windowSeriesPP : [];
   const buckets = {
@@ -9101,6 +9237,32 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
         </div>
       </div>
 
+
+
+{/* ===== FIX THIS (main improvement) ===== */}
+<div className="mt-6 rounded-3xl border border-neutral-200 bg-white p-4 lg:p-5 shadow-sm" data-reveal>
+  <div className="flex items-start justify-between gap-3">
+    <div className="min-w-0">
+      <div className="text-[11px] uppercase tracking-widest font-black text-neutral-500">
+        {fixThisPP?.status === "fix" ? "🛠️ FIX THIS" : "🛠️ NOTHING OBVIOUS TO FIX"}
+      </div>
+      <div className="mt-1 text-lg lg:text-xl font-black text-neutral-900">
+        {fixThisPP?.headline || "—"}
+      </div>
+      <div className="mt-2 text-sm text-neutral-700">
+        {fixThisPP?.detail || "—"}
+      </div>
+    </div>
+
+    <div className="shrink-0 text-right">
+      <div className="text-[10px] uppercase tracking-widest font-black text-neutral-400">Confidence</div>
+      <div className="mt-1 inline-flex flex-wrap justify-end gap-2">
+        <span className="chip">n={Number.isFinite(fixThisPP?.sample?.holes) ? Math.round(fixThisPP.sample.holes) : 0}</span>
+        <span className="chip">r={Number.isFinite(fixThisPP?.sample?.rounds) ? Math.round(fixThisPP.sample.rounds) : 0}</span>
+      </div>
+    </div>
+  </div>
+</div>
 
 {/* ===== Player archetype ===== */}
 <div className="mt-6 rounded-3xl border border-neutral-200 bg-white p-4 lg:p-5 shadow-sm" data-reveal>
