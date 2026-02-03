@@ -10702,92 +10702,6 @@ const isGross = String(scoringMode) === "gross";
   const rounds = PR_num(cur?.rounds, NaN);
   const holes = PR_num(meTotals?.holes, NaN);
 
-// --- Summary metrics for narrative (computed from selected window, per player) ---
-const _seriesFor = (p) => {
-  try { return Array.isArray(p?.roundSeries) ? p.roundSeries : (__filterSeries(p?.series)); }
-  catch(e) { return []; }
-};
-const _meanArr = (arr) => {
-  const a = (arr||[]).map(Number).filter(Number.isFinite);
-  return a.length ? (a.reduce((s,v)=>s+v,0)/a.length) : NaN;
-};
-const _stdevArr = (arr) => {
-  const a = (arr||[]).map(Number).filter(Number.isFinite);
-  if (a.length < 3) return NaN;
-  const m = _meanArr(a);
-  const v = a.reduce((s,x)=>s + Math.pow(x-m,2),0) / (a.length-1);
-  return Math.sqrt(v);
-};
-const _slopeTime = (xs, ys) => {
-  const pairs = [];
-  for (let i=0;i<Math.min(xs.length, ys.length);i++){
-    const x = Number(xs[i]), y = Number(ys[i]);
-    if (Number.isFinite(x) && Number.isFinite(y)) pairs.push([x,y]);
-  }
-  if (pairs.length < 3) return NaN;
-  const mx = pairs.reduce((s,p)=>s+p[0],0)/pairs.length;
-  const my = pairs.reduce((s,p)=>s+p[1],0)/pairs.length;
-  let num=0, den=0;
-  for (const [x,y] of pairs){
-    num += (x-mx)*(y-my);
-    den += (x-mx)*(x-mx);
-  }
-  return den ? (num/den) : NaN;
-};
-
-const _allPlayersForRank = (players||[]).filter(p => p && p.name);
-const _stableAvgs = _allPlayersForRank.map(p => ({ name:p.name, avg:_meanArr(_seriesFor(p).map(r=>PR_num(r?.pts, NaN))) })).filter(x=>Number.isFinite(x.avg));
-const _grossAvgs  = _allPlayersForRank.map(p => ({ name:p.name, avg:_meanArr(_seriesFor(p).map(r=>PR_num(r?.gross, NaN))) })).filter(x=>Number.isFinite(x.avg));
-
-const _stableSorted = _stableAvgs.slice().sort((a,b)=>b.avg-a.avg);
-const _grossSorted  = _grossAvgs.slice().sort((a,b)=>a.avg-b.avg);
-
-const _stablePos = _stableSorted.findIndex(x=>String(x.name)===String(cur?.name)) + 1;
-const _grossPos  = _grossSorted.findIndex(x=>String(x.name)===String(cur?.name)) + 1;
-
-const _stableFieldAvg = _meanArr(_stableAvgs.map(x=>x.avg));
-const _grossFieldAvg  = _meanArr(_grossAvgs.map(x=>x.avg));
-
-const _stableDeltaVsField = (Number.isFinite(_meanArr(_seriesFor(cur).map(r=>PR_num(r?.pts, NaN)))) && Number.isFinite(_stableFieldAvg))
-  ? (_meanArr(_seriesFor(cur).map(r=>PR_num(r?.pts, NaN))) - _stableFieldAvg)
-  : NaN;
-
-const _grossDeltaVsField = (Number.isFinite(_meanArr(_seriesFor(cur).map(r=>PR_num(r?.gross, NaN)))) && Number.isFinite(_grossFieldAvg))
-  ? (_meanArr(_seriesFor(cur).map(r=>PR_num(r?.gross, NaN))) - _grossFieldAvg)
-  : NaN; // positive = worse (more strokes)
-
-const _stableVol = _stdevArr(_seriesFor(cur).map(r=>PR_num(r?.pts, NaN)));
-const _grossVol  = _stdevArr(_seriesFor(cur).map(r=>PR_num(r?.gross, NaN)));
-const _stableVolField = _stdevArr(_stableAvgs.map(x=>x.avg));
-const _grossVolField  = _stdevArr(_grossAvgs.map(x=>x.avg));
-
-// Trend: slope per day (points/day or strokes/day). Uses round dates if present; falls back to index.
-const _curSer = _seriesFor(cur);
-const _xs = _curSer.map((r,i)=> {
-  const ms = Number(r?.dateMs) || Number(r?.date_ms) || (r?.date ? (new Date(r.date)).getTime() : NaN);
-  return Number.isFinite(ms) ? (ms/86400000) : i; // days
-});
-const _ysStable = _curSer.map(r=>PR_num(r?.pts, NaN));
-const _ysGross  = _curSer.map(r=>PR_num(r?.gross, NaN));
-
-const _slopeStable = _slopeTime(_xs, _ysStable);
-const _slopeGross  = _slopeTime(_xs, _ysGross);
-
-const _trendLabel = (() => {
-  // Thresholds tuned to be conservative.
-  if (String(scoringMode)==="gross") {
-    if (!Number.isFinite(_slopeGross)) return "No clear trend";
-    if (_slopeGross <= -0.02) return "Getting better";
-    if (_slopeGross >= 0.02) return "Getting worse";
-    return "No clear trend";
-  }
-  if (!Number.isFinite(_slopeStable)) return "No clear trend";
-  if (_slopeStable >= 0.02) return "Getting better";
-  if (_slopeStable <= -0.02) return "Getting worse";
-  return "No clear trend";
-})();
-
-
   // Core KPI buckets (same as the report cards)
   const bySI = PR_buildRawRows({
     scoringMode,
@@ -11032,41 +10946,10 @@ if (__effComparatorMode === "par") {
       · <b>${PR_num(holes,0)}</b> holes analysed
       <span class="PRpill" style="margin-left:8px;">${(String(scoringMode)==="gross" ? "Gross strokes" : "Stableford points")} vs ${(__effComparatorMode==="par" ? "Par baseline" : (__effComparatorMode==="field" ? "Field" : "Handicap band"))}</span>
       ${__effComparatorMode==="par" ? "" : `<span class="PRpill" style="margin-left:8px;">Peers: <b>${peerPlayersN}</b>${Number.isFinite(peerMin)&&Number.isFinite(peerMax)?` · Avg hcap range <b>${peerMin.toFixed(1)}–${peerMax.toFixed(1)}</b>`:""}</span>`}
+    </div>
 
-</div>
-
-<div class="PRbox PRsec">
-  <div class="PRsecTitle">0. Factual Player Summary</div>
-  <p class="PRp">
-    <b>Rounds & Averages:</b>
-    ${PR_num(rounds,0)} rounds •
-    Stableford avg <b>${Number.isFinite(_meanArr(_curSer.map(r=>PR_num(r?.pts, NaN)))) ? _meanArr(_curSer.map(r=>PR_num(r?.pts, NaN))).toFixed(1) : "—"}</b> pts •
-    Gross avg <b>${Number.isFinite(_meanArr(_curSer.map(r=>PR_num(r?.gross, NaN)))) ? _meanArr(_curSer.map(r=>PR_num(r?.gross, NaN))).toFixed(1) : "—"}</b> strokes.
-  </p>
-  <p class="PRp">
-    <b>Rank vs Field (by selected window averages):</b>
-    Stableford <b>${_stablePos>0 ? _stablePos : "—"}</b> of <b>${_stableSorted.length||"—"}</b>
-    (${Number.isFinite(_stableDeltaVsField) ? (( _stableDeltaVsField>=0?"+":"") + _stableDeltaVsField.toFixed(1)) : "—"} pts vs field avg) ·
-    Gross <b>${_grossPos>0 ? _grossPos : "—"}</b> of <b>${_grossSorted.length||"—"}</b>
-    (${Number.isFinite(_grossDeltaVsField) ? (( _grossDeltaVsField>=0?"+":"") + _grossDeltaVsField.toFixed(1)) : "—"} strokes vs field avg).
-  </p>
-  <p class="PRp">
-    <b>Trend:</b> ${PR_escapeHtml(_trendLabel)}.
-    <span class="PRmuted"> Based on the direction of your results across the selected rounds.</span>
-  </p>
-  <p class="PRp">
-    <b>Volatility:</b>
-    ${String(scoringMode)==="gross"
-      ? `σ <b>${Number.isFinite(_grossVol)?_grossVol.toFixed(1):"—"}</b> (gross strokes)`
-      : `σ <b>${Number.isFinite(_stableVol)?_stableVol.toFixed(1):"—"}</b> (Stableford points)`
-    }.
-    <span class="PRmuted"> Higher σ = less consistent.</span>
-  </p>
-</div>
-
-<div class="PRbox PRsec">
-  <div class="PRsecTitle">1. The Season Headline</div>
-
+    <div class="PRbox PRsec">
+      <div class="PRsecTitle">1. The Season Headline</div>
       <p class="PRp">
   ${__effComparatorMode==="par" ? `
     <b>Scoring vs Par:</b>
