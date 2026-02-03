@@ -4244,63 +4244,6 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
   const grossTotal = gross.reduce((s, v) => (Number.isFinite(v) ? s + v : s), 0);
   const ptsTotal = pts.reduce((s, v) => (Number.isFinite(Number(v)) ? s + Number(v) : s), 0);
 
-  // =========================
-  // 🥊 VS YOUR GROUP (hole-by-hole battles vs other players in this event)
-  // Uses Stableford points per hole by default (works best for societies).
-  // =========================
-  const groupBattles = useMemo(() => {
-    try {
-      const me = player;
-      const myPts = (Array.isArray(me.perHole) ? me.perHole : []).slice(0, holes).map((x) => Number(x));
-      if (!computed || computed.length < 2) return [];
-
-      const opps = computed.filter((p) => p && p.name && p.name !== me.name);
-      const battles = opps.map((opp) => {
-        const oppPts = (Array.isArray(opp.perHole) ? opp.perHole : []).slice(0, holes).map((x) => Number(x));
-
-        let won = 0, lost = 0, halved = 0;
-        const diffs = []; // per-hole point diffs for swing holes
-        for (let i = 0; i < holes; i++) {
-          const a = myPts[i];
-          const b = oppPts[i];
-          if (!Number.isFinite(a) || !Number.isFinite(b)) continue;
-          const d = a - b;
-          diffs.push({ i: i + 1, d });
-          if (d > 0) won++;
-          else if (d < 0) lost++;
-          else halved++;
-        }
-
-        // Biggest negative swing holes (where you lost the most points vs opponent)
-        const worst = diffs
-          .filter((x) => x.d < 0)
-          .sort((x, y) => x.d - y.d) // most negative first
-          .slice(0, 3)
-          .map((x) => x.i);
-
-        const myTotal = myPts.reduce((s, v) => (Number.isFinite(v) ? s + v : s), 0);
-        const oppTotal = oppPts.reduce((s, v) => (Number.isFinite(v) ? s + v : s), 0);
-        const ptsDiff = myTotal - oppTotal;
-
-        return {
-          name: opp.name,
-          won,
-          lost,
-          halved,
-          net: won - lost,
-          ptsDiff,
-          worstHoles: worst,
-          samples: diffs.length,
-        };
-      });
-
-      // Sort by: biggest net loss first, then biggest points loss first
-      return battles.sort((a, b) => (a.net - b.net) || (a.ptsDiff - b.ptsDiff));
-    } catch (e) {
-      return [];
-    }
-  }, [computed, player, holes]);
-
   return (
     <section className="content-card p-4 md:p-6">
       <SoloNav
@@ -4418,67 +4361,6 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
           </tbody>
         </table>
       </div>
-
-      {groupBattles && groupBattles.length > 0 && (
-        <div className="mt-4 rounded-3xl border border-neutral-200 bg-white p-4 md:p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="text-xs font-black tracking-widest text-neutral-500">VS YOUR GROUP</div>
-              <div className="text-sm md:text-base font-semibold text-squab-900">Where you won or lost holes</div>
-              <div className="text-xs text-neutral-500">
-                Hole wins are based on Stableford points per hole (higher wins). Only holes with points for both players are counted.
-              </div>
-            </div>
-          </div>
-
-          <div className="mt-3 space-y-2">
-            {groupBattles.map((b) => {
-              const badge =
-                b.net >= 3 ? "bg-emerald-50 text-emerald-900 border-emerald-200" :
-                b.net <= -3 ? "bg-rose-50 text-rose-900 border-rose-200" :
-                "bg-neutral-50 text-neutral-900 border-neutral-200";
-
-              const ptsBadge =
-                b.ptsDiff >= 3 ? "text-emerald-700" :
-                b.ptsDiff <= -3 ? "text-rose-700" :
-                "text-neutral-600";
-
-              const ptsTxt = Number.isFinite(b.ptsDiff) ? `${b.ptsDiff > 0 ? "+" : ""}${b.ptsDiff.toFixed(1)} pts` : "—";
-
-              return (
-                <div key={b.name} className="rounded-2xl border border-neutral-200 bg-white px-3 py-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="font-semibold text-squab-900 truncate max-w-[220px]">{b.name}</div>
-                      <div className="text-[11px] text-neutral-500">
-                        Won {b.won} · Lost {b.lost} · Halved {b.halved}
-                        {b.samples ? ` · n=${b.samples} holes` : ""}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <span className={`text-[11px] font-bold px-2 py-1 rounded-full border ${badge}`}>
-                        Net {b.net > 0 ? "+" : ""}{b.net}
-                      </span>
-                      <span className={`text-[11px] font-bold ${ptsBadge}`}>
-                        {ptsTxt}
-                      </span>
-                    </div>
-                  </div>
-
-                  {b.worstHoles && b.worstHoles.length > 0 && (
-                    <div className="mt-2 text-[11px] text-neutral-600">
-                      Lost most ground on holes:{" "}
-                      <span className="font-semibold text-neutral-800">{b.worstHoles.join(", ")}</span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
     </section>
   );
 }
