@@ -7799,10 +7799,10 @@ const comfortZonePP = React.useMemo(() => {
     })[0];
     const threshold = (scoringMode === "gross") ? 0.4 : -0.4; // meaningful per-hole swing
     const bad = (scoringMode === "gross") ? (worst.avg >= threshold) : (worst.avg <= threshold);
-    if (!bad) return `No obvious drop-off by yardage (${parLabel}).`;
+    if (!bad) return `No obvious yardage weakness vs your expectation (${parLabel}).`;
     const desc = scoringMode === "gross"
-      ? `You struggle most on ${parLabel} in the ${worst.label} bucket (${_fmtDelta(worst.avg)} strokes vs expected per hole).`
-      : `You struggle most on ${parLabel} in the ${worst.label} bucket (${_fmtDelta(worst.avg)} pts vs expected per hole).`;
+      ? `Compared to your own expectation, your biggest drop-off is ${parLabel} in the ${worst.label} bucket (${_fmtDelta(worst.avg)} strokes per hole).`
+      : `Compared to your own expectation, your biggest drop-off is ${parLabel} in the ${worst.label} bucket (${_fmtDelta(worst.avg)} pts per hole).`;
     return desc;
   };
 
@@ -9667,7 +9667,7 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
     <div className="min-w-0">
       <div className="text-[11px] uppercase tracking-widest font-black text-neutral-500">Comfort zone yardage</div>
       <div className="mt-1 text-sm text-neutral-600">
-        Performance by distance buckets using only hole yardage (vs expected in this window).
+        Compared to <b>your own expectation</b> (this window), grouped by hole yardage.
       </div>
     </div>
 
@@ -9828,7 +9828,7 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
           : "—"}
       </div>
       <div className="mt-1 text-sm text-neutral-600">
-        A quick read of <b>where your score is coming from</b>: one place you consistently outperform the comparison (<b>Best edge</b>) and one place that consistently costs you the most (<b>Biggest leak</b>).
+        A quick read of <b>where your score is coming from</b>: one area where you <b>beat the field</b> and one area that <b>costs you most</b>.
       </div>
 
       <div className="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -9841,14 +9841,14 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
             <>
               <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
                 <div className="flex items-start justify-between gap-2">
-                  <div className="text-[10px] font-black tracking-widest uppercase text-neutral-anchored text-neutral-500">Best edge</div>
+                  <div className="text-[10px] font-black tracking-widest uppercase text-neutral-anchored text-neutral-500">Where you beat the field</div>
                   <span className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-black text-emerald-700">
                     🏅 Gain vs {cohort.label}
                   </span>
                 </div>
 
                 <div className="mt-1 text-xs text-neutral-500">
-                  The bucket where you help your score the most compared to the field (your strongest advantage).
+                  The bucket where you perform <b>better than the field</b> (even if it’s still a tough bucket in absolute terms).
                 </div>
 
                 <div className="mt-2 text-lg font-black text-neutral-900 truncate">{best ? best.label : "—"}</div>
