@@ -2821,9 +2821,10 @@ function Header({ leagueHeaderTitle, eventName, statusMsg, courseName, view, set
   return (
     <div className="hide-print sticky top-0 z-40" style={{ paddingTop: "env(safe-area-inset-top)" }}>
       {/* Slim sticky bar */}
-      <div className="glass-card app-topbar shadow-md">
-        <div className="flex items-center justify-between gap-3">
-          <div className="min-w-0">
+      <div className="glass-card app-topbar shadow-md px-3 py-2 sm:px-4 sm:py-3">
+        <div className="flex items-center justify-between gap-2 sm:gap-3">
+          {/* On mobile, drop the left title to avoid duplication + reclaim space */}
+          <div className="min-w-0 hidden sm:block">
             <h1 className="text-lg md:text-xl font-extrabold tracking-tight text-squab-900 truncate">
               {leagueHeaderTitle || "Den Society League — Ultimate Edition"}
             </h1>
@@ -2831,10 +2832,10 @@ function Header({ leagueHeaderTitle, eventName, statusMsg, courseName, view, set
               {eventName || "Untitled Event"}
             </div>
           </div>
-          <div className="flex items-center gap-2 flex-wrap justify-end">
+          <div className="flex items-center gap-1 sm:gap-2 flex-wrap justify-end min-w-0">
   {view !== "home" ? (
     <button
-      className="topbtn"
+      className="topbtn px-3 py-2 text-sm"
       onClick={() => setView("home")}
       title="Back to Main Menu"
       aria-label="Back to Main Menu"
@@ -2842,8 +2843,8 @@ function Header({ leagueHeaderTitle, eventName, statusMsg, courseName, view, set
       <span className="ico">🏠</span>Home
     </button>
   ) : null}
-  <span className="topchip">
-    <span className="ico">⛳</span><span className="txt">{eventName || "Untitled Event"}</span>
+  <span className="topchip px-3 py-2 text-sm max-w-[70vw] sm:max-w-none">
+    <span className="ico">⛳</span><span className="txt truncate">{eventName || "Untitled Event"}</span>
   </span>
 </div>
         </div>
