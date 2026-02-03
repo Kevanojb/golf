@@ -8415,7 +8415,9 @@ const coachLine = (row) => {
         <div className="flex flex-col gap-4">
           {/* Player identity */}
           <div className="min-w-0 flex-1">
-            <div className="flex items-center justify-between gap-3">  <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Performance Mirror</div>  <div className="flex items-center gap-2">    <button className="btn-primary" onClick={() => {
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 sm:gap-3">
+                <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Performance Mirror</div>
+                <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap w-full sm:w-auto justify-start sm:justify-end">    <button className="btn-primary" onClick={() => {
             try{
               const model = seasonModel;
               const lens = (localStorage.getItem("dsl_lens") || "pointsField");
