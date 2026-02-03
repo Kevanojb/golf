@@ -7919,35 +7919,43 @@ const [dnaMode, setDnaMode] = useState("phase"); // 'phase' | 'holes'
       const resilienceStr = (Number.isFinite(nextDelta) && Number.isFinite(baseDelta)) ? (nextDelta - baseDelta) : NaN;
 
       const label = (() => {
-        // Use points if available; otherwise strokes (lower is better).
-        if (Number.isFinite(resiliencePts)) {
-          if (resiliencePts <= -0.10) return "Ice cold";
-          if (resiliencePts <= -0.03) return "Resilient";
-          if (resiliencePts >= 0.10) return "Spiraler";
-          if (resiliencePts >= 0.03) return "Wobbly";
-          return "Neutral";
-        }
-        if (Number.isFinite(resilienceStr)) {
-          if (resilienceStr <= -0.10) return "Ice cold";
-          if (resilienceStr <= -0.03) return "Resilient";
-          if (resilienceStr >= 0.10) return "Spiraler";
-          if (resilienceStr >= 0.03) return "Wobbly";
-          return "Neutral";
-        }
-        return "Neutral";
-      })();
+  // Points: higher is better. Strokes-delta: lower is better (negative is good).
+  if (Number.isFinite(resiliencePts)) {
+    if (resiliencePts >= 0.15) return "Ice cold";
+    if (resiliencePts >= 0.05) return "Resilient";
+    if (resiliencePts <= -0.15) return "Spiraler";
+    if (resiliencePts <= -0.05) return "Wobbly";
+    return "Neutral";
+  }
+  if (Number.isFinite(resilienceStr)) {
+    if (resilienceStr <= -0.25) return "Ice cold";
+    if (resilienceStr <= -0.08) return "Resilient";
+    if (resilienceStr >= 0.25) return "Spiraler";
+    if (resilienceStr >= 0.08) return "Wobbly";
+    return "Neutral";
+  }
+  return "Neutral";
+})();
 
       const summary = (() => {
-        // Message aligned with how golfers talk.
-        const usePts = Number.isFinite(resiliencePts);
-        const x = usePts ? resiliencePts : resilienceStr;
-        if (!Number.isFinite(x)) return "Not enough data.";
-        if (x >= 0.10) return "You tend to carry mistakes forward. Reset routine needed.";
-        if (x >= 0.03) return "A small dip after mistakes — quick reset helps.";
-        if (x <= -0.10) return "You bounce back strongly — that’s a scoring superpower.";
-        if (x <= -0.03) return "You recover well after mistakes.";
-        return "You’re steady after mistakes.";
-      })();
+  // Keep the language intuitive and match the metric direction.
+  const hasPts = Number.isFinite(resiliencePts);
+  const hasStr = Number.isFinite(resilienceStr);
+
+  // Prefer points if available in this view, but respect direction:
+  // +pts is better bounce-back; -str is better bounce-back.
+  const score = hasPts ? resiliencePts : (hasStr ? (-resilienceStr) : NaN); // higher = better
+  if (!Number.isFinite(score)) return "Not enough data.";
+
+  // Tiny deltas shouldn't get dramatic wording.
+  if (Math.abs(score) < 0.05) return "You’re steady after mistakes.";
+
+  if (score >= 0.25) return "You often bounce back immediately — that’s a real scoring strength.";
+  if (score >= 0.10) return "You generally recover well after mistakes.";
+  if (score <= -0.25) return "Mistakes tend to snowball — a reset routine would save shots.";
+  if (score <= -0.10) return "A small dip after mistakes — quick reset helps.";
+  return "You’re mostly steady after mistakes.";
+})();
 
       return {
         triggers,
