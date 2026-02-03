@@ -39,6 +39,39 @@ var formatGrossVsPar = function (n) {
   return (n > 0 ? "+" : "") + String(n);
 };
 
+// --- Scorecard colour helpers (gross vs par and Stableford points) ---
+// Uses subtle backgrounds + strong text; avoids relying on red/green only.
+function _holeGrossClass(diff) {
+  if (!Number.isFinite(diff)) return "";
+  // diff = gross - par
+  if (diff <= -2) return "bg-emerald-100 text-emerald-900 border border-emerald-200"; // eagle+
+  if (diff === -1) return "bg-emerald-50 text-emerald-900 border border-emerald-200"; // birdie
+  if (diff === 0) return "bg-slate-50 text-slate-900 border border-slate-200"; // par
+  if (diff === 1) return "bg-amber-50 text-amber-900 border border-amber-200"; // bogey
+  if (diff === 2) return "bg-orange-50 text-orange-900 border border-orange-200"; // double
+  return "bg-rose-50 text-rose-900 border border-rose-200"; // triple+
+}
+
+function _holeGrossLabel(diff) {
+  if (!Number.isFinite(diff)) return "";
+  if (diff <= -2) return "Eagle+";
+  if (diff === -1) return "Birdie";
+  if (diff === 0) return "Par";
+  if (diff === 1) return "Bogey";
+  if (diff === 2) return "Double";
+  return "Triple+";
+}
+
+function _holePtsClass(pts) {
+  const p = Number(pts);
+  if (!Number.isFinite(p)) return "";
+  if (p >= 4) return "bg-emerald-100 text-emerald-900 border border-emerald-200";
+  if (p === 3) return "bg-emerald-50 text-emerald-900 border border-emerald-200";
+  if (p === 2) return "bg-slate-50 text-slate-900 border border-slate-200";
+  if (p === 1) return "bg-amber-50 text-amber-900 border border-amber-200";
+  return "bg-rose-50 text-rose-900 border border-rose-200"; // 0 or less
+}
+
 // =========================
 // TENANT ROUTE + BRANDING (module-scope)
 // In the multi-tenant build, AuthGate sets these globals BEFORE App renders.
@@ -4277,6 +4310,8 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
                   {(() => {
                     const gVal = gross[i];
                     const imp = !!imputed[i];
+                    const pVal = Number(pars[i]);
+                    const diff = (Number.isFinite(gVal) && Number.isFinite(pVal)) ? (gVal - pVal) : NaN;
                     if (imp && Number.isFinite(gVal)) {
                       return (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border border-amber-200 bg-amber-50 text-amber-900">
@@ -4285,11 +4320,41 @@ function PlayerScorecardView({ computed, courseTees, setView }) {
                         </span>
                       );
                     }
-                    return Number.isFinite(gVal) ? gVal : "—";
+                    if (Number.isFinite(gVal)) {
+                      const cls = _holeGrossClass(diff);
+                      const label = _holeGrossLabel(diff);
+                      return (
+                        <span
+                          className={
+                            "inline-flex items-center justify-end min-w-[2.25rem] px-2 py-0.5 rounded-lg " +
+                            cls
+                          }
+                          title={label}
+                        >
+                          <span className="tabular-nums">{gVal}</span>
+                        </span>
+                      );
+                    }
+                    return "—";
                   })()}
                 </td>
                 <td className="text-right px-3 tabular-nums font-semibold">
-                  {Number.isFinite(Number(pts[i])) ? Number(pts[i]) : "—"}
+                  {(() => {
+                    const pv = Number(pts[i]);
+                    if (!Number.isFinite(pv)) return "—";
+                    const cls = _holePtsClass(pv);
+                    return (
+                      <span
+                        className={
+                          "inline-flex items-center justify-end min-w-[2.25rem] px-2 py-0.5 rounded-lg " +
+                          cls
+                        }
+                        title={pv >= 4 ? "Net eagle+" : pv === 3 ? "Net birdie" : pv === 2 ? "Net par" : pv === 1 ? "Net bogey" : "Net double+"}
+                      >
+                        <span className="tabular-nums">{pv}</span>
+                      </span>
+                    );
+                  })()}
                 </td>
               </tr>
             ))}
