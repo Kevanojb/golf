@@ -6581,6 +6581,15 @@ return () => {
     }
     return Math.sqrt(ss / (xs.length - 1));
   };
+  
+const _median = (arr) => {
+  const xs = (arr || []).map(Number).filter(Number.isFinite).slice().sort((a,b)=>a-b);
+  if (!xs.length) return NaN;
+  const mid = Math.floor(xs.length / 2);
+  return (xs.length % 2) ? xs[mid] : (xs[mid-1] + xs[mid]) / 2;
+};
+
+const _normKey = (x) => String(x ?? "").trim().toLowerCase().replace(/\s+/g, " ");
   const _fmt = (n, d=1) => PR_fmt(n, d);
   const _pct = (n, d=0) => Number.isFinite(n) ? `${_fmt(n*100, d)}%` : "—";
   const _pctPP = (n) => _pct(n, 0);
@@ -7213,6 +7222,102 @@ const parLeaders = React.useMemo(() => {
     return { pph, delta, is: delta >= 0.15 };
   })();
 
+
+const _courseFit = React.useMemo(() => {
+  try {
+    const targetCourse = problemHolePack?.courseName ? String(problemHolePack.courseName) : "";
+    const targetTee = problemHolePack?.teeName ? String(problemHolePack.teeName) : "";
+    if (!targetCourse) return { ok: false, reason: "no_course" };
+
+    const getRoundCourse = (r) => r?.courseName ?? r?.course ?? r?.course_name ?? r?.courseLabel ?? r?.course_label ?? "";
+    const getRoundTee = (r) => r?.teeName ?? r?.tee ?? r?.tee_label ?? r?.teeLabel ?? r?.tee_color ?? "";
+    const getRoundPts = (r) => PR_num(r?.points ?? r?.stableford ?? r?.stablefordTotal ?? r?.totalPoints ?? r?.pts, NaN);
+    const getRoundHI = (r) => PR_num(r?.startExact ?? r?.start_exact ?? r?.handicapIndex ?? r?.handicap_index ?? r?.hi ?? r?.HI ?? r?.index ?? r?.INDEX, NaN);
+
+    const deltas = [];
+    for (const p of (allPlayers || [])) {
+      if (!_isRealPlayer(p)) continue;
+      const series = Array.isArray(p.series) ? p.series : [];
+      if (!series.length) continue;
+
+      const onCourse = series.filter(r => {
+        const c = _normKey(getRoundCourse(r));
+        const t = _normKey(getRoundTee(r));
+        if (!c) return false;
+        const courseOk = c === _normKey(targetCourse);
+        if (!courseOk) return false;
+        if (targetTee) return t === _normKey(targetTee);
+        return true;
+      });
+
+      if (!onCourse.length) continue;
+
+      const ptsCourse = _mean(onCourse.map(getRoundPts));
+      if (!Number.isFinite(ptsCourse)) continue;
+
+      const other = series.filter(r => {
+        const c = _normKey(getRoundCourse(r));
+        if (!c) return false;
+        const courseOk = c === _normKey(targetCourse);
+        if (!courseOk) return true;
+        if (!targetTee) return false;
+        const t = _normKey(getRoundTee(r));
+        return t !== _normKey(targetTee);
+      });
+
+      // baseline: prefer "other courses" if enough data, else fall back to all series
+      const baselinePool = (other.length >= 3) ? other : series;
+      const ptsBase = _mean(baselinePool.map(getRoundPts));
+      if (!Number.isFinite(ptsBase)) continue;
+
+      const delta = ptsCourse - ptsBase;
+      const hi = _median(onCourse.map(getRoundHI));
+      if (!Number.isFinite(hi)) continue;
+
+      deltas.push({ name: p.name, hi, delta, n: onCourse.length });
+    }
+
+    if (!deltas.length) return { ok: false, reason: "no_data", targetCourse, targetTee };
+
+    const bands = {
+      low: deltas.filter(x => x.hi <= 7),
+      mid: deltas.filter(x => x.hi >= 8 && x.hi <= 15),
+      high: deltas.filter(x => x.hi >= 16),
+    };
+
+    const statOf = (arr) => ({
+      players: arr.length,
+      rounds: arr.reduce((a,b)=>a + (Number(b.n)||0), 0),
+      avgDelta: _mean(arr.map(x => x.delta)),
+    });
+
+    const stats = {
+      low: statOf(bands.low),
+      mid: statOf(bands.mid),
+      high: statOf(bands.high),
+    };
+
+    const ordered = Object.entries(stats).filter(([,v]) => Number.isFinite(v.avgDelta)).sort((a,b)=>b[1].avgDelta - a[1].avgDelta);
+    if (!ordered.length) return { ok: false, reason: "no_valid", targetCourse, targetTee };
+
+    const best = ordered[0];
+    const worst = ordered[ordered.length - 1];
+    const gap = Number(best[1].avgDelta) - Number(worst[1].avgDelta);
+
+    let favours = "neutral";
+    if (Number(best[1].avgDelta) >= 0.75 && gap >= 0.75) favours = best[0]; // low/mid/high
+
+    const totalPlayers = deltas.length;
+    const totalRounds = deltas.reduce((a,b)=>a + (Number(b.n)||0), 0);
+    const confidence =
+      (totalPlayers >= 8 && totalRounds >= 20) ? "high" :
+      (totalPlayers >= 5 && totalRounds >= 10) ? "medium" : "low";
+
+    return { ok: true, targetCourse, targetTee, favours, confidence, stats, totalPlayers, totalRounds };
+  } catch (e) {
+    return { ok: false, reason: "error" };
+  }
+}, [allPlayers, problemHolePack?.courseName, problemHolePack?.teeName]);
   const _proTrendLabel = (() => {
     if (!Number.isFinite(vel)) return "Not enough data";
     if (scoringMode === "gross") {
@@ -8184,7 +8289,7 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
           </div>
 
           <div className="rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm lg:col-span-2">
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
               <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
                 <div className="text-xs font-black tracking-widest uppercase text-neutral-500">Rounds analysed</div>
                 <div className="mt-2 text-2xl font-black text-neutral-900 tabular-nums">{games || 0}</div>
@@ -8257,6 +8362,64 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
               </div>
 
 
+
+<div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-4">
+  <div className="text-xs font-black tracking-widest uppercase text-neutral-500">Course fit</div>
+  <div className="mt-2 text-sm text-neutral-600">
+    {(_courseFit && _courseFit.ok) ? (
+      <>
+        Using: <span className="font-black text-neutral-900">{_courseFit.targetCourse}</span>
+        {_courseFit.targetTee ? (<span className="text-neutral-600"> · {_courseFit.targetTee}</span>) : null}
+        <span className="text-neutral-500"> · {_courseFit.totalRounds} rounds</span>
+      </>
+    ) : (
+      <>Not enough data</>
+    )}
+  </div>
+
+  <div className="mt-2 text-lg font-extrabold text-neutral-900">
+    {(_courseFit && _courseFit.ok) ? (
+      <>
+        Favours:{" "}
+        <span className="tabular-nums">
+          {_courseFit.favours === "low" ? "Low handicappers"
+            : _courseFit.favours === "mid" ? "Mid handicappers"
+            : _courseFit.favours === "high" ? "High handicappers"
+            : "Neutral"}
+        </span>
+        <span className="ml-2 text-xs font-bold text-neutral-500">
+          ({String(_courseFit.confidence || "low").toUpperCase()} confidence)
+        </span>
+      </>
+    ) : "—"}
+  </div>
+
+  {(_courseFit && _courseFit.ok) ? (
+    <div className="mt-3 text-xs text-neutral-600 space-y-1">
+      <div className="flex items-center justify-between gap-3">
+        <span>Low (≤7)</span>
+        <span className="font-mono tabular-nums">
+          {_fmtSignedNum(_courseFit.stats?.low?.avgDelta,2)} pts ({_courseFit.stats?.low?.players || 0}p)
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <span>Mid (8–15)</span>
+        <span className="font-mono tabular-nums">
+          {_fmtSignedNum(_courseFit.stats?.mid?.avgDelta,2)} pts ({_courseFit.stats?.mid?.players || 0}p)
+        </span>
+      </div>
+      <div className="flex items-center justify-between gap-3">
+        <span>High (≥16)</span>
+        <span className="font-mono tabular-nums">
+          {_fmtSignedNum(_courseFit.stats?.high?.avgDelta,2)} pts ({_courseFit.stats?.high?.players || 0}p)
+        </span>
+      </div>
+      <div className="pt-1 text-[11px] text-neutral-500">
+        Deltas are vs each player’s own baseline (all selected rounds).
+      </div>
+    </div>
+  ) : null}
+</div>
             </div>
           </div>
         </div>
