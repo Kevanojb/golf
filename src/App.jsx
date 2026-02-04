@@ -8885,13 +8885,13 @@ const coachLine = (row) => {
               const lens = (localStorage.getItem("dsl_lens") || "pointsField");
               // Comparator for the Season Report is controlled inside the report overlay (Field vs Handicap band).
               // Default to handicap band unless a prior report run stored a preference.
-              const uiCohort = (window.__dslUiState && window.__dslUiState.cohortMode) ? window.__dslUiState.cohortMode : null;
+              const uiCohort = (typeof window !== "undefined" && window.__dslUiState && window.__dslUiState.cohortMode) ? window.__dslUiState.cohortMode : null;
 // Default comparator: follow the Overview "Score vs Field" comparator if available, else remember last report choice, else band.
 const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
-  : ((window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode)
+  : (((typeof window !== "undefined") && window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode)
       ? window.__dslSeasonReportParams.comparatorMode
       : "band");
-              window.__dslSeasonReportParams = { model: seasonModel, playerName: seasonPlayer, yearLabel: seasonYear, seasonLimit: seasonLimit, scoringMode, lensMode: lens, comparatorMode: comparator };
+              try { if (typeof window !== "undefined") window.__dslSeasonReportParams = { model: seasonModel, playerName: seasonPlayer, yearLabel: seasonYear, seasonLimit: seasonLimit, scoringMode, lensMode: lens, comparatorMode: comparator }; } catch(e) {}
               const r = PR_generateSeasonReportHTML({
                 model: seasonModel,
                 playerName: seasonPlayer,
@@ -10536,6 +10536,7 @@ function PR_regenSeasonReport(mode){
 
 
 function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit, scoringMode, lensMode, comparatorMode }){
+  try {
   var peerBand = "—"; // ensure defined for template safety
   var peerMin = NaN, peerMax = NaN, peerPlayersN = 0;
 
@@ -10547,7 +10548,7 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
   // IMPORTANT: Use the Overview-computed benchmark outputs when available.
   // This keeps the report identical to the Overview (single source of truth).
   // ------------------------------------------------------------
-  const __snap = (window && window.__dslOverviewReport) ? window.__dslOverviewReport : null;
+  const __snap = (typeof window !== "undefined" && window.__dslOverviewReport) ? window.__dslOverviewReport : null;
   const __useSnap = !!(__snap
     && String(__snap.playerName||"") === String(playerName||"")
     && String(__snap.yearLabel||"") === String(yearLabel||"")
@@ -10622,6 +10623,37 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
           const end = String(Number(start.slice(0,2) + m[2]));
           return `${start}-${end}`;
         }
+        return t;
+      };
+
+      const seasonsArr = (typeof window !== "undefined" && window.__dslSeasonsDef) ? window.__dslSeasonsDef : [];
+      const sid = norm(yearSel);
+
+      const sidFor = (r) => {
+        const direct = (r && (r.seasonId ?? r.season_id)) ?? "";
+        const nd = norm(direct);
+        if (nd) return nd;
+
+        const ms = Number(r?.dateMs) || Number(r?.date_ms) || dateOf(r);
+        if (Number.isFinite(ms) && seasonsArr && seasonsArr.length && typeof seasonIdForDateMs === "function") {
+          try {
+            const mapped = seasonIdForDateMs(ms, seasonsArr);
+            const nm = norm(mapped);
+            if (nm) return nm;
+          } catch(e) {}
+        }
+
+        // Last resort: treat yearSel as calendar year if it's just YYYY
+        const y = String(yearSel).match(/^(20\d{2})$/);
+        if (y && Number.isFinite(ms)) {
+          const yr = new Date(ms).getFullYear();
+          if (String(yr) === y[1]) return y[1];
+        }
+        return "";
+      };
+
+      out = out.filter(r => sidFor(r) === sid);
+    }
         return t;
       };
       const sid = norm(yearSel);
@@ -11285,63 +11317,172 @@ const _fixThis = (() => {
   return { status:"fix", title:"FIX THIS", key:best.key, headline, gain:gainShow, unit };
 })();
 
-// Archetype (simple, based on biggest leak vs expectation across SI/Par)
-const _archetype = (() => {
-  // compute average delta vs expected for key buckets (stableford: delta>0 good ; gross: delta>0 bad)
-  const isGross = (String(scoringMode)==="gross");
-  const buckets = {
-    easy: { name:"The Waster", key:"easy", sum:0, n:0 },
-    hard: { name:"The Survivor", key:"hard", sum:0, n:0 },
-    p3: { name:"The Par 3 Victim", key:"p3", sum:0, n:0 },
-    p5: { name:"The Par 5 hacker", key:"p5", sum:0, n:0 },
+// Archetype (same logic as Player Progress)
+function PR__computeArchetypePP({ scoringMode, curAgg, compAgg, volMe, volComp, outcomeMixMe, outcomeMixComp }){
+  const isGross = (String(scoringMode) === "gross");
+  const siMe   = isGross ? (curAgg?.bySIGross || {}) : (curAgg?.bySI || {});
+  const siFld  = isGross ? (compAgg?.bySIGross || {}) : (compAgg?.bySI || {});
+  const parMe  = isGross ? (curAgg?.byParGross || {}) : (curAgg?.byPar || {});
+  const parFld = isGross ? (compAgg?.byParGross || {}) : (compAgg?.byPar || {});
+
+  const perf = (agg) => {
+    if (!agg) return NaN;
+    return isGross ? (-avgOverParPH(agg)) : (avgPtsPH(agg)); // higher is better in both cases
   };
-  for(const r of (_curSer||[])){
-    const ps = _tryGetParsSI(r);
-    const pars = Array.isArray(ps?.pArr) ? ps.pArr : [];
-    const sis  = Array.isArray(ps?.sArr) ? ps.sArr : [];
-    const ptsA = _getPtsArrR(r);
-    const grossA = _getGrossArrR(r);
-    const holes = Math.max(pars.length, sis.length, (ptsA?ptsA.length:0), (grossA?grossA.length:0), 18);
 
-    for(let i=0;i<holes;i++){
-      const par = PR_num(pars[i], NaN);
-      const si  = PR_num(sis[i], NaN);
+  const pickKey = (obj, candidates) => {
+    for (const k of candidates) if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return k;
+    return candidates[0];
+  };
 
-      let delta = NaN;
-      if(isGross){
-        if(!Array.isArray(grossA) || i>=grossA.length || i>=pars.length || i>=sis.length) continue;
-        const g = PR_num(grossA[i], NaN);
-        const parv = PR_num(pars[i], NaN);
-        const siv = PR_num(sis[i], NaN);
-        if(!Number.isFinite(g) || !Number.isFinite(parv) || !Number.isFinite(siv)) continue;
-        const playingHcap = Math.round(PR_num(r?.hcap ?? r?.playingHcap ?? r?.startExact ?? r?.handicap ?? cur?.playingHcap ?? cur?.startExact ?? cur?.handicap ?? NaN, NaN));
-        const sr = WHS_strokesReceivedOnHole(playingHcap, siv);
-        const expected = parv + sr;
-        delta = g - expected; // + worse
-      } else {
-        if(!Array.isArray(ptsA) || i>=ptsA.length) continue;
-        const p = PR_num(ptsA[i], NaN);
-        if(!Number.isFinite(p)) continue;
-        delta = p - 2; // + better
-      }
+  const kHard = pickKey(siMe, ["1–6","1-6","1–6 ","SI 1–6","SI 1-6"]);
+  const kEasy = pickKey(siMe, ["13–18","13-18","13–18 ","SI 13–18","SI 13-18"]);
 
-      if(Number.isFinite(si) && si>=13 && si<=18){ buckets.easy.sum += delta; buckets.easy.n++; }
-      if(Number.isFinite(si) && si>=1 && si<=6){ buckets.hard.sum += delta; buckets.hard.n++; }
-      if(Number.isFinite(par) && par===3){ buckets.p3.sum += delta; buckets.p3.n++; }
-      if(Number.isFinite(par) && par===5){ buckets.p5.sum += delta; buckets.p5.n++; }
-    }
+  const meHard = perf(siMe?.[kHard]);
+  const meEasy = perf(siMe?.[kEasy]);
+  const fdHard = perf(siFld?.[kHard]);
+  const fdEasy = perf(siFld?.[kEasy]);
+
+  const meP3 = perf(parMe?.[pickKey(parMe, ["Par 3","P3","par3","3"])]);
+  const meP5 = perf(parMe?.[pickKey(parMe, ["Par 5","P5","par5","5"])]);
+  const fdP3 = perf(parFld?.[pickKey(parFld, ["Par 3","P3","par3","3"])]);
+  const fdP5 = perf(parFld?.[pickKey(parFld, ["Par 5","P5","par5","5"])]);
+
+  const thr = isGross ? 0.08 : 0.12; // per-hole swing that feels meaningful
+  const dHard = (Number.isFinite(meHard) && Number.isFinite(fdHard)) ? (meHard - fdHard) : NaN;
+  const dEasy = (Number.isFinite(meEasy) && Number.isFinite(fdEasy)) ? (meEasy - fdEasy) : NaN;
+  const dP3 = (Number.isFinite(meP3) && Number.isFinite(fdP3)) ? (meP3 - fdP3) : NaN;
+  const dP5 = (Number.isFinite(meP5) && Number.isFinite(fdP5)) ? (meP5 - fdP5) : NaN;
+
+  const score = (x) => {
+    if (!Number.isFinite(x)) return 0;
+    return Math.max(0, Math.min(3, Math.abs(x) / thr));
+  };
+
+  const candidates = [];
+
+  // Waster: bleeds on easy holes
+  if (Number.isFinite(dEasy) && dEasy < -thr) {
+    const extra = Number.isFinite(dHard) ? Math.max(0, (dHard - dEasy) / thr) : 0;
+    candidates.push({
+      key: "waster",
+      name: "The Waster",
+      icon: "🧩",
+      why: "Easy holes (SI 13–18) are costing you more than the field. That usually means giving away points with short-game mistakes or poor ‘safe-miss’ decisions.",
+      tip: "Default to centre-green targets on SI 13–18 and protect par first. Birdies come from boring golf.",
+      s: score(dEasy) + 0.5*extra,
+    });
   }
 
-  // Determine "worst" (stableford: most negative; gross: most positive)
-  const avgs = Object.values(buckets).filter(b=>b.n>=18).map(b=>({ ...b, avg:(b.sum/b.n) }));
-  if(!avgs.length) return { name:"No clear pattern yet", key:"none" };
+  // Survivor: strong on hard holes, weak on easy holes
+  if (Number.isFinite(dHard) && Number.isFinite(dEasy) && dHard > thr && dEasy < -thr) {
+    candidates.push({
+      key: "survivor",
+      name: "The Survivor",
+      icon: "🛡️",
+      why: "You hang in there on the toughest holes, but you leak points on the ‘scoring’ holes.",
+      tip: "Treat easy holes as ‘no big number’ holes: aim fat, avoid short-side, two-putt and move on.",
+      s: score(dHard) + score(dEasy),
+    });
+  }
 
-  avgs.sort((a,b)=>{
-    return isGross ? (b.avg - a.avg) : (a.avg - b.avg);
-  });
-  const worst = avgs[0];
+  // Par 3 victim
+  if (Number.isFinite(dP3) && dP3 < -thr) {
+    candidates.push({
+      key: "p3",
+      name: "The Par 3 Victim",
+      icon: "🎯",
+      why: "You lose more than the field on par 3s — usually start-line / club selection / commitment.",
+      tip: "On par 3s: pick a bigger target (middle), choose the longer club if between, and commit to one start line.",
+      s: score(dP3),
+    });
+  }
 
-  return { name: worst.name, key: worst.key, avg: worst.avg, n: worst.n };
+  // Par 5 hacker
+  if (Number.isFinite(dP5) && dP5 < -thr) {
+    candidates.push({
+      key: "p5",
+      name: "The Par 5 hacker",
+      icon: "🚀",
+      why: "Par 5s should be your scoring holes, but they’re costing you more than the field — often from hero shots or poor wedge numbers.",
+      tip: "Make par 5s a 3-shot plan: safe tee ball → lay up to a favourite wedge → fat green.",
+      s: score(dP5),
+    });
+  }
+
+  // Steady bogey player: low volatility + low birdie-plus
+  const birdMe = Number.isFinite(outcomeMixMe?.birdiePlusRate) ? outcomeMixMe.birdiePlusRate : NaN;
+  const birdFd = Number.isFinite(outcomeMixComp?.birdiePlusRate) ? outcomeMixComp.birdiePlusRate : NaN;
+  const vMe  = Number.isFinite(volMe) ? volMe : NaN;
+  const vFd  = Number.isFinite(volComp) ? volComp : NaN;
+  if (Number.isFinite(vMe) && Number.isFinite(vFd) && vMe <= vFd * 0.8) {
+    const birdGap = (Number.isFinite(birdMe) && Number.isFinite(birdFd)) ? (birdMe - birdFd) : NaN;
+    candidates.push({
+      key: "steady",
+      name: "The Steady Bogey Player",
+      icon: "🧱",
+      why: "Your scoring is consistent (low volatility). That’s a strength — but you may not be creating enough birdie chances to move the needle.",
+      tip: "Keep the safety, add upside: pick 1–2 holes per round to be aggressive (only when the miss is safe).",
+      s: 0.8 + (Number.isFinite(birdGap) && birdGap < 0 ? score(birdGap) : 0),
+    });
+  }
+
+  if (!candidates.length) {
+    return {
+      key: "none",
+      name: "No clear archetype yet",
+      icon: "🧭",
+      why: "Not enough data to confidently label a pattern. Get a few more rounds in and this will sharpen up.",
+      tip: "For now: reduce doubles on SI 1–6 and protect par on SI 13–18.",
+    };
+  }
+
+  candidates.sort((a,b)=> (b.s||0) - (a.s||0));
+  return candidates[0];
+}
+
+const _archetype = (() => {
+  // If we're benchmarking vs Par baseline, Player Progress-style archetype doesn't apply cleanly.
+  if (String(__effComparatorMode) === "par") return { key:"none", name:"No clear archetype yet" };
+
+  const windowSeries = Array.isArray(_curSer) ? _curSer : [];
+
+  // Comparator window series: use the same peer set the report uses for benchmarking (field or handicap band).
+  let peerWindowSeries = [];
+  try{
+    peerWindowSeries = (Array.isArray(peers) ? peers : [])
+      .flatMap(p => __filterSeries(p?.series || []))
+      .filter(Boolean);
+  }catch(e){ peerWindowSeries = []; }
+
+  // Volatility: per-round spread of overall score in the selected window
+  const metricFor = (r) => {
+    if (String(scoringMode) === "gross") {
+      const g = PR_num(r?.gross, NaN);
+      const parT = PR_num(r?.parTotal, NaN);
+      return (Number.isFinite(g) && Number.isFinite(parT)) ? (g - parT) : NaN;
+    }
+    return PR_num(r?.pts, NaN);
+  };
+  const volMe = _std(windowSeries.map(metricFor).filter(Number.isFinite));
+  // Field/cohort vol: mean of each peer player's volatility (matches the PP fallback style)
+  const volComp = (() => {
+    const vals = (Array.isArray(peers) ? peers : []).map(p => {
+      const s = __filterSeries(p?.series || []);
+      const m = s.map(metricFor).filter(Number.isFinite);
+      return _std(m);
+    }).filter(Number.isFinite);
+    return vals.length ? _mean(vals) : NaN;
+  })();
+
+  // Outcome mix for birdie+ rate
+  let outcomeMixMe = null;
+  let outcomeMixComp = null;
+  try { outcomeMixMe = PR_bucketOutcomeMix({ scoringMode, windowSeries }); } catch(e){ outcomeMixMe = null; }
+  try { outcomeMixComp = PR_bucketOutcomeMix({ scoringMode, windowSeries: peerWindowSeries }); } catch(e){ outcomeMixComp = null; }
+
+  const compAgg = __peerAgg || null;
+  return PR__computeArchetypePP({ scoringMode, curAgg: cur, compAgg, volMe, volComp, outcomeMixMe, outcomeMixComp });
 })();
 
 // Comfort zone yardage (Par 4 buckets, vs expected)
@@ -11740,6 +11881,9 @@ if (__effComparatorMode === "par") {
 
   return { ok:true, htmlFragment, html: htmlFragment, filename: `SeasonReport_${PR_safeSlug(playerName||'player')}.html` };
 
+  } catch (e) {
+    return { ok:false, error: (e && e.stack) ? String(e.stack) : String(e) };
+  }
 }
 
 function PR_downloadHtmlFile(filename, html){
@@ -11774,10 +11918,10 @@ function PlayerReportView({ seasonModel, reportNextHcapMode, setReportNextHcapMo
   // Comparator mode (field / handicap band / par) should follow Overview (single source of truth).
   const __getOverviewComparator = () => {
     try{
-      const snap = (window && window.__dslOverviewReport) ? window.__dslOverviewReport : null;
+      const snap = (typeof window !== "undefined" && window.__dslOverviewReport) ? window.__dslOverviewReport : null;
       const cm = snap ? String(snap.comparatorMode || "") : "";
       if (cm === "field" || cm === "band" || cm === "par") return cm;
-      const ui = (window && window.__dslUiState) ? window.__dslUiState : null;
+      const ui = (typeof window !== "undefined" && window.__dslUiState) ? window.__dslUiState : null;
       const uiC = ui ? String(ui.cohortMode || "") : "";
       if (uiC === "field" || uiC === "band") return uiC;
     }catch(e){}
@@ -12758,13 +12902,13 @@ const planKPIs = React.useMemo(() => {
               const lens = (localStorage.getItem("dsl_lens") || "pointsField");
               // Comparator for the Season Report is controlled inside the report overlay (Field vs Handicap band).
               // Default to handicap band unless a prior report run stored a preference.
-              const uiCohort = (window.__dslUiState && window.__dslUiState.cohortMode) ? window.__dslUiState.cohortMode : null;
+              const uiCohort = (typeof window !== "undefined" && window.__dslUiState && window.__dslUiState.cohortMode) ? window.__dslUiState.cohortMode : null;
 // Default comparator: follow the Overview "Score vs Field" comparator if available, else remember last report choice, else band.
 const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
-  : ((window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode)
+  : (((typeof window !== "undefined") && window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode)
       ? window.__dslSeasonReportParams.comparatorMode
       : "band");
-              window.__dslSeasonReportParams = { model: seasonModel, playerName: seasonPlayer, yearLabel: seasonYear, seasonLimit: seasonLimit, scoringMode, lensMode: lens, comparatorMode: comparator };
+              try { if (typeof window !== "undefined") window.__dslSeasonReportParams = { model: seasonModel, playerName: seasonPlayer, yearLabel: seasonYear, seasonLimit: seasonLimit, scoringMode, lensMode: lens, comparatorMode: comparator }; } catch(e) {}
               const r = PR_generateSeasonReportHTML({
                 model: seasonModel,
                 playerName: seasonPlayer,
