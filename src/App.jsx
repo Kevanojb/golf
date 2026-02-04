@@ -7340,11 +7340,11 @@ const parLeaders = React.useMemo(() => {
       });
     }
 
-    // Par 5 butcher
+    // Par 5 waster
     if (Number.isFinite(dP5) && dP5 < -thr) {
       candidates.push({
         key: "p5",
-        name: "The Par 5 Butcher",
+        name: "The Par 5 waster",
         icon: "🚀",
         why: "Par 5s should be your scoring holes, but they’re costing you more than the field — often from hero shots or poor wedge numbers.",
         tip: "Make par 5s a 3-shot plan: safe tee ball → lay up to a favourite wedge → fat green.",
