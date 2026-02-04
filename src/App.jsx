@@ -10612,58 +10612,51 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
       return 0;
     };
 
-    // Year filter
-    if (yearSel && yearSel !== "All"){
-      const norm = (x) => {
-        const t = String(x ?? "").trim();
-        const m = t.match(/^(\d{4})-(\d{2})$/);
-        if (m) {
-          const start = m[1];
-          const end = String(Number(start.slice(0,2) + m[2]));
-          return `${start}-${end}`;
-        }
+    // Year filter (match Player Progress: seasonId OR derived from date/dateMs)
+if (yearSel && yearSel !== "All"){
+  const norm = (x) => {
+    const t = String(x ?? "").trim();
+    const m = t.match(/^(\d{4})-(\d{2})$/);
+    if (m) {
+      const start = m[1];
+      const end = String(Number(start.slice(0,2) + m[2]));
+      return `${start}-${end}`;
+    }
+    return t;
+  };
+  const sidWant = norm(yearSel);
+
+  const seasonsArr = (typeof window !== "undefined" && Array.isArray(window.__dslSeasonsDef))
+    ? window.__dslSeasonsDef
+    : (Array.isArray(model?.seasonsDef) ? model.seasonsDef : []);
+
+  const sidForRow = (r) => {
+    const direct = (r && (r.seasonId ?? r.season_id)) ?? "";
+    if (String(direct).trim()) return norm(direct);
+
+    const ms = Number.isFinite(Number(r?.dateMs)) ? Number(r.dateMs) : dateOf(r);
+    if (Number.isFinite(ms) && typeof seasonIdForDateMs === "function" && Array.isArray(seasonsArr) && seasonsArr.length){
+      try {
+        const mapped = seasonIdForDateMs(ms, seasonsArr);
+        if (String(mapped ?? "").trim()) return norm(mapped);
+      } catch(_e){}
+    }
+
+    // fallback: match calendar year prefix (useful if yearSel is '2024')
+    const y = new Date(ms || 0).getFullYear();
+    if (String(yearSel).match(/^\d{4}$/) && y) return String(y);
+    return "";
+  };
+
+  out = out.filter(r => sidForRow(r) === sidWant);
+}
         return t;
       };
       const sid = norm(yearSel);
-
-      const seasonsArr =
-        (typeof window !== "undefined" && Array.isArray(window.__dslSeasonsDef)) ? window.__dslSeasonsDef :
-        (Array.isArray(model?.seasonsDef) ? model.seasonsDef : []);
-
-      const sidForRow = (r) => {
-        const direct = (r && (r.seasonId ?? r.season_id)) ?? "";
-        if (String(direct).trim()) return norm(direct);
-
-        // Try mapping by dateMs / date
-        const ms =
-          (Number.isFinite(Number(r?.dateMs)) ? Number(r.dateMs) :
-           Number.isFinite(Number(r?.tsMs)) ? Number(r.tsMs) :
-           Number.isFinite(Number(r?.playedAtMs)) ? Number(r.playedAtMs) :
-           (function(){
-             const d = r?.date || r?.eventDate || r?.roundDate || r?.ts || r?.when || r?.playedAt || "";
-             const dd = new Date(d);
-             return !isNaN(dd) ? dd.getTime() : NaN;
-           })());
-
-        if (Number.isFinite(ms) && typeof seasonIdForDateMs === "function" && Array.isArray(seasonsArr) && seasonsArr.length){
-          try{
-            const mapped = seasonIdForDateMs(ms, seasonsArr);
-            if (mapped !== null && mapped !== undefined && String(mapped).trim()){
-              return norm(mapped);
-            }
-          }catch(e){}
-        }
-
-        // Fallback: match by calendar year if yearSel is a 4-digit year
-        const yMatch = String(yearSel).match(/^(\d{4})$/);
-        if (yMatch && Number.isFinite(ms)){
-          const y = new Date(ms).getFullYear();
-          if (String(y) === yMatch[1]) return yMatch[1];
-        }
-        return "";
-      };
-
-      out = out.filter(r => sidForRow(r) === sid);
+      out = out.filter(r => {
+        const s = (r && (r.seasonId ?? r.season_id)) ?? "";
+        return norm(s) === sid;
+      });
     }
 
     // Sort oldest -> newest, then take most recent N if requested
@@ -11320,19 +11313,20 @@ const _fixThis = (() => {
   return { status:"fix", title:"FIX THIS", key:best.key, headline, gain:gainShow, unit };
 })();
 
-// Archetype (MATCH Player Progress): comparator-based labels with Survivor rule.
-// This is intentionally aligned with the Player Progress archetype logic so the UI is consistent.
+// Archetype (simple, based on biggest leak vs expectation across SI/Par)
+// Archetype (match Player Progress logic: comparator-based + Survivor rule)
 const _archetype = (() => {
   const isGross = (String(scoringMode) === "gross");
   const siMe   = isGross ? (cur?.bySIGross || {}) : (cur?.bySI || {});
-  const siCmp  = isGross ? (peerTotals?.bySIGross || {}) : (peerTotals?.bySI || {});
+  const siFld  = isGross ? (__peerAgg?.bySIGross || {}) : (__peerAgg?.bySI || {});
   const parMe  = isGross ? (cur?.byParGross || {}) : (cur?.byPar || {});
-  const parCmp = isGross ? (peerTotals?.byParGross || {}) : (peerTotals?.byPar || {});
+  const parFld = isGross ? (__peerAgg?.byParGross || {}) : (__peerAgg?.byPar || {});
 
   const perf = (agg) => {
-    if (!agg) return NaN;
-    // higher is better for both modes
-    return isGross ? (-avgOverParPH(agg)) : (avgPtsPH(agg));
+    const h = PR_num(agg?.holes, 0);
+    if (!h) return NaN;
+    if (isGross) return -(PR_num(agg?.val, NaN) / h); // lower over-par is better
+    return (PR_num(agg?.pts, NaN) / h);               // higher points is better
   };
 
   const pickKey = (obj, candidates) => {
@@ -11345,19 +11339,19 @@ const _archetype = (() => {
 
   const meHard = perf(siMe?.[kHard]);
   const meEasy = perf(siMe?.[kEasy]);
-  const cpHard = perf(siCmp?.[kHard]);
-  const cpEasy = perf(siCmp?.[kEasy]);
+  const fdHard = perf(siFld?.[kHard]);
+  const fdEasy = perf(siFld?.[kEasy]);
 
   const meP3 = perf(parMe?.[pickKey(parMe, ["Par 3","P3","par3","3"])]);
   const meP5 = perf(parMe?.[pickKey(parMe, ["Par 5","P5","par5","5"])]);
-  const cpP3 = perf(parCmp?.[pickKey(parCmp, ["Par 3","P3","par3","3"])]);
-  const cpP5 = perf(parCmp?.[pickKey(parCmp, ["Par 5","P5","par5","5"])]);
+  const fdP3 = perf(parFld?.[pickKey(parFld, ["Par 3","P3","par3","3"])]);
+  const fdP5 = perf(parFld?.[pickKey(parFld, ["Par 5","P5","par5","5"])]);
 
   const thr = isGross ? 0.08 : 0.12; // per-hole swing that feels meaningful
-  const dHard = (Number.isFinite(meHard) && Number.isFinite(cpHard)) ? (meHard - cpHard) : NaN;
-  const dEasy = (Number.isFinite(meEasy) && Number.isFinite(cpEasy)) ? (meEasy - cpEasy) : NaN;
-  const dP3   = (Number.isFinite(meP3) && Number.isFinite(cpP3)) ? (meP3 - cpP3) : NaN;
-  const dP5   = (Number.isFinite(meP5) && Number.isFinite(cpP5)) ? (meP5 - cpP5) : NaN;
+  const dHard = (Number.isFinite(meHard) && Number.isFinite(fdHard)) ? (meHard - fdHard) : NaN;
+  const dEasy = (Number.isFinite(meEasy) && Number.isFinite(fdEasy)) ? (meEasy - fdEasy) : NaN;
+  const dP3 = (Number.isFinite(meP3) && Number.isFinite(fdP3)) ? (meP3 - fdP3) : NaN;
+  const dP5 = (Number.isFinite(meP5) && Number.isFinite(fdP5)) ? (meP5 - fdP5) : NaN;
 
   const score = (x) => {
     if (!Number.isFinite(x)) return 0;
@@ -11372,6 +11366,9 @@ const _archetype = (() => {
     candidates.push({
       key: "waster",
       name: "The Waster",
+      icon: "🧩",
+      why: "Easy holes (SI 13–18) are costing you more than the field. That usually means giving away points with short-game mistakes or poor ‘safe-miss’ decisions.",
+      tip: "Default to centre-green targets on SI 13–18 and protect par first. Birdies come from boring golf.",
       s: score(dEasy) + 0.5*extra,
     });
   }
@@ -11381,24 +11378,51 @@ const _archetype = (() => {
     candidates.push({
       key: "survivor",
       name: "The Survivor",
+      icon: "🛡️",
+      why: "You hang in there on the toughest holes, but you leak points on the ‘scoring’ holes.",
+      tip: "Treat easy holes as ‘no big number’ holes: aim fat, avoid short-side, two-putt and move on.",
       s: score(dHard) + score(dEasy),
     });
   }
 
   // Par 3 victim
   if (Number.isFinite(dP3) && dP3 < -thr) {
-    candidates.push({ key: "p3", name: "The Par 3 Victim", s: score(dP3) });
+    candidates.push({
+      key: "p3",
+      name: "The Par 3 Victim",
+      icon: "🎯",
+      why: "You lose more than the field on par 3s — usually start-line / club selection / commitment.",
+      tip: "On par 3s: pick a bigger target (middle), choose the longer club if between, and commit to one start line.",
+      s: score(dP3),
+    });
   }
 
   // Par 5 hacker
   if (Number.isFinite(dP5) && dP5 < -thr) {
-    candidates.push({ key: "p5", name: "The Par 5 hacker", s: score(dP5) });
+    candidates.push({
+      key: "p5",
+      name: "The Par 5 hacker",
+      icon: "🚀",
+      why: "Par 5s should be your scoring holes, but they’re costing you more than the field — often from hero shots or poor wedge numbers.",
+      tip: "Make par 5s a 3-shot plan: safe tee ball → lay up to a favourite wedge → fat green.",
+      s: score(dP5),
+    });
   }
 
-  if (!candidates.length) return { name: "Not enough data to confidently label a pattern.", key: "none" };
-  candidates.sort((a,b) => (b.s||0) - (a.s||0));
+  if (!candidates.length) {
+    return {
+      key: "none",
+      name: "No clear archetype yet",
+      icon: "🧭",
+      why: "Not enough data to confidently label a pattern. Get a few more rounds in and this will sharpen up.",
+      tip: "For now: reduce doubles on SI 1–6 and protect par on SI 13–18.",
+    };
+  }
+
+  candidates.sort((a,b)=> (b.s||0) - (a.s||0));
   return candidates[0];
 })();
+;
 
 // Comfort zone yardage (Par 4 buckets, vs expected)
 const _comfortP4 = (() => {
