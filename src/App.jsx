@@ -1770,12 +1770,9 @@ const ScoutingReport = (props) => {
   const unit = isGross ? "strokes" : "pts";
 
   // Dynamic color for the "Big Number"
-  // NOTE: Do not close over outer-scope lets/consts here; pass values via props to avoid TDZ/initialization issues in production builds.
-  const _ov = Number(props?.overallVsFieldPerRound);
-  const _vel = Number(props?.velocity);
-  const isGood = Number.isFinite(_ov) ? (_ov >= 0) : true;
+  const isGood = overallVsFieldPerRound >= 0;
   const mainColor = isGood ? "text-emerald-600" : "text-rose-600";
-  const trendIcon = (_vel > 0) ? "↗" : (_vel < 0) ? "↘" : "→";
+  const trendIcon = velocity > 0 ? "↗" : velocity < 0 ? "↘" : "→";
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
@@ -1787,7 +1784,7 @@ const ScoutingReport = (props) => {
           <div>
             <div className="text-xs font-bold uppercase tracking-widest text-neutral-400 mb-1">Performance vs Field</div>
             <div className="text-5xl font-black tracking-tighter">
-              {_ov > 0 ? "+" : ""}{Number.isFinite(_ov) ? _ov.toFixed(1) : "—"}
+              {overallVsFieldPerRound > 0 ? "+" : ""}{Number.isFinite(overallVsFieldPerRound) ? overallVsFieldPerRound.toFixed(1) : "—"}
               <span className="text-lg font-medium text-neutral-400 ml-2">{unit}/rd</span>
             </div>
           </div>
@@ -1796,7 +1793,7 @@ const ScoutingReport = (props) => {
             <div>
               <div className="text-[10px] uppercase text-neutral-500 font-bold">Trend</div>
               <div className="text-xl font-bold flex items-center gap-1">
-                {trendIcon} {Number.isFinite(_vel) ? Math.abs(_vel).toFixed(2) : "—"}
+                {trendIcon} {Number.isFinite(velocity) ? Math.abs(velocity).toFixed(2) : "—"}
               </div>
             </div>
             <div className="w-px h-8 bg-neutral-800"></div>
@@ -7461,11 +7458,11 @@ const parLeaders = React.useMemo(() => {
       });
     }
 
-    // Par 5 hacker
+    // Par 5 butcher
     if (Number.isFinite(dP5) && dP5 < -thr) {
       candidates.push({
         key: "p5",
-        name: "The Par 5 hacker",
+        name: "The Par 5 Butcher",
         icon: "🚀",
         why: "Par 5s should be your scoring holes, but they’re costing you more than the field — often from hero shots or poor wedge numbers.",
         tip: "Make par 5s a 3-shot plan: safe tee ball → lay up to a favourite wedge → fat green.",
@@ -7818,75 +7815,6 @@ const comfortZonePP = React.useMemo(() => {
 
   return out;
 }, [_windowSeriesPP, scoringMode, cur]);
-
-  
-// Keep Generate Report consistent with Player Progress by exporting the exact computed widgets + headline numbers.
-// Generate Report should render these (single source of truth) instead of recalculating.
-React.useEffect(() => {
-  try {
-    if (typeof window === "undefined") return;
-    const snap = window.__dslOverviewReport;
-    if (!snap) return;
-
-    // Only update when the snapshot is for the same player + filters (normalise season label format).
-    const norm = (v) => String(v ?? "").trim();
-    const normSeason = (v) => {
-      const t = norm(v);
-      const m = t.match(/^(\d{4})-(\d{2})$/);
-      if (m) {
-        const start = m[1];
-        const end = String(Number(start.slice(0, 2) + m[2]));
-        return `${start}-${end}`;
-      }
-      return t;
-    };
-
-    if (norm(snap.playerName) !== norm(cur?.name)) return;
-    if (normSeason(snap.yearLabel) !== normSeason(seasonYear)) return;
-    if (norm(snap.seasonLimit) !== norm(seasonLimit)) return;
-    if (norm(snap.scoringMode) !== norm(scoringMode)) return;
-
-    // Widgets
-    snap.archetypePP = archetypePP;
-    snap.comfortZonePP = comfortZonePP;
-    snap.fixThisPP = fixThisPP;
-    snap.afterBadHolePP = _afterBadHole;
-    snap.fastStartPP = _fastStart;
-    snap.clutchFinishPP = _clutchFinish;
-    snap.golfDNAPP = golfDNAPP;
-
-    // Headline numbers used in Progress (so Report can match exactly)
-    snap.avgPts = _avgPts;
-    snap.avgGross = _avgGross;
-    snap.overallPPH = _overallPPH;
-
-    snap.stableRank = stableRank;
-    snap.grossRank = grossRank;
-    snap.percentile = percentile;
-
-    snap.trendLabel = _proTrendLabel;
-    snap.consistencyLabel = _proConsistencyLabel;
-    snap.vol = vol;
-    snap.volField = volField;
-
-    snap.overallGoodRd = overallGoodRd;
-    snap.wins = wins;
-    snap.leaks = leaks;
-
-    try { window.dispatchEvent(new Event("dsl_overview_report_change")); } catch (_e) {}
-  } catch (_e) {}
-}, [
-  cur, seasonYear, seasonLimit, scoringMode,
-  archetypePP, comfortZonePP, fixThisPP,
-  stableRank, grossRank, percentile,
-  _proTrendLabel, _proConsistencyLabel, vol, volField,
-  _fastStart, _clutchFinish, _afterBadHole,
-  golfDNAPP, overallGoodRd, wins, leaks,
-  _avgPts, _avgGross, _overallPPH
-]);
-
-
-
 
 const golfDNAPP = React.useMemo(() => {
   const rounds = Array.isArray(_windowSeriesPP) ? _windowSeriesPP : [];
@@ -10619,23 +10547,12 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
   // IMPORTANT: Use the Overview-computed benchmark outputs when available.
   // This keeps the report identical to the Overview (single source of truth).
   // ------------------------------------------------------------
-  const __snap = (typeof window !== "undefined" && window.__dslOverviewReport) ? window.__dslOverviewReport : null;
-  const __norm = (v)=>String(v??"").trim();
-  const __normSeason = (v)=>{
-    const t = __norm(v);
-    const m = t.match(/^(\d{4})-(\d{2})$/);
-    if (m){
-      const start = m[1];
-      const end = String(Number(m[1].slice(0,2)+m[2]));
-      return `${start}-${end}`;
-    }
-    return t;
-  };
+  const __snap = (window && window.__dslOverviewReport) ? window.__dslOverviewReport : null;
   const __useSnap = !!(__snap
-    && __norm(__snap.playerName) === __norm(playerName)
-    && __normSeason(__snap.yearLabel) === __normSeason(yearLabel)
-    && __norm(__snap.seasonLimit) === __norm(seasonLimit)
-    && __norm(__snap.scoringMode) === __norm(scoringMode));
+    && String(__snap.playerName||"") === String(playerName||"")
+    && String(__snap.yearLabel||"") === String(yearLabel||"")
+    && String(__snap.seasonLimit||"") === String(seasonLimit||"")
+    && String(__snap.scoringMode||"") === String(scoringMode||""));
 
   const __effComparatorMode = __useSnap
     ? ((String(__snap.comparatorMode||"band") === "par") ? "par" : (String(__snap.comparatorMode||"band") === "field" ? "field" : "band"))
@@ -10697,7 +10614,7 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
 
     // Year filter
     if (yearSel && yearSel !== "All"){
-      const normSeason = (x) => {
+      const norm = (x) => {
         const t = String(x ?? "").trim();
         const m = t.match(/^(\d{4})-(\d{2})$/);
         if (m) {
@@ -10707,35 +10624,11 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
         }
         return t;
       };
-      const want = normSeason(yearSel);
-
-      const seasonsArr = (typeof window !== "undefined" && Array.isArray(window.__dslSeasonsDef)) ? window.__dslSeasonsDef : [];
-
-      const sidForRow = (r) => {
-        const direct = (r && (r.seasonId ?? r.season_id)) ?? "";
-        if (String(direct).trim()) return normSeason(direct);
-
-        const ms =
-          (Number.isFinite(Number(r?.dateMs)) ? Number(r.dateMs) :
-          Number.isFinite(Number(r?.parsed?.dateMs)) ? Number(r.parsed.dateMs) :
-          Number.isFinite(Number(r?.ts)) ? Number(r.ts) : NaN);
-
-        if (Number.isFinite(ms) && typeof seasonIdForDateMs === "function" && seasonsArr.length) {
-          try {
-            const sid = seasonIdForDateMs(ms, seasonsArr);
-            if (String(sid ?? "").trim()) return normSeason(sid);
-          } catch(_e){}
-        }
-
-        if (/^\d{4}$/.test(want)) {
-          const yr = new Date(Number.isFinite(ms) ? ms : dateOf(r)).getFullYear();
-          return String(yr);
-        }
-
-        return "";
-      };
-
-      out = out.filter(r => sidForRow(r) === want);
+      const sid = norm(yearSel);
+      out = out.filter(r => {
+        const s = (r && (r.seasonId ?? r.season_id)) ?? "";
+        return norm(s) === sid;
+      });
     }
 
     // Sort oldest -> newest, then take most recent N if requested
@@ -10849,31 +10742,24 @@ const _grossAvgs  = _allPlayersForRank.map(p => ({ name:p.name, avg:_meanArr(_se
 const _stableSorted = _stableAvgs.slice().sort((a,b)=>b.avg-a.avg);
 const _grossSorted  = _grossAvgs.slice().sort((a,b)=>a.avg-b.avg);
 
-const _stablePos = (__useSnap && __snap?.stableRank && Number.isFinite(Number(__snap.stableRank.pos))) ? Number(__snap.stableRank.pos) : (_stableSorted.findIndex(x=>String(x.name)===String(cur?.name)) + 1);
-const _grossPos  = (__useSnap && __snap?.grossRank && Number.isFinite(Number(__snap.grossRank.pos))) ? Number(__snap.grossRank.pos) : (_grossSorted.findIndex(x=>String(x.name)===String(cur?.name)) + 1);
-const _stableTotal = (__useSnap && __snap?.stableRank && Number.isFinite(Number(__snap.stableRank.total))) ? Number(__snap.stableRank.total) : (_stableSorted.length||0);
-const _grossTotal  = (__useSnap && __snap?.grossRank && Number.isFinite(Number(__snap.grossRank.total))) ? Number(__snap.grossRank.total) : (_grossSorted.length||0);
+const _stablePos = _stableSorted.findIndex(x=>String(x.name)===String(cur?.name)) + 1;
+const _grossPos  = _grossSorted.findIndex(x=>String(x.name)===String(cur?.name)) + 1;
 
 const _stableFieldAvg = _meanArr(_stableAvgs.map(x=>x.avg));
 const _grossFieldAvg  = _meanArr(_grossAvgs.map(x=>x.avg));
 
-const _stableDeltaVsField = (__useSnap && __snap?.stableRank && Number.isFinite(Number(__snap.stableRank.delta)))
-  ? Number(__snap.stableRank.delta)
-  : ((Number.isFinite(_meanArr(_seriesFor(cur).map(r=>PR_num(r?.pts, NaN)))) && Number.isFinite(_stableFieldAvg))
-      ? (_meanArr(_seriesFor(cur).map(r=>PR_num(r?.pts, NaN))) - _stableFieldAvg)
-      : NaN);
+const _stableDeltaVsField = (Number.isFinite(_meanArr(_seriesFor(cur).map(r=>PR_num(r?.pts, NaN)))) && Number.isFinite(_stableFieldAvg))
+  ? (_meanArr(_seriesFor(cur).map(r=>PR_num(r?.pts, NaN))) - _stableFieldAvg)
+  : NaN;
 
-const _grossDeltaVsField = (__useSnap && __snap?.grossRank && Number.isFinite(Number(__snap.grossRank.delta)))
-  ? Number(__snap.grossRank.delta)
-  : ((Number.isFinite(_meanArr(_seriesFor(cur).map(r=>PR_num(r?.gross, NaN)))) && Number.isFinite(_grossFieldAvg))
-      ? (_meanArr(_seriesFor(cur).map(r=>PR_num(r?.gross, NaN))) - _grossFieldAvg)
-      : NaN); // positive = worse (more strokes)
+const _grossDeltaVsField = (Number.isFinite(_meanArr(_seriesFor(cur).map(r=>PR_num(r?.gross, NaN)))) && Number.isFinite(_grossFieldAvg))
+  ? (_meanArr(_seriesFor(cur).map(r=>PR_num(r?.gross, NaN))) - _grossFieldAvg)
+  : NaN; // positive = worse (more strokes)
 
-
-const _stableVol = (__useSnap && Number.isFinite(Number(__snap?.vol)) && String(scoringMode)!=="gross") ? Number(__snap.vol) : _stdevArr(_seriesFor(cur).map(r=>PR_num(r?.pts, NaN)));
-const _grossVol  = (__useSnap && Number.isFinite(Number(__snap?.vol)) && String(scoringMode)==="gross") ? Number(__snap.vol) : _stdevArr(_seriesFor(cur).map(r=>PR_num(r?.gross, NaN)));
-const _stableVolField = (__useSnap && Number.isFinite(Number(__snap?.volField)) && String(scoringMode)!=="gross") ? Number(__snap.volField) : _stdevArr(_stableAvgs.map(x=>x.avg));
-const _grossVolField  = (__useSnap && Number.isFinite(Number(__snap?.volField)) && String(scoringMode)==="gross") ? Number(__snap.volField) : _stdevArr(_grossAvgs.map(x=>x.avg));
+const _stableVol = _stdevArr(_seriesFor(cur).map(r=>PR_num(r?.pts, NaN)));
+const _grossVol  = _stdevArr(_seriesFor(cur).map(r=>PR_num(r?.gross, NaN)));
+const _stableVolField = _stdevArr(_stableAvgs.map(x=>x.avg));
+const _grossVolField  = _stdevArr(_grossAvgs.map(x=>x.avg));
 
 // Trend: slope per day (points/day or strokes/day). Uses round dates if present; falls back to index.
 const _curSer = _seriesFor(cur);
@@ -11034,8 +10920,8 @@ try{
 // -------------------------
 // Narrative stats (mirror the on-screen player boxes, but written)
 // -------------------------
-const _avgPtsWin = (__useSnap && Number.isFinite(Number(__snap?.avgPts))) ? Number(__snap.avgPts) : _meanArr(_curSer.map(r=>PR_num(r?.pts, NaN)));
-const _avgGrossWin = (__useSnap && Number.isFinite(Number(__snap?.avgGross))) ? Number(__snap.avgGross) : _meanArr(_curSer.map(r=>PR_num(r?.gross, NaN)));
+const _avgPtsWin = _meanArr(_curSer.map(r=>PR_num(r?.pts, NaN)));
+const _avgGrossWin = _meanArr(_curSer.map(r=>PR_num(r?.gross, NaN)));
 
 const _getPtsArrR = (r) => {
   const p = (r && (r.perHole || r.perHolePts || r.pointsPerHole || r.ptsPerHole || r.stablefordPerHole || r.stablefordHoles)) || null;
@@ -11170,7 +11056,7 @@ const _frontBackLine = (() => {
   }
 })();
 
-const _fastStarter = (__useSnap && __snap?.fastStartPP) ? __snap.fastStartPP : (() => {
+const _fastStarter = (() => {
   const base = (String(scoringMode)==="gross") ? _overallHoleAvgs.strOverPH : _overallHoleAvgs.ptsPH;
   const v = (String(scoringMode)==="gross") ? _first3.strOverPH : _first3.ptsPH;
   if(!Number.isFinite(base) || !Number.isFinite(v)) return { is:null, delta:NaN };
@@ -11179,7 +11065,7 @@ const _fastStarter = (__useSnap && __snap?.fastStartPP) ? __snap.fastStartPP : (
   return { is, delta, v, base };
 })();
 
-const _clutchFinisher = (__useSnap && __snap?.clutchFinishPP) ? __snap.clutchFinishPP : (() => {
+const _clutchFinisher = (() => {
   const base = (String(scoringMode)==="gross") ? _overallHoleAvgs.strOverPH : _overallHoleAvgs.ptsPH;
   const v = (String(scoringMode)==="gross") ? _last3.strOverPH : _last3.ptsPH;
   if(!Number.isFinite(base) || !Number.isFinite(v)) return { is:null, delta:NaN };
@@ -11189,7 +11075,7 @@ const _clutchFinisher = (__useSnap && __snap?.clutchFinishPP) ? __snap.clutchFin
 })();
 
 // After a bad hole (resilience): trigger = double+ relative to expectation; look at next hole performance vs average
-const _afterBad = (__useSnap && __snap?.afterBadHolePP) ? ({ ok:true, ...__snap.afterBadHolePP }) : (() => {
+const _afterBad = (() => {
   const isGross = (String(scoringMode)==="gross");
   let triggers = 0;
   let sumNextPts=0, nNextPts=0;
@@ -11306,7 +11192,7 @@ const _afterBad = (__useSnap && __snap?.afterBadHolePP) ? ({ ok:true, ...__snap.
 })();
 
 // FIX THIS (single main lever): same logic as the on-screen card, but generated inside report
-const _fixThis = (__useSnap && __snap?.fixThisPP) ? __snap.fixThisPP : (() => {
+const _fixThis = (() => {
   const rounds = Array.isArray(_curSer) ? _curSer : [];
   const isGross = (String(scoringMode)==="gross");
   const unit = isGross ? "strokes/round" : "pts/round";
@@ -11400,14 +11286,14 @@ const _fixThis = (__useSnap && __snap?.fixThisPP) ? __snap.fixThisPP : (() => {
 })();
 
 // Archetype (simple, based on biggest leak vs expectation across SI/Par)
-const _archetype = (__useSnap && __snap && __snap.archetypePP) ? __snap.archetypePP : (() => {
+const _archetype = (() => {
   // compute average delta vs expected for key buckets (stableford: delta>0 good ; gross: delta>0 bad)
   const isGross = (String(scoringMode)==="gross");
   const buckets = {
     easy: { name:"The Waster", key:"easy", sum:0, n:0 },
     hard: { name:"The Survivor", key:"hard", sum:0, n:0 },
     p3: { name:"The Par 3 Victim", key:"p3", sum:0, n:0 },
-    p5: { name:"The Par 5 hacker", key:"p5", sum:0, n:0 },
+    p5: { name:"The Par 5 Butcher", key:"p5", sum:0, n:0 },
   };
   for(const r of (_curSer||[])){
     const ps = _tryGetParsSI(r);
@@ -11459,7 +11345,7 @@ const _archetype = (__useSnap && __snap && __snap.archetypePP) ? __snap.archetyp
 })();
 
 // Comfort zone yardage (Par 4 buckets, vs expected)
-const _comfortP4 = (__useSnap && __snap && __snap.comfortZonePP && Array.isArray(__snap.comfortZonePP.p4)) ? __snap.comfortZonePP.p4 : (() => {
+const _comfortP4 = (() => {
   const isGross = (String(scoringMode)==="gross");
   const buckets = [
     { label:"<360y", sum:0, n:0 },
@@ -11645,9 +11531,9 @@ if (__effComparatorMode === "par") {
       Average: <b>${Number.isFinite(_avgPtsWin)?_avgPtsWin.toFixed(1):"—"}</b> Stableford points /
       <b>${Number.isFinite(_avgGrossWin)?_avgGrossWin.toFixed(1):"—"}</b> strokes.
       <br/>
-      Stableford rank: <b>${_stablePos>0 ? _stablePos : "—"}</b> of <b>${_stableTotal||"—"}</b>
+      Stableford rank: <b>${_stablePos>0 ? _stablePos : "—"}</b> of <b>${_stableSorted.length||"—"}</b>
       (${Number.isFinite(_stableDeltaVsField) ? (( _stableDeltaVsField>=0?"+":"") + _stableDeltaVsField.toFixed(1)) : "—"} pts vs field) ·
-      Gross rank: <b>${_grossPos>0 ? _grossPos : "—"}</b> of <b>${_grossTotal||"—"}</b>
+      Gross rank: <b>${_grossPos>0 ? _grossPos : "—"}</b> of <b>${_grossSorted.length||"—"}</b>
       (${Number.isFinite(_grossDeltaVsField) ? (( _grossDeltaVsField>=0?"+":"") + _grossDeltaVsField.toFixed(1)) : "—"} strokes vs field).
     </p>
 
@@ -11888,7 +11774,7 @@ function PlayerReportView({ seasonModel, reportNextHcapMode, setReportNextHcapMo
   // Comparator mode (field / handicap band / par) should follow Overview (single source of truth).
   const __getOverviewComparator = () => {
     try{
-      const snap = (typeof window !== "undefined" && window.__dslOverviewReport) ? window.__dslOverviewReport : null;
+      const snap = (window && window.__dslOverviewReport) ? window.__dslOverviewReport : null;
       const cm = snap ? String(snap.comparatorMode || "") : "";
       if (cm === "field" || cm === "band" || cm === "par") return cm;
       const ui = (window && window.__dslUiState) ? window.__dslUiState : null;
@@ -15300,7 +15186,7 @@ useEffect(() => {
         const c =
           (typeof window !== "undefined" && window.__supabase_client__)
             ? window.__supabase_client__
-            : createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
+            : createClient(SUPA_URL, SUPA_KEY, {
                 auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
               });
         if (typeof window !== "undefined") window.__supabase_client__ = c;
@@ -16691,7 +16577,7 @@ setSeasonRounds(rounds);
                   ? props.supabase
                   : (typeof window !== "undefined" && window.__supabase_client__)
                       ? window.__supabase_client__
-                      : createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
+                      : createClient(SUPA_URL, SUPA_KEY, {
                       auth: {
                         persistSession: true,
                         autoRefreshToken: true,
