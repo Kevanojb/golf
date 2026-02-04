@@ -11320,63 +11320,106 @@ const _fixThis = (() => {
   return { status:"fix", title:"FIX THIS", key:best.key, headline, gain:gainShow, unit };
 })();
 
-// Archetype (simple, based on biggest leak vs expectation across SI/Par)
+// Archetype (match Player Progress logic: benchmark vs peers/field, not vs expectation)
 const _archetype = (() => {
-  // compute average delta vs expected for key buckets (stableford: delta>0 good ; gross: delta>0 bad)
-  const isGross = (String(scoringMode)==="gross");
-  const buckets = {
-    easy: { name:"The Waster", key:"easy", sum:0, n:0 },
-    hard: { name:"The Survivor", key:"hard", sum:0, n:0 },
-    p3: { name:"The Par 3 Victim", key:"p3", sum:0, n:0 },
-    p5: { name:"The Par 5 hacker", key:"p5", sum:0, n:0 },
+  const isGross = (String(scoringMode) === "gross");
+  const siMe   = isGross ? (cur?.bySIGross || {}) : (cur?.bySI || {});
+  const siFld  = isGross ? (__peerAgg?.bySIGross || {}) : (__peerAgg?.bySI || {});
+  const parMe  = isGross ? (cur?.byParGross || {}) : (cur?.byPar || {});
+  const parFld = isGross ? (__peerAgg?.byParGross || {}) : (__peerAgg?.byPar || {});
+
+  const perf = (agg) => {
+    if (!agg) return NaN;
+    // Higher is better in both cases
+    return isGross ? (-avgOverParPH(agg)) : (avgPtsPH(agg));
   };
-  for(const r of (_curSer||[])){
-    const ps = _tryGetParsSI(r);
-    const pars = Array.isArray(ps?.pArr) ? ps.pArr : [];
-    const sis  = Array.isArray(ps?.sArr) ? ps.sArr : [];
-    const ptsA = _getPtsArrR(r);
-    const grossA = _getGrossArrR(r);
-    const holes = Math.max(pars.length, sis.length, (ptsA?ptsA.length:0), (grossA?grossA.length:0), 18);
 
-    for(let i=0;i<holes;i++){
-      const par = PR_num(pars[i], NaN);
-      const si  = PR_num(sis[i], NaN);
+  const pickKey = (obj, candidates) => {
+    for (const k of candidates) if (obj && Object.prototype.hasOwnProperty.call(obj, k)) return k;
+    return candidates[0];
+  };
 
-      let delta = NaN;
-      if(isGross){
-        if(!Array.isArray(grossA) || i>=grossA.length || i>=pars.length || i>=sis.length) continue;
-        const g = PR_num(grossA[i], NaN);
-        const parv = PR_num(pars[i], NaN);
-        const siv = PR_num(sis[i], NaN);
-        if(!Number.isFinite(g) || !Number.isFinite(parv) || !Number.isFinite(siv)) continue;
-        const playingHcap = Math.round(PR_num(r?.hcap ?? r?.playingHcap ?? r?.startExact ?? r?.handicap ?? cur?.playingHcap ?? cur?.startExact ?? cur?.handicap ?? NaN, NaN));
-        const sr = WHS_strokesReceivedOnHole(playingHcap, siv);
-        const expected = parv + sr;
-        delta = g - expected; // + worse
-      } else {
-        if(!Array.isArray(ptsA) || i>=ptsA.length) continue;
-        const p = PR_num(ptsA[i], NaN);
-        if(!Number.isFinite(p)) continue;
-        delta = p - 2; // + better
-      }
+  const kHard = pickKey(siMe, ["1–6","1-6","SI 1–6","SI 1-6","Hard","hard"]);
+  const kEasy = pickKey(siMe, ["13–18","13-18","SI 13–18","SI 13-18","Easy","easy"]);
+  const kP3   = pickKey(parMe, ["3","Par 3","Par3","par3"]);
+  const kP5   = pickKey(parMe, ["5","Par 5","Par5","par5"]);
 
-      if(Number.isFinite(si) && si>=13 && si<=18){ buckets.easy.sum += delta; buckets.easy.n++; }
-      if(Number.isFinite(si) && si>=1 && si<=6){ buckets.hard.sum += delta; buckets.hard.n++; }
-      if(Number.isFinite(par) && par===3){ buckets.p3.sum += delta; buckets.p3.n++; }
-      if(Number.isFinite(par) && par===5){ buckets.p5.sum += delta; buckets.p5.n++; }
-    }
+  const meHard = perf(siMe?.[kHard]);
+  const meEasy = perf(siMe?.[kEasy]);
+  const fdHard = perf(siFld?.[kHard]);
+  const fdEasy = perf(siFld?.[kEasy]);
+  const meP3   = perf(parMe?.[kP3]);
+  const meP5   = perf(parMe?.[kP5]);
+  const fdP3   = perf(parFld?.[kP3]);
+  const fdP5   = perf(parFld?.[kP5]);
+
+  const thr = isGross ? 0.08 : 0.12; // per-hole swing that feels meaningful
+
+  const dHard = (Number.isFinite(meHard) && Number.isFinite(fdHard)) ? (meHard - fdHard) : NaN;
+  const dEasy = (Number.isFinite(meEasy) && Number.isFinite(fdEasy)) ? (meEasy - fdEasy) : NaN;
+  const dP3   = (Number.isFinite(meP3)   && Number.isFinite(fdP3))   ? (meP3   - fdP3)   : NaN;
+  const dP5   = (Number.isFinite(meP5)   && Number.isFinite(fdP5))   ? (meP5   - fdP5)   : NaN;
+
+  const score = (x) => {
+    if (!Number.isFinite(x)) return 0;
+    return Math.max(0, Math.min(3, Math.abs(x) / thr));
+  };
+
+  const candidates = [];
+
+  // Waster: bleeds on easy holes
+  if (Number.isFinite(dEasy) && dEasy < -thr) {
+    const extra = Number.isFinite(dHard) ? Math.max(0, (dHard - dEasy) / thr) : 0;
+    candidates.push({
+      key: "waster",
+      name: "The Waster",
+      icon: "🧩",
+      why: "Easy holes (SI 13–18) are costing you more than your peers. That usually means giving away points with short-game mistakes or poor ‘safe-miss’ decisions.",
+      tip: "Default to centre-green targets on SI 13–18 and protect par first. Birdies come from boring golf.",
+      s: score(dEasy) + 0.5 * extra,
+    });
   }
 
-  // Determine "worst" (stableford: most negative; gross: most positive)
-  const avgs = Object.values(buckets).filter(b=>b.n>=18).map(b=>({ ...b, avg:(b.sum/b.n) }));
-  if(!avgs.length) return { name:"No clear pattern yet", key:"none" };
+  // Survivor: strong on hard holes, weak on easy holes
+  if (Number.isFinite(dHard) && Number.isFinite(dEasy) && dHard > thr && dEasy < -thr) {
+    candidates.push({
+      key: "survivor",
+      name: "The Survivor",
+      icon: "🛡️",
+      why: "You hang in there on the toughest holes, but you leak points on the ‘scoring’ holes.",
+      tip: "Treat easy holes as ‘no big number’ holes: aim fat, avoid short-side, two-putt and move on.",
+      s: score(dHard) + score(dEasy),
+    });
+  }
 
-  avgs.sort((a,b)=>{
-    return isGross ? (b.avg - a.avg) : (a.avg - b.avg);
-  });
-  const worst = avgs[0];
+  // Par 3 victim
+  if (Number.isFinite(dP3) && dP3 < -thr) {
+    candidates.push({
+      key: "p3",
+      name: "The Par 3 Victim",
+      icon: "🎯",
+      why: "You lose more than your peers on Par 3s. That often comes from iron proximity (missing to the wrong side) and turning pars into bogeys.",
+      tip: "Pick safer lines and commit to the middle. Prioritise 2-putt pars over hero pins.",
+      s: score(dP3),
+    });
+  }
 
-  return { name: worst.name, key: worst.key, avg: worst.avg, n: worst.n };
+  // Par 5 hacker
+  if (Number.isFinite(dP5) && dP5 < -thr) {
+    candidates.push({
+      key: "p5",
+      name: "The Par 5 hacker",
+      icon: "🚀",
+      why: "Par 5s should be your scoring holes, but they’re costing you more than your peers — often from hero shots or poor wedge numbers.",
+      tip: "Make Par 5s a 3-shot plan: safe tee ball → lay up to a favourite wedge → fat green.",
+      s: score(dP5),
+    });
+  }
+
+  if (!candidates.length) return { key:"none", name:"No clear archetype yet" };
+
+  candidates.sort((a,b)=> (b.s||0) - (a.s||0));
+  return candidates[0];
 })();
 
 // Comfort zone yardage (Par 4 buckets, vs expected)
