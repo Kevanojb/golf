@@ -11320,17 +11320,18 @@ const _fixThis = (() => {
   return { status:"fix", title:"FIX THIS", key:best.key, headline, gain:gainShow, unit };
 })();
 
-// Archetype (match Player Progress logic: benchmark vs peers/field, not vs expectation)
+// Archetype (MATCH Player Progress): comparator-based labels with Survivor rule.
+// This is intentionally aligned with the Player Progress archetype logic so the UI is consistent.
 const _archetype = (() => {
   const isGross = (String(scoringMode) === "gross");
   const siMe   = isGross ? (cur?.bySIGross || {}) : (cur?.bySI || {});
-  const siFld  = isGross ? (__peerAgg?.bySIGross || {}) : (__peerAgg?.bySI || {});
+  const siCmp  = isGross ? (peerTotals?.bySIGross || {}) : (peerTotals?.bySI || {});
   const parMe  = isGross ? (cur?.byParGross || {}) : (cur?.byPar || {});
-  const parFld = isGross ? (__peerAgg?.byParGross || {}) : (__peerAgg?.byPar || {});
+  const parCmp = isGross ? (peerTotals?.byParGross || {}) : (peerTotals?.byPar || {});
 
   const perf = (agg) => {
     if (!agg) return NaN;
-    // Higher is better in both cases
+    // higher is better for both modes
     return isGross ? (-avgOverParPH(agg)) : (avgPtsPH(agg));
   };
 
@@ -11339,26 +11340,24 @@ const _archetype = (() => {
     return candidates[0];
   };
 
-  const kHard = pickKey(siMe, ["1–6","1-6","SI 1–6","SI 1-6","Hard","hard"]);
-  const kEasy = pickKey(siMe, ["13–18","13-18","SI 13–18","SI 13-18","Easy","easy"]);
-  const kP3   = pickKey(parMe, ["3","Par 3","Par3","par3"]);
-  const kP5   = pickKey(parMe, ["5","Par 5","Par5","par5"]);
+  const kHard = pickKey(siMe, ["1–6","1-6","1–6 ","SI 1–6","SI 1-6"]);
+  const kEasy = pickKey(siMe, ["13–18","13-18","13–18 ","SI 13–18","SI 13-18"]);
 
   const meHard = perf(siMe?.[kHard]);
   const meEasy = perf(siMe?.[kEasy]);
-  const fdHard = perf(siFld?.[kHard]);
-  const fdEasy = perf(siFld?.[kEasy]);
-  const meP3   = perf(parMe?.[kP3]);
-  const meP5   = perf(parMe?.[kP5]);
-  const fdP3   = perf(parFld?.[kP3]);
-  const fdP5   = perf(parFld?.[kP5]);
+  const cpHard = perf(siCmp?.[kHard]);
+  const cpEasy = perf(siCmp?.[kEasy]);
+
+  const meP3 = perf(parMe?.[pickKey(parMe, ["Par 3","P3","par3","3"])]);
+  const meP5 = perf(parMe?.[pickKey(parMe, ["Par 5","P5","par5","5"])]);
+  const cpP3 = perf(parCmp?.[pickKey(parCmp, ["Par 3","P3","par3","3"])]);
+  const cpP5 = perf(parCmp?.[pickKey(parCmp, ["Par 5","P5","par5","5"])]);
 
   const thr = isGross ? 0.08 : 0.12; // per-hole swing that feels meaningful
-
-  const dHard = (Number.isFinite(meHard) && Number.isFinite(fdHard)) ? (meHard - fdHard) : NaN;
-  const dEasy = (Number.isFinite(meEasy) && Number.isFinite(fdEasy)) ? (meEasy - fdEasy) : NaN;
-  const dP3   = (Number.isFinite(meP3)   && Number.isFinite(fdP3))   ? (meP3   - fdP3)   : NaN;
-  const dP5   = (Number.isFinite(meP5)   && Number.isFinite(fdP5))   ? (meP5   - fdP5)   : NaN;
+  const dHard = (Number.isFinite(meHard) && Number.isFinite(cpHard)) ? (meHard - cpHard) : NaN;
+  const dEasy = (Number.isFinite(meEasy) && Number.isFinite(cpEasy)) ? (meEasy - cpEasy) : NaN;
+  const dP3   = (Number.isFinite(meP3) && Number.isFinite(cpP3)) ? (meP3 - cpP3) : NaN;
+  const dP5   = (Number.isFinite(meP5) && Number.isFinite(cpP5)) ? (meP5 - cpP5) : NaN;
 
   const score = (x) => {
     if (!Number.isFinite(x)) return 0;
@@ -11373,10 +11372,7 @@ const _archetype = (() => {
     candidates.push({
       key: "waster",
       name: "The Waster",
-      icon: "🧩",
-      why: "Easy holes (SI 13–18) are costing you more than your peers. That usually means giving away points with short-game mistakes or poor ‘safe-miss’ decisions.",
-      tip: "Default to centre-green targets on SI 13–18 and protect par first. Birdies come from boring golf.",
-      s: score(dEasy) + 0.5 * extra,
+      s: score(dEasy) + 0.5*extra,
     });
   }
 
@@ -11385,40 +11381,22 @@ const _archetype = (() => {
     candidates.push({
       key: "survivor",
       name: "The Survivor",
-      icon: "🛡️",
-      why: "You hang in there on the toughest holes, but you leak points on the ‘scoring’ holes.",
-      tip: "Treat easy holes as ‘no big number’ holes: aim fat, avoid short-side, two-putt and move on.",
       s: score(dHard) + score(dEasy),
     });
   }
 
   // Par 3 victim
   if (Number.isFinite(dP3) && dP3 < -thr) {
-    candidates.push({
-      key: "p3",
-      name: "The Par 3 Victim",
-      icon: "🎯",
-      why: "You lose more than your peers on Par 3s. That often comes from iron proximity (missing to the wrong side) and turning pars into bogeys.",
-      tip: "Pick safer lines and commit to the middle. Prioritise 2-putt pars over hero pins.",
-      s: score(dP3),
-    });
+    candidates.push({ key: "p3", name: "The Par 3 Victim", s: score(dP3) });
   }
 
   // Par 5 hacker
   if (Number.isFinite(dP5) && dP5 < -thr) {
-    candidates.push({
-      key: "p5",
-      name: "The Par 5 hacker",
-      icon: "🚀",
-      why: "Par 5s should be your scoring holes, but they’re costing you more than your peers — often from hero shots or poor wedge numbers.",
-      tip: "Make Par 5s a 3-shot plan: safe tee ball → lay up to a favourite wedge → fat green.",
-      s: score(dP5),
-    });
+    candidates.push({ key: "p5", name: "The Par 5 hacker", s: score(dP5) });
   }
 
-  if (!candidates.length) return { key:"none", name:"No clear archetype yet" };
-
-  candidates.sort((a,b)=> (b.s||0) - (a.s||0));
+  if (!candidates.length) return { name: "Not enough data to confidently label a pattern.", key: "none" };
+  candidates.sort((a,b) => (b.s||0) - (a.s||0));
   return candidates[0];
 })();
 
