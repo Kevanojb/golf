@@ -10567,11 +10567,22 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
   // This keeps the report identical to the Overview (single source of truth).
   // ------------------------------------------------------------
   const __snap = (typeof window !== "undefined" && window.__dslOverviewReport) ? window.__dslOverviewReport : null;
+  const __norm = (v)=>String(v??"").trim();
+  const __normSeason = (v)=>{
+    const t = __norm(v);
+    const m = t.match(/^(\d{4})-(\d{2})$/);
+    if (m){
+      const start = m[1];
+      const end = String(Number(m[1].slice(0,2)+m[2]));
+      return `${start}-${end}`;
+    }
+    return t;
+  };
   const __useSnap = !!(__snap
-    && String(__snap.playerName||"") === String(playerName||"")
-    && String(__snap.yearLabel||"") === String(yearLabel||"")
-    && String(__snap.seasonLimit||"") === String(seasonLimit||"")
-    && String(__snap.scoringMode||"") === String(scoringMode||""));
+    && __norm(__snap.playerName) === __norm(playerName)
+    && __normSeason(__snap.yearLabel) === __normSeason(yearLabel)
+    && __norm(__snap.seasonLimit) === __norm(seasonLimit)
+    && __norm(__snap.scoringMode) === __norm(scoringMode));
 
   const __effComparatorMode = __useSnap
     ? ((String(__snap.comparatorMode||"band") === "par") ? "par" : (String(__snap.comparatorMode||"band") === "field" ? "field" : "band"))
@@ -10672,15 +10683,6 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
       };
 
       out = out.filter(r => sidForRow(r) === want);
-    }
-
-        return t;
-      };
-      const sid = norm(yearSel);
-      out = out.filter(r => {
-        const s = (r && (r.seasonId ?? r.season_id)) ?? "";
-        return norm(s) === sid;
-      });
     }
 
     // Sort oldest -> newest, then take most recent N if requested
@@ -11826,7 +11828,7 @@ function PlayerReportView({ seasonModel, reportNextHcapMode, setReportNextHcapMo
   // Comparator mode (field / handicap band / par) should follow Overview (single source of truth).
   const __getOverviewComparator = () => {
     try{
-      const snap = (window && window.__dslOverviewReport) ? window.__dslOverviewReport : null;
+      const snap = (typeof window !== "undefined" && window.__dslOverviewReport) ? window.__dslOverviewReport : null;
       const cm = snap ? String(snap.comparatorMode || "") : "";
       if (cm === "field" || cm === "band" || cm === "par") return cm;
       const ui = (window && window.__dslUiState) ? window.__dslUiState : null;
