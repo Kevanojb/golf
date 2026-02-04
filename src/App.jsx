@@ -10612,7 +10612,7 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
       return 0;
     };
 
-    // Year filter
+    // Year filter (must work even when series rows don't carry seasonId)
     if (yearSel && yearSel !== "All"){
       const norm = (x) => {
         const t = String(x ?? "").trim();
@@ -10625,10 +10625,24 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
         return t;
       };
       const sid = norm(yearSel);
-      out = out.filter(r => {
-        const s = (r && (r.seasonId ?? r.season_id)) ?? "";
-        return norm(s) === sid;
-      });
+      const seasonsArr = (typeof window !== "undefined" && window.__dslSeasonsDef) ? window.__dslSeasonsDef : [];
+      const _sidFor = (r) => {
+        const direct = (r && (r.seasonId ?? r.season_id)) ?? "";
+        if (String(direct).trim() !== "") return norm(direct);
+        const ms = Number.isFinite(Number(r?.dateMs)) ? Number(r.dateMs)
+          : (Number.isFinite(Number(r?.date_ms)) ? Number(r.date_ms)
+          : (r?.date ? (new Date(r.date)).getTime() : NaN));
+        if (Number.isFinite(ms)) {
+          try {
+            const mapped = seasonIdForDateMs(ms, seasonsArr);
+            if (mapped !== null && mapped !== undefined && String(mapped).trim() !== "") return norm(mapped);
+          } catch(e) {}
+          // last-resort fallback: calendar year
+          try { return String(new Date(ms).getFullYear()); } catch(e) {}
+        }
+        return "";
+      };
+      out = out.filter(r => _sidFor(r) === sid);
     }
 
     // Sort oldest -> newest, then take most recent N if requested
