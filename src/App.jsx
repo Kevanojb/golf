@@ -1770,9 +1770,12 @@ const ScoutingReport = (props) => {
   const unit = isGross ? "strokes" : "pts";
 
   // Dynamic color for the "Big Number"
-  const isGood = overallVsFieldPerRound >= 0;
+  // NOTE: Do not close over outer-scope lets/consts here; pass values via props to avoid TDZ/initialization issues in production builds.
+  const _ov = Number(props?.overallVsFieldPerRound);
+  const _vel = Number(props?.velocity);
+  const isGood = Number.isFinite(_ov) ? (_ov >= 0) : true;
   const mainColor = isGood ? "text-emerald-600" : "text-rose-600";
-  const trendIcon = velocity > 0 ? "↗" : velocity < 0 ? "↘" : "→";
+  const trendIcon = (_vel > 0) ? "↗" : (_vel < 0) ? "↘" : "→";
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
