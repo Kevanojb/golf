@@ -10650,14 +10650,6 @@ if (yearSel && yearSel !== "All"){
 
   out = out.filter(r => sidForRow(r) === sidWant);
 }
-        return t;
-      };
-      const sid = norm(yearSel);
-      out = out.filter(r => {
-        const s = (r && (r.seasonId ?? r.season_id)) ?? "";
-        return norm(s) === sid;
-      });
-    }
 
     // Sort oldest -> newest, then take most recent N if requested
     out.sort((a,b) => dateOf(a) - dateOf(b));
