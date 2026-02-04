@@ -15300,7 +15300,7 @@ useEffect(() => {
         const c =
           (typeof window !== "undefined" && window.__supabase_client__)
             ? window.__supabase_client__
-            : createClient(SUPA_URL, SUPA_KEY, {
+            : createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
                 auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
               });
         if (typeof window !== "undefined") window.__supabase_client__ = c;
@@ -16691,7 +16691,7 @@ setSeasonRounds(rounds);
                   ? props.supabase
                   : (typeof window !== "undefined" && window.__supabase_client__)
                       ? window.__supabase_client__
-                      : createClient(SUPA_URL, SUPA_KEY, {
+                      : createClient(import.meta.env.VITE_SUPABASE_URL, import.meta.env.VITE_SUPABASE_ANON_KEY, {
                       auth: {
                         persistSession: true,
                         autoRefreshToken: true,
