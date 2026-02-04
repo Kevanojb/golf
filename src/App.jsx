@@ -1787,7 +1787,7 @@ const ScoutingReport = (props) => {
           <div>
             <div className="text-xs font-bold uppercase tracking-widest text-neutral-400 mb-1">Performance vs Field</div>
             <div className="text-5xl font-black tracking-tighter">
-              {overallVsFieldPerRound > 0 ? "+" : ""}{Number.isFinite(overallVsFieldPerRound) ? overallVsFieldPerRound.toFixed(1) : "—"}
+              {_ov > 0 ? "+" : ""}{Number.isFinite(_ov) ? _ov.toFixed(1) : "—"}
               <span className="text-lg font-medium text-neutral-400 ml-2">{unit}/rd</span>
             </div>
           </div>
@@ -1796,7 +1796,7 @@ const ScoutingReport = (props) => {
             <div>
               <div className="text-[10px] uppercase text-neutral-500 font-bold">Trend</div>
               <div className="text-xl font-bold flex items-center gap-1">
-                {trendIcon} {Number.isFinite(velocity) ? Math.abs(velocity).toFixed(2) : "—"}
+                {trendIcon} {Number.isFinite(_vel) ? Math.abs(_vel).toFixed(2) : "—"}
               </div>
             </div>
             <div className="w-px h-8 bg-neutral-800"></div>
