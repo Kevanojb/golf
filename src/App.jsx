@@ -6834,7 +6834,7 @@ const benchField = React.useMemo(() => {
     () => PR_buildRawRows({
       scoringMode,
       dim: "Par",
-      mapObj: isGross ? cur?.byParGross : cur?.byPar,
+      mapObj: isGross ? __meTrue.byParGross : __meTrue.byPar,
       fieldObj: isGross ? benchField?.byParGross : benchField?.byPar,
     }),
     [cur, field, scoringMode]
@@ -6844,7 +6844,7 @@ const benchField = React.useMemo(() => {
     () => PR_buildRawRows({
       scoringMode,
       dim: "SI",
-      mapObj: isGross ? cur?.bySIGross : cur?.bySI,
+      mapObj: isGross ? __meTrue.bySIGross : __meTrue.bySI,
       fieldObj: isGross ? benchField?.bySIGross : benchField?.bySI,
       limit: 6,
     }),
@@ -10756,10 +10756,163 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
   }
 
 const isGross = String(scoringMode) === "gross";
-  const meTotals = isGross ? (cur?.totalsGross || _makeAggGross()) : (cur?.totals || _makeAgg());
-  const peerTotals = __peerAgg
-    ? (isGross ? (__peerAgg?.totalsGross || _makeAggGross()) : (__peerAgg?.totals || _makeAgg()))
-    : (isGross ? PR_sumAggObjects(peers, "totalsGross", _makeAggGross) : PR_sumAggObjects(peers, "totals", _makeAgg));
+
+  // ============================================================
+  // TRUE AGGREGATION (no derived/approximate season buckets)
+  // Recompute all headline + evidence values directly from the raw per-hole data
+  // inside the filtered window series, so UI matches PDF exactly.
+  // ============================================================
+  const __getSeriesArr = (obj) => (Array.isArray(obj?.roundSeries) ? obj.roundSeries : __filterSeries(obj?.series));
+
+  const __getPtsArr = (r) => {
+    if (!r) return null;
+    return Array.isArray(r.perHole) ? r.perHole
+      : Array.isArray(r.pointsPerHole) ? r.pointsPerHole
+      : Array.isArray(r.ptsPerHole) ? r.ptsPerHole
+      : Array.isArray(r.perHolePts) ? r.perHolePts
+      : Array.isArray(r.stablefordPerHole) ? r.stablefordPerHole
+      : Array.isArray(r.stablefordHoles) ? r.stablefordHoles
+      : null;
+  };
+  const __getGrossArr = (r) => {
+    if (!r) return null;
+    return Array.isArray(r.grossPerHole) ? r.grossPerHole
+      : Array.isArray(r.gross) ? r.gross
+      : Array.isArray(r.strokesPerHole) ? r.strokesPerHole
+      : null;
+  };
+  const __getParsArr = (r) => {
+    if (!r) return null;
+    return Array.isArray(r.parsArr) ? r.parsArr
+      : Array.isArray(r.parsPerHole) ? r.parsPerHole
+      : Array.isArray(r.pars) ? r.pars
+      : null;
+  };
+  const __getSIArr = (r) => {
+    if (!r) return null;
+    return Array.isArray(r.siArr) ? r.siArr
+      : Array.isArray(r.strokeIndexArr) ? r.strokeIndexArr
+      : Array.isArray(r.strokeIndex) ? r.strokeIndex
+      : Array.isArray(r.holeSI) ? r.holeSI
+      : null;
+  };
+  const __getYardsArr = (r) => {
+    if (!r) return null;
+    return Array.isArray(r.yardsArr) ? r.yardsArr
+      : Array.isArray(r.yardageArr) ? r.yardageArr
+      : Array.isArray(r.yardsPerHole) ? r.yardsPerHole
+      : Array.isArray(r.yardagePerHole) ? r.yardagePerHole
+      : null;
+  };
+
+  const __siBand = (si) => {
+    const n = Number(si);
+    if (!Number.isFinite(n) || n <= 0) return "Unknown";
+    if (n <= 6) return "1–6";
+    if (n <= 12) return "7–12";
+    return "13–18";
+  };
+
+  const __ydBand = (y) => {
+    const n = Number(y);
+    if (!Number.isFinite(n) || n <= 0) return "Unknown";
+    if (n < 150) return "<150";
+    if (n <= 200) return "150–200";
+    if (n <= 350) return "201–350";
+    if (n <= 420) return "351–420";
+    return "420+";
+  };
+
+  const __mkAggStable = () => ({ holes: 0, pts: 0, wipes: 0, p0: 0, p1: 0, p2: 0, p3: 0, p4: 0, p5: 0 });
+  const __mkAggGross  = () => ({ holes: 0, val: 0, birdies: 0, pars: 0, bogeys: 0, doubles: 0, triplesPlus: 0 });
+
+  const __addStable = (agg, ptsVal) => {
+    agg.holes += 1;
+    agg.pts += ptsVal;
+    if (ptsVal === 0) agg.wipes += 1;
+    const k = ptsVal <= 0 ? "p0" : ptsVal >= 5 ? "p5" : ("p" + String(ptsVal));
+    agg[k] = (agg[k] || 0) + 1;
+  };
+
+  const __addGross = (agg, gross, par) => {
+    agg.holes += 1;
+    const d = gross - par; // strokes over par
+    agg.val += d;
+    if (d <= -1) agg.birdies += 1;
+    else if (d === 0) agg.pars += 1;
+    else if (d === 1) agg.bogeys += 1;
+    else if (d === 2) agg.doubles += 1;
+    else agg.triplesPlus += 1;
+  };
+
+  const __accDim = (map, key, addFn, ...args) => {
+    if (!map[key]) map[key] = addFn === __addStable ? __mkAggStable() : __mkAggGross();
+    addFn(map[key], ...args);
+  };
+
+  const __trueAggFromRounds = (roundsArr) => {
+    const totals = __mkAggStable();
+    const totalsGross = __mkAggGross();
+    const byPar = {}, bySI = {}, byYards = {};
+    const byParGross = {}, bySIGross = {}, byYardsGross = {};
+
+    for (const r of (roundsArr || [])) {
+      const ptsArr = __getPtsArr(r);
+      const gArr = __getGrossArr(r);
+      const pArr = __getParsArr(r);
+      const siArr = __getSIArr(r);
+      const ydArr = __getYardsArr(r);
+
+      const len = Math.max(
+        ptsArr?.length || 0,
+        gArr?.length || 0,
+        pArr?.length || 0,
+        siArr?.length || 0,
+        ydArr?.length || 0
+      );
+
+      for (let i = 0; i < len; i++) {
+        const siKey = __siBand(siArr?.[i]);
+        const ydKey = __ydBand(ydArr?.[i]);
+
+        if (!isGross) {
+          const v = Number(ptsArr?.[i]);
+          if (!Number.isFinite(v)) continue;
+
+          const parNum = Number(pArr?.[i]);
+          const parKey = (parNum === 3 || parNum === 4 || parNum === 5) ? `Par ${parNum}` : "Unknown";
+
+          __addStable(totals, v);
+          __accDim(byPar, parKey, __addStable, v);
+          __accDim(bySI, siKey, __addStable, v);
+          __accDim(byYards, ydKey, __addStable, v);
+        } else {
+          const g = Number(gArr?.[i]);
+          const p = Number(pArr?.[i]);
+          if (!Number.isFinite(g) || !Number.isFinite(p)) continue;
+
+          const parKey = (p === 3 || p === 4 || p === 5) ? `Par ${p}` : "Unknown";
+
+          __addGross(totalsGross, g, p);
+          __accDim(byParGross, parKey, __addGross, g, p);
+          __accDim(bySIGross, siKey, __addGross, g, p);
+          __accDim(byYardsGross, ydKey, __addGross, g, p);
+        }
+      }
+    }
+
+    return { totals, totalsGross, byPar, bySI, byYards, byParGross, bySIGross, byYardsGross };
+  };
+
+  // Player + peers: recompute from raw round windows (true reflection)
+  const __meRounds = __getSeriesArr(cur);
+  const __peerRounds = (Array.isArray(peers) ? peers : []).flatMap(p => __getSeriesArr(p));
+
+  const __meTrue = __trueAggFromRounds(__meRounds);
+  const __peerTrue = __trueAggFromRounds(__peerRounds);
+
+  const meTotals = isGross ? __meTrue.totalsGross : __meTrue.totals;
+  const peerTotals = isGross ? __peerTrue.totalsGross : __peerTrue.totals;
 
   const mePH = isGross ? PR_avgGross(meTotals) : PR_avgPts(meTotals);
   const peerPH = isGross ? PR_avgGross(peerTotals) : PR_avgPts(peerTotals);
@@ -10767,37 +10920,31 @@ const isGross = String(scoringMode) === "gross";
   const youAvgPH = mePH;
   const peerAvgPH = peerPH;
 
-  const rounds = PR_num(cur?.rounds, NaN);
+  const rounds = (Array.isArray(__meRounds) ? __meRounds.length : PR_num(cur?.rounds, NaN));
   const holes = PR_num(meTotals?.holes, NaN);
 
   // Core KPI buckets (same as the report cards)
   const bySI = PR_buildRawRows({
     scoringMode,
     dim:"SI",
-    mapObj: isGross ? cur?.bySIGross : cur?.bySI,
-    fieldObj: __peerAgg
-      ? (isGross ? (__peerAgg?.bySIGross || {}) : (__peerAgg?.bySI || {}))
-      : (isGross ? PR_sumAggMap(peers, "bySIGross", _makeAggGross) : PR_sumAggMap(peers, "bySI", _makeAgg)),
+    mapObj: isGross ? __meTrue.bySIGross : __meTrue.bySI,
+    fieldObj: isGross ? __peerTrue.bySIGross : __peerTrue.bySI,
     limit: 6,
   });
 
   const byPar = PR_buildRawRows({
     scoringMode,
     dim:"Par",
-    mapObj: isGross ? cur?.byParGross : cur?.byPar,
-    fieldObj: __peerAgg
-      ? (isGross ? (__peerAgg?.byParGross || {}) : (__peerAgg?.byPar || {}))
-      : (isGross ? PR_sumAggMap(peers, "byParGross", _makeAggGross) : PR_sumAggMap(peers, "byPar", _makeAgg)),
+    mapObj: isGross ? __meTrue.byParGross : __meTrue.byPar,
+    fieldObj: isGross ? __peerTrue.byParGross : __peerTrue.byPar,
     limit: 6,
   });
 
   const byYd = PR_buildRawRows({
     scoringMode,
     dim:"Yards",
-    mapObj: isGross ? cur?.byYardsGross : cur?.byYards,
-    fieldObj: __peerAgg
-      ? (isGross ? (__peerAgg?.byYardsGross || {}) : (__peerAgg?.byYards || {}))
-      : (isGross ? PR_sumAggMap(peers, "byYardsGross", _makeAggGross) : PR_sumAggMap(peers, "byYards", _makeAgg)),
+    mapObj: isGross ? __meTrue.byYardsGross : __meTrue.byYards,
+    fieldObj: isGross ? __peerTrue.byYardsGross : __peerTrue.byYards,
     limit: 10,
   });
 
