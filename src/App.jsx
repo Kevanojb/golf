@@ -10189,7 +10189,6 @@ function PR_bucketOutcomeMix({ scoringMode, windowSeries }){
   const rounds = (windowSeries || []).slice();
 
   // Normalise per-hole arrays across the many shapes used in the app.
-  // (Year-filtered series often store Stableford points under ptsPerHole/pointsPerHole/etc.)
   const getPtsArr = (r) => {
     if (!r) return null;
     return Array.isArray(r.perHole) ? r.perHole
@@ -10219,37 +10218,49 @@ function PR_bucketOutcomeMix({ scoringMode, windowSeries }){
   let birdiePlus = 0;
   let pars = 0;
   let bogeys = 0;
-  let bad = 0; // wipes (pts=0) or double+ (>=2 over par)
+  let bad = 0;
 
   for (const r of rounds){
     const phPts = getPtsArr(r);
     const gh = getGrossArr(r);
     const parsArr = getParsArr(r);
 
-    for (let i=0;i<18;i++){
+    // 🔥 THIS IS THE FIX
+    const len = Math.max(
+      phPts?.length || 0,
+      gh?.length || 0,
+      parsArr?.length || 0
+    );
+
+    for (let i = 0; i < len; i++){
       if (!isGross){
         const v = Number(phPts?.[i]);
         if (!Number.isFinite(v)) continue;
+
         holes++;
+
         if (v >= 3) birdiePlus++;
         else if (v === 2) pars++;
         else if (v === 1) bogeys++;
-        else bad++; // 0 = wipe
+        else bad++;
       } else {
         const g = Number(gh?.[i]);
         const p = Number(parsArr?.[i]);
         if (!Number.isFinite(g) || !Number.isFinite(p)) continue;
+
         holes++;
-        const d = g - p; // strokes over par
+
+        const d = g - p;
         if (d <= -1) birdiePlus++;
         else if (d === 0) pars++;
         else if (d === 1) bogeys++;
-        else bad++; // 2+ = double+
+        else bad++;
       }
     }
   }
 
   const rate = (n) => (holes ? n / holes : NaN);
+
   return {
     holes,
     birdiePlusRate: rate(birdiePlus),
@@ -10258,6 +10269,7 @@ function PR_bucketOutcomeMix({ scoringMode, windowSeries }){
     badRate: rate(bad),
   };
 }
+
 
 
 // Compute exact damage severity: average strokes above bogey on double+ holes
