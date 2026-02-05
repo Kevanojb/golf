@@ -7682,7 +7682,7 @@ const _fmtDelta = (x) => {
     // Copy: one-liner + practical nudge
     const copy = {
       easy: "These are advantage holes. Play boring golf: fat target, avoid short-side, bank par first.",
-      hard: "Cut doubles. Choose safer lines and accept bogey—protect against the big number.",
+      hard: "Reduce big numbers on the hardest holes (SI 1–6). Doubles and worse here cost far more than missed birdies gain. This is about decisions, not swing changes. Choose the safest line, aim for the fattest part of the green, and accept bogey as a good score.",
       p3:   "Centre-green targets and committed swings. If between clubs, take the longer one.",
       p5:   "Make it a 3-shot plan: safe tee ball → lay up to a favourite wedge → fat green.",
       longP4:"Prioritise position over power. Take trouble out of play and keep the next shot simple.",
@@ -10952,6 +10952,48 @@ if (__effComparatorMode === "par") {
 
 
 
+
+// --- FIX THIS + Archetype blocks (Season Report) ---
+// Use ONLY existing evidence tables (bySI, byPar) — no new stats.
+const _findRow = (rows, preds=[])=>{
+  const arr = Array.isArray(rows) ? rows : [];
+  for(const r of arr){
+    const s = String(r?.label || r?.key || "").toLowerCase();
+    if(preds.some(p => p(s))) return r;
+  }
+  return null;
+};
+
+const siHardRow = _findRow(bySI, [
+  s=>s.includes("si 1–6"), s=>s.includes("si 1-6"), s=>s.includes("1–6"), s=>s.includes("1-6")
+]);
+
+const par5Row = _findRow(byPar, [
+  s=>s.includes("par 5"), s=>s.includes("p5"), s=>s.trim()==="5"
+]);
+
+const siHardDelta = (siHardRow && Number.isFinite(siHardRow?.delta)) ? Number(siHardRow.delta) : _deltaOfRow(siHardRow);
+const par5Delta = (par5Row && Number.isFinite(par5Row?.delta)) ? Number(par5Row.delta) : _deltaOfRow(par5Row);
+
+// Convert delta to "per 18" in the same units already used by the report
+const _per18 = (d)=> Number.isFinite(d) ? (d*18) : NaN;
+
+// FIX THIS: only show the hard-holes guidance when SI 1–6 is leaking vs peers (delta < 0 in non-par comparator)
+// If it's not leaking, we still show a short "nothing obvious" line (so Kev can see it *exists* in the report).
+const fixHardStatus = (__effComparatorMode==="par") ? "none" : (Number.isFinite(siHardDelta) && siHardDelta < 0 ? "fix" : "none");
+const fixHardGain18 = (fixHardStatus==="fix") ? Math.abs(_per18(siHardDelta)) : NaN;
+
+const fixHardHeadline = (fixHardStatus==="fix")
+  ? `Reduce big numbers on hard holes (SI 1–6) → gain ~${Number.isFinite(fixHardGain18)?fixHardGain18.toFixed(1):"—"} ${(isGross ? "strokes" : "pts")}/18`
+  : `Hard holes (SI 1–6) are not your leak in this window.`;
+
+const fixHardDetail = (fixHardStatus==="fix")
+  ? `Cut doubles. Choose safer lines and accept bogey—protect against the big number.`
+  : `Keep doing what you’re doing on SI 1–6 — the evidence table shows you’re not losing ground there.`;
+
+// Archetype: Par 5 Butcher only when Par 5s are worse than peers (delta < 0)
+const archetypeP5Status = (__effComparatorMode==="par") ? "none" : (Number.isFinite(par5Delta) && par5Delta < 0 ? "p5" : "none");
+
   const htmlFragment = `
   <style>
     .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a}
@@ -11099,6 +11141,32 @@ if (__effComparatorMode === "par") {
   `}
 </p>
     </div>
+
+
+    <div class="PRbox PRsec">
+      <div class="PRsecTitle">🛠️ Fix This</div>
+      <p class="PRp">
+        <b>${PR_escapeHtml(fixHardHeadline)}</b><br/>
+        ${PR_escapeHtml(fixHardDetail)}
+      </p>
+    </div>
+
+    ${archetypeP5Status==="p5" ? `
+    <div class="PRbox PRsec">
+      <div class="PRsecTitle">🚀 Player Archetype</div>
+      <p class="PRp">
+        <b>The Par 5 Butcher</b><br/>
+        Par 5s should be your scoring holes, but they’re costing you more than the field — often from hero shots or poor wedge numbers.
+      </p>
+      <div class="PRbox" style="border-radius:14px;background:#f8fafc;border-color:#e5e7eb">
+        <div class="PRk">How to flip it</div>
+        <div class="PRp" style="margin-top:6px">
+          Make par 5s a 3-shot plan: safe tee ball → lay up to a favourite wedge → fat green.
+        </div>
+      </div>
+    </div>
+    ` : ``}
+
 
     <div class="PRbox PRsec">
       <div class="PRsecTitle">3. The Evidence Locker</div>
