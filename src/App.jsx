@@ -2879,6 +2879,7 @@ function Header({ leagueHeaderTitle, eventName, statusMsg, courseName, view, set
   <span className="topchip px-3 py-2 text-sm max-w-[70vw] sm:max-w-none">
     <span className="ico">⛳</span><span className="txt truncate">{eventName || "Untitled Event"}</span>
   </span>
+</div>
         </div>
       </div>
     </div>
@@ -3354,6 +3355,7 @@ const nextAction = (() => {
                     )}
                   </div>
                 </div>
+</div>
               </div>
 
               <div className="hm-hero-right">
