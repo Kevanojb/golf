@@ -6950,6 +6950,7 @@ const parLeaders = React.useMemo(() => {
     p5: build("Par 5"),
     bogeys: buildPer18("bogeys"),
     doubles: buildPer18("doubles"),
+    triplesPlus: buildPer18("triplesPlus"),
   };
 }, [allPlayers, parLeadMode]);
 
@@ -9631,10 +9632,11 @@ const coachLine = (row) => {
                   <div className="text-[11px] font-black text-neutral-500 uppercase tracking-wide">lower wins</div>
                 </div>
 
-                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="mt-2 grid grid-cols-1 md:grid-cols-3 gap-3">
                   {[
                     { key: "bogeys",  title: "Fewest bogeys",        unit: "bog/18" },
                     { key: "doubles", title: "Fewest double bogeys", unit: "dbl/18" },
+                    { key: "triplesPlus", title: "Fewest triple+", unit: "tri+/18" },
                   ].map(col => (
                     <div key={col.key} className="rounded-2xl border border-neutral-200 bg-white p-3">
                       <div className="flex items-center justify-between gap-2">
