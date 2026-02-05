@@ -7682,7 +7682,7 @@ const _fmtDelta = (x) => {
     // Copy: one-liner + practical nudge
     const copy = {
       easy: "These are advantage holes. Play boring golf: fat target, avoid short-side, bank par first.",
-      hard: "Reduce big numbers on the hardest holes (SI 1–6). Doubles and worse here cost far more than missed birdies gain. This is about decisions, not swing changes. Choose the safest line, aim for the fattest part of the green, and accept bogey as a good score.",
+      hard: "Cut doubles. Choose safer lines and accept bogey—protect against the big number.",
       p3:   "Centre-green targets and committed swings. If between clubs, take the longer one.",
       p5:   "Make it a 3-shot plan: safe tee ball → lay up to a favourite wedge → fat green.",
       longP4:"Prioritise position over power. Take trouble out of play and keep the next shot simple.",
