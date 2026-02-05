@@ -7682,7 +7682,7 @@ const _fmtDelta = (x) => {
     // Copy: one-liner + practical nudge
     const copy = {
       easy: "These are advantage holes. Play boring golf: fat target, avoid short-side, bank par first.",
-      hard: "Reduce big numbers on the hardest holes (SI 1–6). Doubles and worse here cost far more than missed birdies gain. This is about decisions, not swing changes. Choose the safest line, aim for the fattest part of the green, and accept bogey as a good score.",
+      hard: "Cut doubles. Choose safer lines and accept bogey—protect against the big number.",
       p3:   "Centre-green targets and committed swings. If between clubs, take the longer one.",
       p5:   "Make it a 3-shot plan: safe tee ball → lay up to a favourite wedge → fat green.",
       longP4:"Prioritise position over power. Take trouble out of play and keep the next shot simple.",
@@ -10321,8 +10321,9 @@ function PR_escapeHtml(s){
   return String(s ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
 }
 
-function PR_renderTableBare(rows, scoringMode, comparatorMode){
+function PR_renderTableBare(rows, scoringMode, comparatorMode, roundCount){
   const isGross = String(scoringMode)==="gross";
+  const safeRounds = (Number.isFinite(Number(roundCount)) && Number(roundCount) > 0) ? Number(roundCount) : 1;
   const safe = (v)=> Number.isFinite(v) ? v.toFixed(2) : "—";
   const safeInt = (v)=> Number.isFinite(v) ? String(Math.round(v)) : "—";
 
@@ -10410,14 +10411,14 @@ if (__mode === "par") {
       <span class="PRlegItem good"><span class="PRlegDot"></span>Good (gain)</span>
       <span class="PRlegItem bad"><span class="PRlegDot"></span>Bad (leak)</span>
       <span class="PRlegItem neu"><span class="PRlegDot"></span>Neutral</span>
-      <span class="PRlegNote">Delta is always oriented so <b>positive = better</b> (gross: fewer strokes; stableford: more points).</span>
+      <span class="PRlegNote">Delta is always oriented so <b>positive = better</b> (gross: fewer strokes; stableford: more points). Δ/rd scales that delta by how often the bucket occurs per round in this window.</span>
     </div>
 
     <table class="PRtbl">
-      <colgroup><col class="c1"/><col class="c2"/><col class="c3"/><col class="c4"/><col class="c5"/></colgroup>
+      <colgroup><col class="c1"/><col class="c2"/><col class="c3"/><col class="c4"/><col class="c5"/><col class="c5"/></colgroup>
       <thead>
         <tr>
-          <th>Bucket</th><th>Holes</th><th>You (avg)</th><th>Peer (avg)</th><th>Delta</th>
+          <th>Bucket</th><th>Holes</th><th>You (avg)</th><th>Peer (avg)</th><th>Delta</th><th>Δ /rd</th>
         </tr>
       </thead>
       <tbody>
@@ -10425,6 +10426,7 @@ if (__mode === "par") {
           const d = Number.isFinite(r?.delta) ? Number(r.delta) : deltaOf(r);
           const cls = clsOf(d);
           const label = PR_escapeHtml(r?.label ?? r?.key ?? "");
+          const holesN = Number.isFinite(r?.holes) ? Number(r.holes) : 0;
           const holes = safeInt(r?.holes);
           const me = safe(meOf(r));
           const peer = safe(peerOf(r));
@@ -10439,6 +10441,9 @@ if (__mode === "par") {
               <td class="PRdelta">
                 <span class="PRdeltaBadge ${cls}"><span class="PRarr">${arrow}</span>${delta}</span>
               </td>
+              <td class="PRdelta">
+                <span class="PRdeltaBadge ${cls}">${fmtDelta((Number.isFinite(d) ? d : NaN) * (holesN / safeRounds))}</span>
+              </td>
             </tr>
           `;
         }).join("")}
@@ -10448,9 +10453,11 @@ if (__mode === "par") {
   return out;
 }
 
-function PR_renderTable(title, rows, scoringMode){
+function PR_renderTable(title, rows, scoringMode, roundCount){
   const isGross = String(scoringMode) === "gross";
   const unit = isGross ? "strokes / hole" : "pts / hole";
+  const unitRd = isGross ? "strokes / rd" : "pts / rd";
+  const safeRounds = (Number.isFinite(Number(roundCount)) && Number(roundCount) > 0) ? Number(roundCount) : 1;
   const th = (t) => `<th style="text-align:left;padding:8px 10px;border-bottom:1px solid #e5e7eb;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:#6b7280;">${t}</th>`;
   const td = (t, right=false) => `<td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;${right?'text-align:right;':''}font-size:14px;color:#111827;">${t}</td>`;
   const fmt = (x) => {
@@ -10468,13 +10475,18 @@ function PR_renderTable(title, rows, scoringMode){
   const body = (rows || []).map(r => {
     const me = Number(r?.playerAvg);
     const fld = Number(r?.fieldAvg);
-    const delta = (isGross ? (fld - me) : (me - fld)); // positive = good
+    const holes = PR_num(r?.holes, 0);
+    const deltaPH = (isGross ? (fld - me) : (me - fld)); // positive = good
+    const holesPerRd = (holes && safeRounds) ? (holes / safeRounds) : NaN;
+    const deltaRd = (Number.isFinite(deltaPH) && Number.isFinite(holesPerRd)) ? (deltaPH * holesPerRd) : NaN;
+
     return `<tr>
       ${td(PR_escapeHtml(r?.label || "—"))}
-      ${td(String(PR_num(r?.holes,0)), true)}
+      ${td(String(holes), true)}
       ${td(fmt(me), true)}
       ${td(fmt(fld), true)}
-      ${td(fmtS(delta), true)}
+      ${td(fmtS(deltaPH), true)}
+      ${td(fmtS(deltaRd), true)}
     </tr>`;
   }).join("");
 
@@ -10482,19 +10494,19 @@ function PR_renderTable(title, rows, scoringMode){
   <div style="margin-top:14px;border:1px solid #e5e7eb;border-radius:16px;overflow:hidden;">
     <div style="padding:12px 14px;background:#fafafa;border-bottom:1px solid #e5e7eb;">
       <div style="font-weight:800;color:#111827;">${PR_escapeHtml(title)}</div>
-      <div style="margin-top:2px;font-size:12px;color:#6b7280;">Averages are per hole. Delta is “good” when positive (better than peer baseline). Unit: ${unit}.</div>
+      <div style="margin-top:2px;font-size:12px;color:#6b7280;">Averages are per hole. Delta is “good” when positive (better than peer baseline). We also show an easy-to-read per-round impact using the same rounds/holes window. Units: ${unit} and ${unitRd}.</div>
     </div>
-    <table class="tbl"><colgroup><col class="c1"/><col class="c2"/><col class="c3"/><col class="c4"/><col class="c5"/></colgroup>
+    <table class="tbl"><colgroup><col class="c1"/><col class="c2"/><col class="c3"/><col class="c4"/><col class="c5"/><col class="c5"/></colgroup>
       <thead>
         <tr>
           ${th("Bucket")}
           ${th("Holes")}
           ${th("You")}
           ${th("Peer")}
-          ${th("Delta")}
+          ${th("Delta")}\n          ${th("Δ /rd")}
         </tr>
       </thead>
-      <tbody>${body || `<tr><td colspan="5" style="padding:10px;color:#6b7280;">No data</td></tr>`}</tbody>
+      <tbody>${body || `<tr><td colspan="6" style="padding:10px;color:#6b7280;">No data</td></tr>`}</tbody>
     </table>
   </div>`;
 }
@@ -10952,48 +10964,6 @@ if (__effComparatorMode === "par") {
 
 
 
-
-// --- FIX THIS + Archetype blocks (Season Report) ---
-// Use ONLY existing evidence tables (bySI, byPar) — no new stats.
-const _findRow = (rows, preds=[])=>{
-  const arr = Array.isArray(rows) ? rows : [];
-  for(const r of arr){
-    const s = String(r?.label || r?.key || "").toLowerCase();
-    if(preds.some(p => p(s))) return r;
-  }
-  return null;
-};
-
-const siHardRow = _findRow(bySI, [
-  s=>s.includes("si 1–6"), s=>s.includes("si 1-6"), s=>s.includes("1–6"), s=>s.includes("1-6")
-]);
-
-const par5Row = _findRow(byPar, [
-  s=>s.includes("par 5"), s=>s.includes("p5"), s=>s.trim()==="5"
-]);
-
-const siHardDelta = (siHardRow && Number.isFinite(siHardRow?.delta)) ? Number(siHardRow.delta) : _deltaOfRow(siHardRow);
-const par5Delta = (par5Row && Number.isFinite(par5Row?.delta)) ? Number(par5Row.delta) : _deltaOfRow(par5Row);
-
-// Convert delta to "per 18" in the same units already used by the report
-const _per18 = (d)=> Number.isFinite(d) ? (d*18) : NaN;
-
-// FIX THIS: only show the hard-holes guidance when SI 1–6 is leaking vs peers (delta < 0 in non-par comparator)
-// If it's not leaking, we still show a short "nothing obvious" line (so Kev can see it *exists* in the report).
-const fixHardStatus = (__effComparatorMode==="par") ? "none" : (Number.isFinite(siHardDelta) && siHardDelta < 0 ? "fix" : "none");
-const fixHardGain18 = (fixHardStatus==="fix") ? Math.abs(_per18(siHardDelta)) : NaN;
-
-const fixHardHeadline = (fixHardStatus==="fix")
-  ? `Reduce big numbers on hard holes (SI 1–6) → gain ~${Number.isFinite(fixHardGain18)?fixHardGain18.toFixed(1):"—"} ${(isGross ? "strokes" : "pts")}/18`
-  : `Hard holes (SI 1–6) are not your leak in this window.`;
-
-const fixHardDetail = (fixHardStatus==="fix")
-  ? `Cut doubles. Choose safer lines and accept bogey—protect against the big number.`
-  : `Keep doing what you’re doing on SI 1–6 — the evidence table shows you’re not losing ground there.`;
-
-// Archetype: Par 5 Butcher only when Par 5s are worse than peers (delta < 0)
-const archetypeP5Status = (__effComparatorMode==="par") ? "none" : (Number.isFinite(par5Delta) && par5Delta < 0 ? "p5" : "none");
-
   const htmlFragment = `
   <style>
     .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a}
@@ -11110,7 +11080,7 @@ const archetypeP5Status = (__effComparatorMode==="par") ? "none" : (Number.isFin
         ${__effComparatorMode==="par" ? `
           Your best scoring is in <b>${PR_escapeHtml((bestItem?.label||bestItem?.key||"—"))}</b>, where you average <b>${Number.isFinite(_meVal(bestItem))?_meVal(bestItem).toFixed(2):"—"}</b> strokes over par per hole.
         ` : `
-          Your biggest advantage is in <b>${PR_escapeHtml((bestItem?.label||bestItem?.key||"—"))}</b>, where you gain <b>${Number.isFinite(bestItem?.delta)?bestItem.delta.toFixed(2):"—"}</b> strokes per hole over peers.
+          Your biggest advantage is in <b>${PR_escapeHtml((bestItem?.label||bestItem?.key||"—"))}</b>, where you gain <b>${Number.isFinite(bestItem?.delta)?bestItem.delta.toFixed(2):"—"}</b> ${(String(scoringMode)==="gross" ? "strokes" : "points")} per hole over peers.
         `}
       </p>
       <p class="PRp">
@@ -11118,7 +11088,7 @@ const archetypeP5Status = (__effComparatorMode==="par") ? "none" : (Number.isFin
         ${__effComparatorMode==="par" ? `
           Your worst scoring is in <b>${PR_escapeHtml((worstItem?.label||worstItem?.key||"—"))}</b>, where you average <b>${Number.isFinite(_meVal(worstItem))?_meVal(worstItem).toFixed(2):"—"}</b> strokes over par per hole.
         ` : `
-          Your primary area for improvement is <b>${PR_escapeHtml((worstItem?.label||worstItem?.key||"—"))}</b>, costing <b>${Number.isFinite(worstItem?.delta)?worstItem.delta.toFixed(2):"—"}</b> strokes per hole compared to your handicap cohort.
+          Your primary area for improvement is <b>${PR_escapeHtml((worstItem?.label||worstItem?.key||"—"))}</b>, costing <b>${Number.isFinite(worstItem?.delta)?worstItem.delta.toFixed(2):"—"}</b> ${(String(scoringMode)==="gross" ? "strokes" : "points")} per hole compared to your handicap cohort.
         `}
       </p>
       <p class="PRp">
@@ -11142,44 +11112,18 @@ const archetypeP5Status = (__effComparatorMode==="par") ? "none" : (Number.isFin
 </p>
     </div>
 
-
-    <div class="PRbox PRsec">
-      <div class="PRsecTitle">🛠️ Fix This</div>
-      <p class="PRp">
-        <b>${PR_escapeHtml(fixHardHeadline)}</b><br/>
-        ${PR_escapeHtml(fixHardDetail)}
-      </p>
-    </div>
-
-    ${archetypeP5Status==="p5" ? `
-    <div class="PRbox PRsec">
-      <div class="PRsecTitle">🚀 Player Archetype</div>
-      <p class="PRp">
-        <b>The Par 5 Butcher</b><br/>
-        Par 5s should be your scoring holes, but they’re costing you more than the field — often from hero shots or poor wedge numbers.
-      </p>
-      <div class="PRbox" style="border-radius:14px;background:#f8fafc;border-color:#e5e7eb">
-        <div class="PRk">How to flip it</div>
-        <div class="PRp" style="margin-top:6px">
-          Make par 5s a 3-shot plan: safe tee ball → lay up to a favourite wedge → fat green.
-        </div>
-      </div>
-    </div>
-    ` : ``}
-
-
     <div class="PRbox PRsec">
       <div class="PRsecTitle">3. The Evidence Locker</div>
       <div class="PRmuted" style="font-size:13px;margin-bottom:10px;">Raw peer-benchmarked tables used for the insights above.</div>
 
       <div style="margin-top:10px;font-weight:900;">By Stroke Index</div>
-      ${PR_renderTableBare(bySI, scoringMode, __effComparatorMode)}
+      ${PR_renderTableBare(bySI, scoringMode, __effComparatorMode, rounds)}
 
       <div style="margin-top:14px;font-weight:900;">By Par Type</div>
-      ${PR_renderTableBare(byPar, scoringMode, __effComparatorMode)}
+      ${PR_renderTableBare(byPar, scoringMode, __effComparatorMode, rounds)}
 
       <div style="margin-top:14px;font-weight:900;">By Yardage</div>
-      ${PR_renderTableBare(byYd, scoringMode, __effComparatorMode)}
+      ${PR_renderTableBare(byYd, scoringMode, __effComparatorMode, rounds)}
     </div>
   </div>
   `;
