@@ -11151,7 +11151,7 @@ const worstDeltaCls = (__effComparatorMode==="par") ? "PRneutral" : "PRbad";
       const holesPer18 = (absPct/100)*18;
       const holesWord = diffPct>=0 ? "fewer" : "more";
       const strokesWord = diffPct>=0 ? "saved" : "lost";
-      return `Damage (double+) occurs <span class=\"${diffPct>=0?\"PRgood\":\"PRbad\"}\"><b>${absPct.toFixed(1)}% ${moreLess}</b></span> than peers (${youPct}% vs ${peerPct}%), equivalent to ~<b>${holesPer18.toFixed(1)}</b> ${holesWord} damage holes per 18 (strokes typically ${strokesWord} are meaningful).`;
+      return `Damage (double+) occurs <span class="${diffPct>=0?'PRgood':'PRbad'}"><b>${absPct.toFixed(1)}% ${moreLess}</b></span> than peers (${youPct}% vs ${peerPct}%), equivalent to ~<b>${holesPer18.toFixed(1)}</b> ${holesWord} damage holes per 18 (strokes typically ${strokesWord} are meaningful).`;
     })()}
   `}
 </p>
