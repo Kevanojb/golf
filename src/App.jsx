@@ -9479,7 +9479,7 @@ const coachLine = (row) => {
               </div>
 
               <div className="text-lg font-extrabold text-neutral-900">
-                Who dominates Par 3s, Par 4s, and Par 5s
+                Who dominates Par 3s, Par 4s, and Par 5s, and lowest Bogies, and Double Bogies.
               </div>
 
               <div className="text-sm text-neutral-600 mt-1">
