@@ -10188,80 +10188,44 @@ function PR_bucketOutcomeMix({ scoringMode, windowSeries }){
   const isGross = String(scoringMode) === "gross";
   const rounds = (windowSeries || []).slice();
 
-  // Normalise per-hole arrays across the many shapes used in the app.
-  const getPtsArr = (r) => {
-    if (!r) return null;
-    return Array.isArray(r.perHole) ? r.perHole
-      : Array.isArray(r.pointsPerHole) ? r.pointsPerHole
-      : Array.isArray(r.ptsPerHole) ? r.ptsPerHole
-      : Array.isArray(r.perHolePts) ? r.perHolePts
-      : Array.isArray(r.stablefordPerHole) ? r.stablefordPerHole
-      : Array.isArray(r.stablefordHoles) ? r.stablefordHoles
-      : null;
-  };
-  const getGrossArr = (r) => {
-    if (!r) return null;
-    return Array.isArray(r.grossPerHole) ? r.grossPerHole
-      : Array.isArray(r.gross) ? r.gross
-      : Array.isArray(r.strokesPerHole) ? r.strokesPerHole
-      : null;
-  };
-  const getParsArr = (r) => {
-    if (!r) return null;
-    return Array.isArray(r.parsArr) ? r.parsArr
-      : Array.isArray(r.parsPerHole) ? r.parsPerHole
-      : Array.isArray(r.pars) ? r.pars
-      : null;
-  };
-
   let holes = 0;
   let birdiePlus = 0;
   let pars = 0;
   let bogeys = 0;
-  let bad = 0;
+  let bad = 0; // wipes (pts=0) or double+ (>=2 over par)
 
   for (const r of rounds){
-    const phPts = getPtsArr(r);
-    const gh = getGrossArr(r);
-    const parsArr = getParsArr(r);
+    const phPts = Array.isArray(r?.perHole) ? r.perHole : null;
+    const gh = Array.isArray(r?.grossPerHole) ? r.grossPerHole : null;
+    const parsArr = Array.isArray(r?.parsArr) ? r.parsArr
+      : Array.isArray(r?.parsPerHole) ? r.parsPerHole
+      : Array.isArray(r?.pars) ? r.pars
+      : null;
 
-    // 🔥 THIS IS THE FIX
-    const len = Math.max(
-      phPts?.length || 0,
-      gh?.length || 0,
-      parsArr?.length || 0
-    );
-
-    for (let i = 0; i < len; i++){
+    for (let i=0;i<18;i++){
       if (!isGross){
         const v = Number(phPts?.[i]);
         if (!Number.isFinite(v)) continue;
-
         holes++;
-
-       // Works for BOTH Stableford (3+) and net-to-par (>=2)
-        if (v >= 3 || v === 2) birdiePlus++;
+        if (v >= 3) birdiePlus++;
         else if (v === 2) pars++;
         else if (v === 1) bogeys++;
-        else bad++;
+        else bad++; // 0 = wipe
       } else {
         const g = Number(gh?.[i]);
         const p = Number(parsArr?.[i]);
         if (!Number.isFinite(g) || !Number.isFinite(p)) continue;
-
         holes++;
-
-        const d = g - p;
+        const d = g - p; // strokes over par
         if (d <= -1) birdiePlus++;
         else if (d === 0) pars++;
         else if (d === 1) bogeys++;
-        else bad++;
+        else bad++; // 2+ = double+
       }
     }
   }
 
   const rate = (n) => (holes ? n / holes : NaN);
-
   return {
     holes,
     birdiePlusRate: rate(birdiePlus),
@@ -10270,7 +10234,6 @@ function PR_bucketOutcomeMix({ scoringMode, windowSeries }){
     badRate: rate(bad),
   };
 }
-
 
 
 // Compute exact damage severity: average strokes above bogey on double+ holes
