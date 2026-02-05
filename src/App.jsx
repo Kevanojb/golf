@@ -10807,6 +10807,17 @@ const isGross = String(scoringMode) === "gross";
 // Peer outcome mix derived from aggregated peer totals (fact-based)
 const holesMe = PR_num(meTotals?.holes, 0) || 0;
 const holesPeer = PR_num(peerTotals?.holes, 0) || 0;
+
+// Stableford totals in some windows (e.g. Year) are stored as buckets p0..p5 rather than birdies/pars/bogeys.
+// This normaliser makes Birdie+/Par/Bogey/Wipe rates consistent across ALL vs Year filters.
+const _sbCounts = (t) => {
+  const n = (v, d=0) => { const x = Number(v); return Number.isFinite(x) ? x : d; };
+  const birdies = Number.isFinite(Number(t?.birdies)) ? n(t.birdies) : (n(t?.p3) + n(t?.p4) + n(t?.p5));
+  const pars = Number.isFinite(Number(t?.pars)) ? n(t.pars) : n(t?.p2);
+  const bogeys = Number.isFinite(Number(t?.bogeys)) ? n(t.bogeys) : n(t?.p1);
+  const wipes = Number.isFinite(Number(t?.wipes)) ? n(t.wipes) : n(t?.p0);
+  return { birdies, pars, bogeys, wipes };
+};
 // Report outcome mix derived from aggregated totals (prefers canonical aggregate counts; falls back to windowSeries mix)
 const mixRpt = (() => {
   const safeNum = (v, d=NaN) => { const n = Number(v); return Number.isFinite(n) ? n : d; };
@@ -10823,7 +10834,8 @@ const mixRpt = (() => {
       out = mk(meTotals?.birdies, meTotals?.pars, meTotals?.bogeys, (safeNum(meTotals?.doubles,0) + safeNum(meTotals?.triplesPlus,0)));
     } else {
       // Stableford: "bad" = wipes (0 pts) if available
-      out = mk(meTotals?.birdies, meTotals?.pars, meTotals?.bogeys, meTotals?.wipes);
+      const sbMe = _sbCounts(meTotals);
+      out = mk(sbMe.birdies, sbMe.pars, sbMe.bogeys, sbMe.wipes);
     }
 
     // Fallback to series-derived mix if aggregate counters are missing
@@ -10848,11 +10860,12 @@ try{
     };
   } else {
     // Stableford: treat "bad" as wipes (0 points) if wipes exists; else NaN
+    const sbPeer = _sbCounts(peerTotals);
     peerMixRpt = {
-      birdiePlusRate: holesPeer? (PR_num(peerTotals?.birdies,0)/holesPeer) : NaN,
-      parRate: holesPeer? (PR_num(peerTotals?.pars,0)/holesPeer) : NaN,
-      bogeyRate: holesPeer? (PR_num(peerTotals?.bogeys,0)/holesPeer) : NaN,
-      badRate: holesPeer? (PR_num(peerTotals?.wipes, NaN)/holesPeer) : NaN
+      birdiePlusRate: holesPeer ? (sbPeer.birdies / holesPeer) : NaN,
+      parRate: holesPeer ? (sbPeer.pars / holesPeer) : NaN,
+      bogeyRate: holesPeer ? (sbPeer.bogeys / holesPeer) : NaN,
+      badRate: holesPeer ? (sbPeer.wipes / holesPeer) : NaN
     };
   }
 
