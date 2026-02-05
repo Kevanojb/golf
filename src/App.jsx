@@ -10239,7 +10239,8 @@ function PR_bucketOutcomeMix({ scoringMode, windowSeries }){
 
         holes++;
 
-        if (v >= 3) birdiePlus++;
+       // Works for BOTH Stableford (3+) and net-to-par (>=2)
+        if (v >= 3 || v === 2) birdiePlus++;
         else if (v === 2) pars++;
         else if (v === 1) bogeys++;
         else bad++;
