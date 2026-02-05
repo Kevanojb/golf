@@ -2879,7 +2879,6 @@ function Header({ leagueHeaderTitle, eventName, statusMsg, courseName, view, set
   <span className="topchip px-3 py-2 text-sm max-w-[70vw] sm:max-w-none">
     <span className="ico">⛳</span><span className="txt truncate">{eventName || "Untitled Event"}</span>
   </span>
-</div>
         </div>
       </div>
     </div>
@@ -3108,6 +3107,7 @@ function Home({
   const signedIn = !!user;
   const isAdmin = !!(user && (user.is_admin || user.role === "admin"));
   const adminLabel = isAdmin ? (user.email || "Admin") : "Not signed in";
+  const canAdmin = !!(isSuperAdmin || isAdmin || String(activeRole || "").toLowerCase() === "captain");
 
   // Best-effort stats (won't break if your computed shape changes)
   const rounds = (computed && (
@@ -3132,29 +3132,60 @@ function Home({
       ? `${rounds} rounds analyzed \u00b7 ${formats || 0} formats \u00b7 ${holes || 0} holes explored`
       : `Explore trends, surprises, and scoring patterns`;
 
-  const canAdmin = !!(isSuperAdmin || isAdmin || activeRole === "captain" || activeRole === "co_captain");
 
-  // Home UX: keep choices low, guide the next click
-  const [showMoreTools, setShowMoreTools] = React.useState(false);
+// Home navigation should feel "guided" for golfers: save last view + reduce decisions.
+const go = (v) => {
+  try { localStorage.setItem("den_lastView", String(v || "")); } catch (e) {}
+  setView(v);
+};
 
-  const nextAction = (() => {
-    if (!rounds) {
-      return {
-        title: "Start here",
-        desc: "Upload a round to unlock leaderboards, recaps, and your improvement plan.",
-        cta: "Upload / Import Round",
-        onClick: () => (fileInputRef?.current?.click ? fileInputRef.current.click() : setView("admin")),
-      };
-    }
+const _lsGet = (k, d = "") => {
+  try {
+    const v = localStorage.getItem(k);
+    return (v === null || v === undefined) ? d : String(v);
+  } catch (e) {
+    return d;
+  }
+};
+
+const [showMoreTools, setShowMoreTools] = useState(false);
+const lastEventId = _lsGet("den_lastEventId", "");
+const lastPlayerName = _lsGet("den_lastPlayerName", "");
+
+const nextAction = (() => {
+  if (!rounds) {
+    return {
+      title: "Start here",
+      desc: "Upload a round to unlock leaderboards, recaps, and your improvement plan.",
+      cta: "Upload / Import Round",
+      onClick: () => {
+        try { fileInputRef && fileInputRef.current && fileInputRef.current.click && fileInputRef.current.click(); } catch (e) {}
+      },
+    };
+  }
+  if (!lastEventId) {
     return {
       title: "Continue",
-      desc: "Pick a round, see the leaderboard, or jump straight into your improvement plan.",
-      cta: "Open Rounds",
-      onClick: () => setView("past"),
-      secondaryCta: "Open My Plan",
-      secondaryOnClick: () => setView("player_progress"),
+      desc: "Pick a round to explore results and trends.",
+      cta: "Choose a Round",
+      onClick: () => go("past"),
     };
-  })();
+  }
+  if (!lastPlayerName) {
+    return {
+      title: "Personalise",
+      desc: "Open your plan and pick your name once. We’ll remember it next time.",
+      cta: "Open My Plan",
+      onClick: () => go("player_progress"),
+    };
+  }
+  return {
+    title: "Your focus for the next round",
+    desc: "One priority, one drill, one on-course rule. No fluff.",
+    cta: "Open My Plan",
+    onClick: () => go("player_progress"),
+  };
+})();
 
   return (
     <section id="player-report-top" className="content-card" style={{ padding: 14 }}>
@@ -3164,6 +3195,21 @@ function Home({
         .hm-cta-row{ display:flex; flex-direction:column; gap:10px; align-items:stretch; margin-top:12px; }
         .hm-cta{ width:100%; justify-content:center; }
         .hm-stats{ font-size:12px; line-height:1.35; opacity:.92; }
+
+/* Guided 'Next action' strip */
+.hm-next{
+  display:flex; gap:12px; align-items:center; justify-content:space-between;
+  padding:14px 14px; border-radius:18px; margin: 4px 0 12px;
+  background: rgba(15,23,42,0.06);
+}
+.hm-next-title{ font-weight: 950; letter-spacing:-0.02em; }
+.hm-next-desc{ font-size: 12px; opacity: 0.86; margin-top:2px; max-width: 54ch; }
+.hm-next-cta{ display:inline-flex; gap:10px; align-items:center; justify-content:center; white-space:nowrap; border-radius:18px; padding:12px 14px; font-weight:950; }
+
+/* Make inline menu items real buttons without changing the look */
+.hm-inline-item{ border:0; background:transparent; cursor:pointer; }
+.hm-inline-item:focus{ outline: 2px solid rgba(245,166,35,0.8); outline-offset: 2px; }
+
 
         /* Make the smaller card action buttons behave like the main CTA on mobile */
         .hm-card-action{ display:flex; align-items:center; gap:10px; }
@@ -3189,30 +3235,7 @@ function Home({
           .hm-cta-row{ flex-direction:row; align-items:center; justify-content:space-between; gap:12px; }
           .hm-cta{ width:auto; }
         }
-      
-        /* "What do I do next?" strip */
-        .hm-next{
-          display:flex; gap:12px; align-items:center; justify-content:space-between;
-          padding:14px 14px; border-radius:18px; margin:10px 0 14px;
-          background: rgba(255,255,255,0.10);
-          border: 1px solid rgba(255,255,255,0.14);
-        }
-        .hm-next-title{ font-weight: 950; letter-spacing:-0.02em; color: rgba(255,255,255,0.92); }
-        .hm-next-desc{ font-size: 12px; opacity: 0.88; margin-top:2px; color: rgba(255,255,255,0.78); }
-        .hm-next-ctas{ display:flex; gap:10px; align-items:center; }
-        .hm-next-cta{ border-radius: 16px; font-weight: 950; padding: 12px 14px; background: rgba(255,255,255,0.16); border: 1px solid rgba(255,255,255,0.18); color: rgba(255,255,255,0.92); }
-        .hm-next-cta.primary{ background: linear-gradient(180deg, rgba(255,212,75,1) 0%, rgba(245,166,35,1) 100%); color: rgba(23,17,0,0.96); border: none; box-shadow: 0 10px 24px rgba(0,0,0,0.18); }
-        @media (max-width: 640px){
-          .hm-next{ flex-direction:column; align-items:stretch; }
-          .hm-next-ctas{ width:100%; }
-          .hm-next-cta{ width:100%; justify-content:center; }
-        }
-
-        .hm-toolbtn{ cursor:pointer; background: transparent; border: none; padding: 10px 10px; border-radius: 14px; text-align:left; }
-        .hm-toolbtn:hover{ background: rgba(255,255,255,0.08); }
-        .hm-toolbtn:active{ transform: translateY(1px); }
-
-`}</style>
+      `}</style>
 
       {/* Scorecard stack: print course/name/totals INSIDE the top sheet artwork */}
       <style>{`
@@ -3231,31 +3254,26 @@ function Home({
 <div className="hm-stage">
         <div className="hm-grid">
 
+{/* NEXT ACTION */}
+<div className="hm-next" role="region" aria-label="Next action">
+  <div>
+    <div className="hm-next-title">{nextAction.title}</div>
+    <div className="hm-next-desc">{nextAction.desc}</div>
+  </div>
+  <button className="hm-next-cta" onClick={nextAction.onClick}>
+    <span className="hm-arrow">→</span>
+    <span>{nextAction.cta}</span>
+  </button>
+</div>
+
+
           {/* HERO */}
           <div className="hm-hero">
             <div className="hm-glow" />
             <div className="hm-hero-inner">
               <div>
-                <h2>Explore Your Games</h2>
-                <p className="hm-sub">Dive into your rounds. Find patterns. Spot surprises.</p>
-
-                <div className="hm-next" role="region" aria-label="Next action">
-                  <div style={{ minWidth: 0 }}>
-                    <div className="hm-next-title">{nextAction.title}</div>
-                    <div className="hm-next-desc">{nextAction.desc}</div>
-                  </div>
-                  <div className="hm-next-ctas">
-                    {nextAction.secondaryCta ? (
-                      <button className="hm-next-cta" onClick={nextAction.secondaryOnClick}>
-                        → {nextAction.secondaryCta}
-                      </button>
-                    ) : null}
-                    <button className="hm-next-cta primary" onClick={nextAction.onClick}>
-                      → {nextAction.cta}
-                    </button>
-                  </div>
-                </div>
-
+                <h2>Your Golf Hub</h2>
+                <p className="hm-sub">Rounds, leaderboards, and a simple plan to shoot lower.</p>
 
                 <div style={{ color: "rgba(255,255,255,0.84)", fontWeight: 800, marginTop: 8 }}>
                   Inside you’ll find:
@@ -3263,9 +3281,9 @@ function Home({
 
 
                 <div className="hm-cta-row">
-                  <button className="hm-cta" onClick={() => setView("past")}>
+                  <button className="hm-cta" onClick={() => go("past")}>
                     <span className="hm-arrow">→</span>
-                    <span>Enter Game Explorer</span>
+                    <span>Explore Rounds</span>
                   </button>
                   <div className="hm-stats">{statsText}</div>
                   
@@ -3273,32 +3291,67 @@ function Home({
 
 
                 
-                <div className="hm-inline-menu" aria-label="Quick tools">
+                <div className="hm-inline-menu" aria-label="Quick actions">
                   <div className="hm-inline-menu-grid">
-                    <button className="hm-inline-item hm-toolbtn" onClick={() => setView("past")}><span className="hm-ico">⛳</span><span>Rounds</span></button>
-                    <button className="hm-inline-item hm-toolbtn" onClick={() => setView("player_progress")}><span className="hm-ico">🎯</span><span>My Plan</span></button>
-                    <button className="hm-inline-item hm-toolbtn" onClick={() => setView("standings")}><span className="hm-ico">🏆</span><span>League</span></button>
-                    <button className="hm-inline-item hm-toolbtn" onClick={() => setView("graphs")}><span className="hm-ico">📈</span><span>Trends</span></button>
-                    <button className="hm-inline-item hm-toolbtn" onClick={() => setView("player")}><span className="hm-ico">🧾</span><span>My Card</span></button>
+                    <button type="button" className="hm-inline-item" onClick={() => go("past")}>
+                      <span className="hm-ico">⛳</span><span>Rounds</span>
+                    </button>
+                    <button type="button" className="hm-inline-item" onClick={() => go("player_progress")}>
+                      <span className="hm-ico">🎯</span><span>My Plan</span>
+                    </button>
+                    <button type="button" className="hm-inline-item" onClick={() => go("standings")}>
+                      <span className="hm-ico">🏆</span><span>League</span>
+                    </button>
+                    <button type="button" className="hm-inline-item" onClick={() => go("graphs")}>
+                      <span className="hm-ico">📈</span><span>Trends</span>
+                    </button>
+                    <button type="button" className="hm-inline-item" onClick={() => go("scorecard")}>
+                      <span className="hm-ico">🧾</span><span>My Card</span>
+                    </button>
 
-                    <button className="hm-inline-item hm-toolbtn" onClick={() => setShowMoreTools(v => !v)}>
+                    <button
+                      type="button"
+                      className="hm-inline-item hm-inline-more"
+                      onClick={() => setShowMoreTools(v => !v)}
+                      aria-expanded={showMoreTools}
+                    >
                       <span className="hm-ico">⋯</span><span>{showMoreTools ? "Less" : "More"}</span>
                     </button>
 
-                    {showMoreTools ? (
+                    {showMoreTools && (
                       <>
-                        <button className="hm-inline-item hm-toolbtn" onClick={() => setView("course")}><span className="hm-ico">🗺️</span><span>Hard Holes</span></button>
-                        <button className="hm-inline-item hm-toolbtn" onClick={() => setView("ratings")}><span className="hm-ico">⭐</span><span>Ratings</span></button>
-                        <button className="hm-inline-item hm-toolbtn" onClick={() => setView("banter")}><span className="hm-ico">😂</span><span>Banter</span></button>
-                        <button className="hm-inline-item hm-toolbtn" onClick={() => setView("story")}><span className="hm-ico">📖</span><span>Recap</span></button>
-                        <button className="hm-inline-item hm-toolbtn" onClick={() => setView("replay")}><span className="hm-ico">📺</span><span>Replay</span></button>
-                        <button className="hm-inline-item hm-toolbtn" onClick={() => setView("teams")}><span className="hm-ico">🤼</span><span>Teams</span></button>
-                        <button className="hm-inline-item hm-toolbtn" onClick={() => setView("casino")}><span className="hm-ico">🎰</span><span>Casino</span></button>
-                        <button className="hm-inline-item hm-toolbtn" onClick={() => setView("trophies")}><span className="hm-ico">🏅</span><span>Trophies</span></button>
-                        <button className="hm-inline-item hm-toolbtn" onClick={() => setView("partners")}><span className="hm-ico">🤝</span><span>Partners</span></button>
-                        <button className="hm-inline-item hm-toolbtn" onClick={() => setView("rivalry")}><span className="hm-ico">🥊</span><span>Rivalry</span></button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("course_stats")}>
+                          <span className="hm-ico">🗺️</span><span>Hard Holes</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("ratings")}>
+                          <span className="hm-ico">⭐</span><span>Top Players</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("story")}>
+                          <span className="hm-ico">📖</span><span>Round Recap</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("replay")}>
+                          <span className="hm-ico">📺</span><span>Replay</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("banter")}>
+                          <span className="hm-ico">😂</span><span>Banter</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("style")}>
+                          <span className="hm-ico">🎯</span><span>Style</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("casino")}>
+                          <span className="hm-ico">🎰</span><span>Casino</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("trophies")}>
+                          <span className="hm-ico">🏅</span><span>Trophies</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("partner")}>
+                          <span className="hm-ico">🤝</span><span>Partners</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("headtohead")}>
+                          <span className="hm-ico">🥊</span><span>Rivalry</span>
+                        </button>
                       </>
-                    ) : null}
+                    )}
                   </div>
                 </div>
               </div>
@@ -3314,11 +3367,12 @@ function Home({
           </div>
 
           {/* REVIEW & IMPROVE */}
-          <button className="hm-card heroish" onClick={() => setView("player_progress")} style={{ textAlign: "left", cursor: "pointer" }}>
+          <button className="hm-card heroish" onClick={() => go("player_progress")} style={{ textAlign: "left", cursor: "pointer" }}>
             <div className="hm-card-inner">
               <div style={{ minWidth: 0 }}>
                 <h3>Review &amp; Improve</h3>
                 <div className="hm-desc">Turn insight into better scores.</div>
+                <div className="hm-stats" style={{ marginTop: 6 }}>5 min: find leaks · 2 min: choose focus · 10 min: build a session</div>
                 <ul>
                   <li><span className="hm-ico2">🧾</span><span>See what actually costs you points</span></li>
                   <li><span className="hm-ico2">💪</span><span>Find your biggest strengths vs the field</span></li>
@@ -3327,7 +3381,7 @@ function Home({
               </div>
 
               <div className="hm-card-action">
-                <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("player_progress"); }}>
+                <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); go("player_progress"); }}>
                   <span>→ Review Performance</span>
                 </button>
                 <div className="hm-pill">⋯</div>
@@ -3337,7 +3391,7 @@ function Home({
 
           {/* TWO-UP ROW */}
           <div className="hm-row2">
-            <button className="hm-card heroish" onClick={() => setView("standings")} style={{ textAlign: "left", cursor: "pointer" }}>
+            <button className="hm-card heroish" onClick={() => go("standings")} style={{ textAlign: "left", cursor: "pointer" }}>
               <div className="hm-card-inner">
                 <div style={{ minWidth: 0 }}>
                   <h3>League Standings</h3>
@@ -3349,7 +3403,7 @@ function Home({
                   </ul>
                 </div>
                 <div className="hm-card-action">
-                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("standings"); }}>
+                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); go("standings"); }}>
                     <span>→ View League</span>
                   </button>
                   <div className="hm-pill">⋯</div>
@@ -3357,7 +3411,7 @@ function Home({
               </div>
             </button>
 
-            <button className="hm-card heroish" onClick={() => setView("eclectic")} style={{ textAlign: "left", cursor: "pointer" }}>
+            <button className="hm-card heroish" onClick={() => go("eclectic")} style={{ textAlign: "left", cursor: "pointer" }}>
               <div className="hm-card-inner">
                 <div style={{ minWidth: 0 }}>
                   <h3>Eclectic</h3>
@@ -3369,7 +3423,7 @@ function Home({
                   </ul>
                 </div>
                 <div className="hm-card-action">
-                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("eclectic"); }}>
+                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); go("eclectic"); }}>
                     <span>→ View Eclectic</span>
                   </button>
                   <div className="hm-pill">⋯</div>
@@ -3379,24 +3433,25 @@ function Home({
           </div>
 
           {/* ADMIN BAR */}
-          {canAdmin ? (
-          <button className="hm-admin" onClick={() => setView("admin")} style={{ textAlign: "left", cursor: "pointer" }}>
-            <div className="hm-admin-inner">
-              <div>
-                <div className="hm-admin-title">
-                  <span className="hm-gear">⚙️</span>
-                  <span>Admin</span>
-                </div>
-                <div className="hm-admin-sub">
-                  Settings, imports, season setup, players
-                  {totalPlayersCount != null ? ` \u00b7 Players: ${visiblePlayersCount}/${totalPlayersCount}` : ""}
-                  {signedIn ? ` \u00b7 Signed in as ${adminLabel}` : ""}
-                </div>
-              </div>
-              <div className="hm-pill" style={{ background: "rgba(255,255,255,0.10)", borderColor: "rgba(255,255,255,0.18)" }}>↗</div>
-            </div>
-          </button>
-          ) : null}
+{canAdmin && (
+  <button className="hm-admin" onClick={() => go("admin")} style={{ textAlign: "left", cursor: "pointer" }}>
+    <div className="hm-admin-inner">
+      <div>
+        <div className="hm-admin-title">
+          <span className="hm-gear">⚙️</span>
+          <span>Admin &amp; Setup</span>
+        </div>
+        <div className="hm-admin-sub">
+          Imports, season setup, players
+          {totalPlayersCount != null ? ` · Players: ${visiblePlayersCount}/${totalPlayersCount}` : ""}
+          {signedIn ? ` · Signed in as ${adminLabel}` : ""}
+        </div>
+      </div>
+      <div className="hm-pill" style={{ background: "rgba(255,255,255,0.10)", borderColor: "rgba(255,255,255,0.18)" }}>↗</div>
+    </div>
+  </button>
+)}
+
 
           <div className="hm-foot">
             Most players discover something new every time they explore their games. 💡
