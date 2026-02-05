@@ -3295,74 +3295,67 @@ const nextAction = (() => {
                 <div className="hm-inline-menu" aria-label="Quick actions">
                   <div className="hm-inline-menu-grid">
                     <button type="button" className="hm-inline-item" onClick={() => go("past")}>
-  <span className="hm-ico">⛳</span><span>Rounds</span>
-</button>
-<button type="button" className="hm-inline-item" onClick={() => go("player_progress")}>
-  <span className="hm-ico">🎯</span><span>My Plan</span>
-</button>
-<button type="button" className="hm-inline-item" onClick={() => go("standings")}>
-  <span className="hm-ico">🏆</span><span>League</span>
-</button>
-<button type="button" className="hm-inline-item" onClick={() => go("graphs")}>
-  <span className="hm-ico">📈</span><span>Trends</span>
-</button>
-<button type="button" className="hm-inline-item" onClick={() => go("scorecard")}>
-  <span className="hm-ico">🧾</span><span>My Card</span>
-</button>
+                      <span className="hm-ico">⛳</span><span>Rounds</span>
+                    </button>
+                    <button type="button" className="hm-inline-item" onClick={() => go("player_progress")}>
+                      <span className="hm-ico">🎯</span><span>My Plan</span>
+                    </button>
+                    <button type="button" className="hm-inline-item" onClick={() => go("standings")}>
+                      <span className="hm-ico">🏆</span><span>League</span>
+                    </button>
+                    <button type="button" className="hm-inline-item" onClick={() => go("graphs")}>
+                      <span className="hm-ico">📈</span><span>Trends</span>
+                    </button>
+                    <button type="button" className="hm-inline-item" onClick={() => go("scorecard")}>
+                      <span className="hm-ico">🧾</span><span>My Card</span>
+                    </button>
 
-<button type="button" className="hm-inline-item hm-inline-more" onClick={() => setShowMoreTools(v => !v)} aria-expanded={showMoreTools}>
-  <span className="hm-ico">⋯</span><span>{showMoreTools ? "Less" : "More"}</span>
-</button>
+                    <button
+                      type="button"
+                      className="hm-inline-item hm-inline-more"
+                      onClick={() => setShowMoreTools(v => !v)}
+                      aria-expanded={showMoreTools}
+                    >
+                      <span className="hm-ico">⋯</span><span>{showMoreTools ? "Less" : "More"}</span>
+                    </button>
 
-{showMoreTools && (
-  <>
-    <button type="button" className="hm-inline-item" onClick={() => go("course_stats")}>
-      <span className="hm-ico">🗺️</span><span>Hard Holes</span>
-    </button>
-    <button type="button" className="hm-inline-item" onClick={() => go("ratings")}>
-      <span className="hm-ico">⭐</span><span>Top Players</span>
-    </button>
-    <button type="button" className="hm-inline-item" onClick={() => go("story")}>
-      <span className="hm-ico">📖</span><span>Round Recap</span>
-    </button>
-    <button type="button" className="hm-inline-item" onClick={() => go("replay")}>
-      <span className="hm-ico">📺</span><span>Replay</span>
-    </button>
-    <button type="button" className="hm-inline-item" onClick={() => go("banter")}>
-      <span className="hm-ico">😂</span><span>Banter</span>
-    </button>
-    <button type="button" className="hm-inline-item" onClick={() => go("style")}>
-      <span className="hm-ico">🎯</span><span>Style</span>
-    </button>
-    <button type="button" className="hm-inline-item" onClick={() => go("casino")}>
-      <span className="hm-ico">🎰</span><span>Casino</span>
-    </button>
-    <button type="button" className="hm-inline-item" onClick={() => go("trophies")}>
-      <span className="hm-ico">🏅</span><span>Trophies</span>
-    </button>
-    <button type="button" className="hm-inline-item" onClick={() => go("partner")}>
-      <span className="hm-ico">🤝</span><span>Partners</span>
-    </button>
-    <button type="button" className="hm-inline-item" onClick={() => go("headtohead")}>
-      <span className="hm-ico">🥊</span><span>Rivalry</span>
-    </button>
-  </>
-)}</div>
-                    <div className="hm-inline-item"><span className="hm-ico">📈</span><span>Graphs</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🧾</span><span>Player Scorecard</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🗺️</span><span>Course Stats</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">⭐</span><span>Ratings</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">😂</span><span>Banter</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🎯</span><span>Styles</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">📖</span><span>Story</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">📺</span><span>Replay</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🤼</span><span>Teams</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🎰</span><span>Casino</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🏆</span><span>Trophies</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🤝</span><span>Partners</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🥊</span><span>Rivalry</span></div>
+                    {showMoreTools && (
+                      <>
+                        <button type="button" className="hm-inline-item" onClick={() => go("course_stats")}>
+                          <span className="hm-ico">🗺️</span><span>Hard Holes</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("ratings")}>
+                          <span className="hm-ico">⭐</span><span>Top Players</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("story")}>
+                          <span className="hm-ico">📖</span><span>Round Recap</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("replay")}>
+                          <span className="hm-ico">📺</span><span>Replay</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("banter")}>
+                          <span className="hm-ico">😂</span><span>Banter</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("style")}>
+                          <span className="hm-ico">🎯</span><span>Style</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("casino")}>
+                          <span className="hm-ico">🎰</span><span>Casino</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("trophies")}>
+                          <span className="hm-ico">🏅</span><span>Trophies</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("partner")}>
+                          <span className="hm-ico">🤝</span><span>Partners</span>
+                        </button>
+                        <button type="button" className="hm-inline-item" onClick={() => go("headtohead")}>
+                          <span className="hm-ico">🥊</span><span>Rivalry</span>
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
+</div>
               </div>
 
               <div className="hm-hero-right">
