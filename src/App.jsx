@@ -10977,6 +10977,35 @@ if (__effComparatorMode === "par") {
 
 
 
+
+
+// Season Report color helpers (good = green, bad = red)
+const PR_cls = (delta, lowerIsBetter=false) => {
+  const d = Number(delta);
+  if (!Number.isFinite(d) || d === 0) return "PRneutral";
+  const good = lowerIsBetter ? (d < 0) : (d > 0);
+  return good ? "PRgood" : "PRbad";
+};
+
+// Headline classes
+const netCls = Number.isFinite(goodDeltaPH) ? (goodDeltaPH >= 0 ? "PRgood" : "PRbad") : "PRneutral";
+const avgDelta = (Number.isFinite(youAvgPH) && Number.isFinite(peerAvgPH)) ? (youAvgPH - peerAvgPH) : NaN;
+const avgCls = (__effComparatorMode==="par") ? "PRneutral" : (isGross ? PR_cls(avgDelta, true) : PR_cls(avgDelta, false));
+
+// Scoring profile classes
+const birdieDelta = (__effComparatorMode==="par" ? NaN :
+  (Number.isFinite(mixRpt?.birdiePlusRate) && Number.isFinite(peerMixRpt?.birdiePlusRate) ? (mixRpt.birdiePlusRate - peerMixRpt.birdiePlusRate) : NaN)
+);
+const damageDelta = (__effComparatorMode==="par" ? NaN :
+  (Number.isFinite(mixRpt?.badRate) && Number.isFinite(peerMixRpt?.badRate) ? (mixRpt.badRate - peerMixRpt.badRate) : NaN)
+);
+const birdieCls = (__effComparatorMode==="par") ? "PRneutral" : PR_cls(birdieDelta, false);
+const damageCls = (__effComparatorMode==="par") ? "PRneutral" : PR_cls(damageDelta, true);
+
+// Insight delta classes
+const bestDeltaCls = (__effComparatorMode==="par") ? "PRneutral" : "PRgood";
+const worstDeltaCls = (__effComparatorMode==="par") ? "PRneutral" : "PRbad";
+
   const htmlFragment = `
   <style>
     .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a}
@@ -10990,6 +11019,9 @@ if (__effComparatorMode === "par") {
     .PRv{font-size:18px;font-weight:950;margin-top:4px}
     .PRp{margin:8px 0;color:#0f172a;line-height:1.35}
     .PRmuted{color:#475569}
+    .PRgood{color:#16a34a;font-weight:900}
+    .PRbad{color:#dc2626;font-weight:900}
+    .PRneutral{font-weight:900}
     .PRtbl{width:100%;border-collapse:collapse;table-layout:fixed;font-variant-numeric:tabular-nums}
     .PRtbl col.c1{width:40%}
     .PRtbl col.c2,.PRtbl col.c3,.PRtbl col.c4,.PRtbl col.c5{width:15%}
@@ -11040,12 +11072,12 @@ if (__effComparatorMode === "par") {
     ${Number.isFinite(goodDeltaPH)
         ? (isGross
             ? (goodDeltaPH>=0
-                ? `You average <b>${goodDeltaPH.toFixed(2)}</b> fewer strokes per hole than your peer group (≈ <b>${(goodDeltaPH*18).toFixed(1)}</b> fewer strokes per 18 holes).`
-                : `You average <b>${Math.abs(goodDeltaPH).toFixed(2)}</b> more strokes per hole than your peer group (≈ <b>${(Math.abs(goodDeltaPH)*18).toFixed(1)}</b> more strokes per 18 holes).`
+                ? `You average <span class="${netCls}"><b>${goodDeltaPH.toFixed(2)}</b></span> fewer strokes per hole than your peer group (≈ <b>${(goodDeltaPH*18).toFixed(1)}</b> fewer strokes per 18 holes).`
+                : `You average <span class="${netCls}"><b>${Math.abs(goodDeltaPH).toFixed(2)}</b></span> more strokes per hole than your peer group (≈ <b>${(Math.abs(goodDeltaPH)*18).toFixed(1)}</b> more strokes per 18 holes).`
               )
             : (goodDeltaPH>=0
-                ? `You score <b>${goodDeltaPH.toFixed(2)}</b> more Stableford points per hole than your peer group (≈ <b>${(goodDeltaPH*18).toFixed(1)}</b> more points per 18 holes).`
-                : `You score <b>${Math.abs(goodDeltaPH).toFixed(2)}</b> fewer Stableford points per hole than your peer group (≈ <b>${(Math.abs(goodDeltaPH)*18).toFixed(1)}</b> fewer points per 18 holes).`
+                ? `You score <span class="${netCls}"><b>${goodDeltaPH.toFixed(2)}</b></span> more Stableford points per hole than your peer group (≈ <b>${(goodDeltaPH*18).toFixed(1)}</b> more points per 18 holes).`
+                : `You score <span class="${netCls}"><b>${Math.abs(goodDeltaPH).toFixed(2)}</b></span> fewer Stableford points per hole than your peer group (≈ <b>${(Math.abs(goodDeltaPH)*18).toFixed(1)}</b> fewer points per 18 holes).`
               )
           )
         : "—"
@@ -11058,8 +11090,8 @@ if (__effComparatorMode === "par") {
     Your scoring average is <b>${Number.isFinite(youAvgPH)?youAvgPH.toFixed(2):"—"}</b> strokes over par per hole.
   ` : `
     ${isGross
-      ? `Your scoring average is <b>${Number.isFinite(youAvgPH)?youAvgPH.toFixed(2):"—"}</b> strokes over par per hole, compared to a peer average of <b>${Number.isFinite(peerAvgPH)?peerAvgPH.toFixed(2):"—"}</b> over par.`
-      : `Your scoring average is <b>${Number.isFinite(youAvgPH)?youAvgPH.toFixed(2):"—"}</b> Stableford points per hole (≈ <b>${Number.isFinite(youAvgPH)?(youAvgPH*18).toFixed(1):"—"}</b> points per 18 holes), compared to a peer average of <b>${Number.isFinite(peerAvgPH)?peerAvgPH.toFixed(2):"—"}</b> points per hole.`
+      ? `Your scoring average is <span class="${avgCls}"><b>${Number.isFinite(youAvgPH)?youAvgPH.toFixed(2):"—"}</b></span> strokes over par per hole, compared to a peer average of <b>${Number.isFinite(peerAvgPH)?peerAvgPH.toFixed(2):"—"}</b> over par.`
+      : `Your scoring average is <span class="${avgCls}"><b>${Number.isFinite(youAvgPH)?youAvgPH.toFixed(2):"—"}</b></span> Stableford points per hole (≈ <b>${Number.isFinite(youAvgPH)?(youAvgPH*18).toFixed(1):"—"}</b> points per 18 holes), compared to a peer average of <b>${Number.isFinite(peerAvgPH)?peerAvgPH.toFixed(2):"—"}</b> points per hole.`
     }
   `}
 </p>
@@ -11070,9 +11102,9 @@ if (__effComparatorMode === "par") {
     Damage (Double+) <b>${Number.isFinite(mixRpt?.badRate)?(mixRpt.badRate*100).toFixed(1)+"%":"—"}</b>.
     <span class="PRmuted">Damage usually provides the biggest scoring lever in absolute terms.</span>
   ` : `
-    Birdie+ rate <b>${Number.isFinite(mixRpt?.birdiePlusRate)?(mixRpt.birdiePlusRate*100).toFixed(1)+"%":"—"}</b> (Peers:
+    Birdie+ rate <span class="${birdieCls}"><b>${Number.isFinite(mixRpt?.birdiePlusRate)?(mixRpt.birdiePlusRate*100).toFixed(1)+"%":"—"}</b></span> (Peers:
     <b>${Number.isFinite(peerMixRpt?.birdiePlusRate)?(peerMixRpt.birdiePlusRate*100).toFixed(1)+"%":"—"}</b>) ·
-    Damage (Double+) <b>${Number.isFinite(mixRpt?.badRate)?(mixRpt.badRate*100).toFixed(1)+"%":"—"}</b> (Peers:
+    Damage (Double+) <span class="${damageCls}"><b>${Number.isFinite(mixRpt?.badRate)?(mixRpt.badRate*100).toFixed(1)+"%":"—"}</b></span> (Peers:
     <b>${Number.isFinite(peerMixRpt?.badRate)?(peerMixRpt.badRate*100).toFixed(1)+"%":"—"}</b>).
     ${Number.isFinite(mixRpt?.birdiePlusRate) && Number.isFinite(peerMixRpt?.birdiePlusRate) && Number.isFinite(mixRpt?.badRate) && Number.isFinite(peerMixRpt?.badRate)
       ? ((Math.abs((mixRpt.birdiePlusRate-peerMixRpt.birdiePlusRate)*100) < 2.0) && ((mixRpt.badRate-peerMixRpt.badRate)*100 !== 0)
@@ -11093,7 +11125,7 @@ if (__effComparatorMode === "par") {
         ${__effComparatorMode==="par" ? `
           Your best scoring is in <b>${PR_escapeHtml((bestItem?.label||bestItem?.key||"—"))}</b>, where you average <b>${Number.isFinite(_meVal(bestItem))?_meVal(bestItem).toFixed(2):"—"}</b> strokes over par per hole.
         ` : `
-          Your biggest advantage is in <b>${PR_escapeHtml((bestItem?.label||bestItem?.key||"—"))}</b>, where you gain <b>${Number.isFinite(bestItem?.delta)?bestItem.delta.toFixed(2):"—"}</b> ${(String(scoringMode)==="gross" ? "strokes" : "points")} per hole over peers.
+          Your biggest advantage is in <b>${PR_escapeHtml((bestItem?.label||bestItem?.key||"—"))}</b>, where you gain <span class="${bestDeltaCls}"><b>${Number.isFinite(bestItem?.delta)?bestItem.delta.toFixed(2):"—"}</b></span> ${(String(scoringMode)==="gross" ? "strokes" : "points")} per hole over peers.
         `}
       </p>
       <p class="PRp">
@@ -11101,7 +11133,7 @@ if (__effComparatorMode === "par") {
         ${__effComparatorMode==="par" ? `
           Your worst scoring is in <b>${PR_escapeHtml((worstItem?.label||worstItem?.key||"—"))}</b>, where you average <b>${Number.isFinite(_meVal(worstItem))?_meVal(worstItem).toFixed(2):"—"}</b> strokes over par per hole.
         ` : `
-          Your primary area for improvement is <b>${PR_escapeHtml((worstItem?.label||worstItem?.key||"—"))}</b>, costing <b>${Number.isFinite(worstItem?.delta)?worstItem.delta.toFixed(2):"—"}</b> ${(String(scoringMode)==="gross" ? "strokes" : "points")} per hole compared to your handicap cohort.
+          Your primary area for improvement is <b>${PR_escapeHtml((worstItem?.label||worstItem?.key||"—"))}</b>, costing <span class="${worstDeltaCls}"><b>${Number.isFinite(worstItem?.delta)?worstItem.delta.toFixed(2):"—"}</b></span> ${(String(scoringMode)==="gross" ? "strokes" : "points")} per hole compared to your handicap cohort.
         `}
       </p>
       <p class="PRp">
@@ -11119,7 +11151,7 @@ if (__effComparatorMode === "par") {
       const holesPer18 = (absPct/100)*18;
       const holesWord = diffPct>=0 ? "fewer" : "more";
       const strokesWord = diffPct>=0 ? "saved" : "lost";
-      return `Damage (double+) occurs <b>${absPct.toFixed(1)}% ${moreLess}</b> than peers (${youPct}% vs ${peerPct}%), equivalent to ~<b>${holesPer18.toFixed(1)}</b> ${holesWord} damage holes per 18 (strokes typically ${strokesWord} are meaningful).`;
+      return `Damage (double+) occurs <span class=\"${diffPct>=0?\"PRgood\":\"PRbad\"}\"><b>${absPct.toFixed(1)}% ${moreLess}</b></span> than peers (${youPct}% vs ${peerPct}%), equivalent to ~<b>${holesPer18.toFixed(1)}</b> ${holesWord} damage holes per 18 (strokes typically ${strokesWord} are meaningful).`;
     })()}
   `}
 </p>
