@@ -10188,6 +10188,33 @@ function PR_bucketOutcomeMix({ scoringMode, windowSeries }){
   const isGross = String(scoringMode) === "gross";
   const rounds = (windowSeries || []).slice();
 
+  // Normalise per-hole arrays across the many shapes used in the app.
+  // (Year-filtered series often store Stableford points under ptsPerHole/pointsPerHole/etc.)
+  const getPtsArr = (r) => {
+    if (!r) return null;
+    return Array.isArray(r.perHole) ? r.perHole
+      : Array.isArray(r.pointsPerHole) ? r.pointsPerHole
+      : Array.isArray(r.ptsPerHole) ? r.ptsPerHole
+      : Array.isArray(r.perHolePts) ? r.perHolePts
+      : Array.isArray(r.stablefordPerHole) ? r.stablefordPerHole
+      : Array.isArray(r.stablefordHoles) ? r.stablefordHoles
+      : null;
+  };
+  const getGrossArr = (r) => {
+    if (!r) return null;
+    return Array.isArray(r.grossPerHole) ? r.grossPerHole
+      : Array.isArray(r.gross) ? r.gross
+      : Array.isArray(r.strokesPerHole) ? r.strokesPerHole
+      : null;
+  };
+  const getParsArr = (r) => {
+    if (!r) return null;
+    return Array.isArray(r.parsArr) ? r.parsArr
+      : Array.isArray(r.parsPerHole) ? r.parsPerHole
+      : Array.isArray(r.pars) ? r.pars
+      : null;
+  };
+
   let holes = 0;
   let birdiePlus = 0;
   let pars = 0;
@@ -10195,12 +10222,9 @@ function PR_bucketOutcomeMix({ scoringMode, windowSeries }){
   let bad = 0; // wipes (pts=0) or double+ (>=2 over par)
 
   for (const r of rounds){
-    const phPts = Array.isArray(r?.perHole) ? r.perHole : null;
-    const gh = Array.isArray(r?.grossPerHole) ? r.grossPerHole : null;
-    const parsArr = Array.isArray(r?.parsArr) ? r.parsArr
-      : Array.isArray(r?.parsPerHole) ? r.parsPerHole
-      : Array.isArray(r?.pars) ? r.pars
-      : null;
+    const phPts = getPtsArr(r);
+    const gh = getGrossArr(r);
+    const parsArr = getParsArr(r);
 
     for (let i=0;i<18;i++){
       if (!isGross){
