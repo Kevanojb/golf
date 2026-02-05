@@ -6931,11 +6931,25 @@ const parLeaders = React.useMemo(() => {
     return rows.slice(0, 20);
   };
 
+    const buildPer18 = (metricKey) => {
+    const rows = pool.map(p => {
+      const g = p?.totalsGross;
+      const holes = (g && Number.isFinite(Number(g.holes))) ? Number(g.holes) : NaN;
+      const cnt = (g && Number.isFinite(Number(g[metricKey]))) ? Number(g[metricKey]) : NaN;
+      const v = (Number.isFinite(holes) && holes > 0 && Number.isFinite(cnt)) ? (cnt * 18 / holes) : NaN; // per 18 holes
+      return { name: p.name, v, holes };
+    }).filter(r => Number.isFinite(r.v));
+    rows.sort((a,b)=> a.v - b.v); // lower wins
+    return rows.slice(0, 20);
+  };
+
   return {
     all: buildAll(),
     p3: build("Par 3"),
     p4: build("Par 4"),
-    p5: build("Par 5")
+    p5: build("Par 5"),
+    bogeys: buildPer18("bogeys"),
+    doubles: buildPer18("doubles"),
   };
 }, [allPlayers, parLeadMode]);
 
@@ -9558,56 +9572,118 @@ const coachLine = (row) => {
           </div>
 
           {!parLeadersCollapsed && (
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
-              {[
-                { key: "all", title: "All holes", ico: "🏆" },
-                { key: "p3",  title: "Par 3",    ico: "🎯" },
-                { key: "p4",  title: "Par 4",    ico: "⚙️" },
-                { key: "p5",  title: "Par 5",    ico: "🚀" },
-              ].map(col => (
-                <div key={col.key} className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="text-sm font-extrabold text-neutral-900">
-                      <span className="mr-1">{col.ico}</span>{col.title}
+            <>
+              <div className="mt-4 grid grid-cols-1 md:grid-cols-4 gap-3">
+                {[
+                  { key: "all", title: "All holes", ico: "🏆" },
+                  { key: "p3",  title: "Par 3",    ico: "🎯" },
+                  { key: "p4",  title: "Par 4",    ico: "⚙️" },
+                  { key: "p5",  title: "Par 5",    ico: "🚀" },
+                ].map(col => (
+                  <div key={col.key} className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="text-sm font-extrabold text-neutral-900">
+                        <span className="mr-1">{col.ico}</span>{col.title}
+                      </div>
+                      <div className="text-[11px] font-black text-neutral-500 uppercase tracking-wide">
+                        {parLeadMode==="gross" ? "lower wins" : "higher wins"}
+                      </div>
                     </div>
-                    <div className="text-[11px] font-black text-neutral-500 uppercase tracking-wide">
-                      {parLeadMode==="gross" ? "lower wins" : "higher wins"}
-                    </div>
-                  </div>
 
-                  <div className="mt-2 space-y-1">
-                    {(parLeaders[col.key] || []).map((r, i) => {
-                      const medal = i===0 ? "🥇" : i===1 ? "🥈" : i===2 ? "🥉" : `${i+1}.`;
-                      return (
-                        <div key={r.name} className="flex items-center justify-between text-sm">
-                          <div className="min-w-0 flex items-center gap-2">
-                            <span className="text-neutral-500 tabular-nums font-black w-7 text-center">
-                              {medal}
-                            </span>
-                            <span className="font-semibold text-neutral-900 truncate">{r.name}</span>
-                          </div>
-
-                          <div className="flex items-baseline justify-end gap-2">
-                            <span className="font-black tabular-nums text-neutral-900">
-                              {parLeadMode==="gross" ? PR_fmt(r.v,2) : PR_fmt(r.v,2)}
-                            </span>
-                            {Number.isFinite(r.holes) && (
-                              <span className="text-[10px] font-black tabular-nums text-neutral-400">
-                                n={Math.round(r.holes)}
+                    <div className="mt-2 space-y-1">
+                      {(parLeaders[col.key] || []).map((r, i) => {
+                        const medal = i===0 ? "🥇" : i===1 ? "🥈" : i===2 ? "🥉" : `${i+1}.`;
+                        return (
+                          <div key={r.name} className="flex items-center justify-between text-sm">
+                            <div className="min-w-0 flex items-center gap-2">
+                              <span className="text-neutral-500 tabular-nums font-black w-7 text-center">
+                                {medal}
                               </span>
-                            )}
-                          </div>
-                        </div>
-                      );
-                    })}
+                              <span className="font-semibold text-neutral-900 truncate">{r.name}</span>
+                            </div>
 
-                    {(!parLeaders[col.key] || parLeaders[col.key].length===0) && (
-                      <div className="text-sm text-neutral-500">No data yet.</div>
-                    )}
+                            <div className="flex items-baseline justify-end gap-2">
+                              <span className="font-black tabular-nums text-neutral-900">
+                                {parLeadMode==="gross" ? PR_fmt(r.v,2) : PR_fmt(r.v,2)}
+                              </span>
+                              {Number.isFinite(r.holes) && (
+                                <span className="text-[10px] font-black tabular-nums text-neutral-400">
+                                  n={Math.round(r.holes)}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {(!parLeaders[col.key] || parLeaders[col.key].length===0) && (
+                        <div className="text-sm text-neutral-500">No data yet.</div>
+                      )}
+                    </div>
                   </div>
+                ))}
+              </div>
+
+              {/* Mistake leaderboards (gross only) */}
+              <div className="mt-4 rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-extrabold text-neutral-900">🧨 Mistake leaders</div>
+                  <div className="text-[11px] font-black text-neutral-500 uppercase tracking-wide">lower wins</div>
                 </div>
-              ))}
-            </div>
+
+                <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {[
+                    { key: "bogeys",  title: "Fewest bogeys",        unit: "bog/18" },
+                    { key: "doubles", title: "Fewest double bogeys", unit: "dbl/18" },
+                  ].map(col => (
+                    <div key={col.key} className="rounded-2xl border border-neutral-200 bg-white p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="text-sm font-extrabold text-neutral-900">{col.title}</div>
+                        <div className="text-[11px] font-black text-neutral-500 uppercase tracking-wide">lower wins</div>
+                      </div>
+
+                      <div className="mt-2 space-y-1">
+                        {(parLeaders?.[col.key] || []).map((r, i) => {
+                          const medal = i===0 ? "🥇" : i===1 ? "🥈" : i===2 ? "🥉" : `${i+1}.`;
+                          return (
+                            <div key={r.name} className="flex items-center justify-between text-sm">
+                              <div className="min-w-0 flex items-center gap-2">
+                                <span className="text-neutral-500 tabular-nums font-black w-7 text-center">
+                                  {medal}
+                                </span>
+                                <span className="font-semibold text-neutral-900 truncate">{r.name}</span>
+                              </div>
+
+                              <div className="flex items-baseline justify-end gap-2">
+                                <span className="font-black tabular-nums text-neutral-900">
+                                  {Number.isFinite(r.v) ? `${PR_fmt(r.v,2)}` : "—"}
+                                </span>
+                                <span className="text-[10px] font-black tabular-nums text-neutral-400">
+                                  {col.unit}
+                                </span>
+                                {Number.isFinite(r.holes) && (
+                                  <span className="text-[10px] font-black tabular-nums text-neutral-400">
+                                    n={Math.round(r.holes)}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {(!parLeaders?.[col.key] || parLeaders[col.key].length===0) && (
+                          <div className="text-sm text-neutral-500">No data yet.</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-2 text-xs text-neutral-500">
+                  Rates are per 18 holes (using gross scoring categories).
+                </div>
+              </div>
+            </>
           )}
         </div>
 {/* ===== Trend chart (impact) ===== */}
