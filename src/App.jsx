@@ -3108,7 +3108,6 @@ function Home({
   const signedIn = !!user;
   const isAdmin = !!(user && (user.is_admin || user.role === "admin"));
   const adminLabel = isAdmin ? (user.email || "Admin") : "Not signed in";
-  const canAdmin = !!(isSuperAdmin || isAdmin || String(activeRole || "").toLowerCase() === "captain");
 
   // Best-effort stats (won't break if your computed shape changes)
   const rounds = (computed && (
@@ -3133,61 +3132,6 @@ function Home({
       ? `${rounds} rounds analyzed \u00b7 ${formats || 0} formats \u00b7 ${holes || 0} holes explored`
       : `Explore trends, surprises, and scoring patterns`;
 
-
-// Home navigation should feel "guided" for golfers: save last view + reduce decisions.
-const go = (v) => {
-  try { localStorage.setItem("den_lastView", String(v || "")); } catch (e) {}
-  setView(v);
-};
-
-const _lsGet = (k, d = "") => {
-  try {
-    const v = localStorage.getItem(k);
-    return (v === null || v === undefined) ? d : String(v);
-  } catch (e) {
-    return d;
-  }
-};
-
-const [showMoreTools, setShowMoreTools] = useState(false);
-const lastEventId = _lsGet("den_lastEventId", "");
-const lastPlayerName = _lsGet("den_lastPlayerName", "");
-
-const nextAction = (() => {
-  if (!rounds) {
-    return {
-      title: "Start here",
-      desc: "Upload a round to unlock leaderboards, recaps, and your improvement plan.",
-      cta: "Upload / Import Round",
-      onClick: () => {
-        try { fileInputRef && fileInputRef.current && fileInputRef.current.click && fileInputRef.current.click(); } catch (e) {}
-      },
-    };
-  }
-  if (!lastEventId) {
-    return {
-      title: "Continue",
-      desc: "Pick a round to explore results and trends.",
-      cta: "Choose a Round",
-      onClick: () => go("past"),
-    };
-  }
-  if (!lastPlayerName) {
-    return {
-      title: "Personalise",
-      desc: "Open your plan and pick your name once. We’ll remember it next time.",
-      cta: "Open My Plan",
-      onClick: () => go("player_progress"),
-    };
-  }
-  return {
-    title: "Your focus for the next round",
-    desc: "One priority, one drill, one on-course rule. No fluff.",
-    cta: "Open My Plan",
-    onClick: () => go("player_progress"),
-  };
-})();
-
   return (
     <section id="player-report-top" className="content-card" style={{ padding: 14 }}>
       
@@ -3196,21 +3140,6 @@ const nextAction = (() => {
         .hm-cta-row{ display:flex; flex-direction:column; gap:10px; align-items:stretch; margin-top:12px; }
         .hm-cta{ width:100%; justify-content:center; }
         .hm-stats{ font-size:12px; line-height:1.35; opacity:.92; }
-
-/* Guided 'Next action' strip */
-.hm-next{
-  display:flex; gap:12px; align-items:center; justify-content:space-between;
-  padding:14px 14px; border-radius:18px; margin: 4px 0 12px;
-  background: rgba(15,23,42,0.06);
-}
-.hm-next-title{ font-weight: 950; letter-spacing:-0.02em; }
-.hm-next-desc{ font-size: 12px; opacity: 0.86; margin-top:2px; max-width: 54ch; }
-.hm-next-cta{ display:inline-flex; gap:10px; align-items:center; justify-content:center; white-space:nowrap; border-radius:18px; padding:12px 14px; font-weight:950; }
-
-/* Make inline menu items real buttons without changing the look */
-.hm-inline-item{ border:0; background:transparent; cursor:pointer; }
-.hm-inline-item:focus{ outline: 2px solid rgba(245,166,35,0.8); outline-offset: 2px; }
-
 
         /* Make the smaller card action buttons behave like the main CTA on mobile */
         .hm-card-action{ display:flex; align-items:center; gap:10px; }
@@ -3255,26 +3184,13 @@ const nextAction = (() => {
 <div className="hm-stage">
         <div className="hm-grid">
 
-{/* NEXT ACTION */}
-<div className="hm-next" role="region" aria-label="Next action">
-  <div>
-    <div className="hm-next-title">{nextAction.title}</div>
-    <div className="hm-next-desc">{nextAction.desc}</div>
-  </div>
-  <button className="hm-next-cta" onClick={nextAction.onClick}>
-    <span className="hm-arrow">→</span>
-    <span>{nextAction.cta}</span>
-  </button>
-</div>
-
-
           {/* HERO */}
           <div className="hm-hero">
             <div className="hm-glow" />
             <div className="hm-hero-inner">
               <div>
-                <h2>Your Golf Hub</h2>
-                <p className="hm-sub">Rounds, leaderboards, and a simple plan to shoot lower.</p>
+                <h2>Explore Your Games</h2>
+                <p className="hm-sub">Dive into your rounds. Find patterns. Spot surprises.</p>
 
                 <div style={{ color: "rgba(255,255,255,0.84)", fontWeight: 800, marginTop: 8 }}>
                   Inside you’ll find:
@@ -3282,9 +3198,9 @@ const nextAction = (() => {
 
 
                 <div className="hm-cta-row">
-                  <button className="hm-cta" onClick={() => go("past")}>
+                  <button className="hm-cta" onClick={() => setView("past")}>
                     <span className="hm-arrow">→</span>
-                    <span>Explore Rounds</span>
+                    <span>Enter Game Explorer</span>
                   </button>
                   <div className="hm-stats">{statsText}</div>
                   
@@ -3292,70 +3208,24 @@ const nextAction = (() => {
 
 
                 
-                <div className="hm-inline-menu" aria-label="Quick actions">
+                <div className="hm-inline-menu" aria-label="Menu options (visual)">
                   <div className="hm-inline-menu-grid">
-                    <button type="button" className="hm-inline-item" onClick={() => go("past")}>
-                      <span className="hm-ico">⛳</span><span>Rounds</span>
-                    </button>
-                    <button type="button" className="hm-inline-item" onClick={() => go("player_progress")}>
-                      <span className="hm-ico">🎯</span><span>My Plan</span>
-                    </button>
-                    <button type="button" className="hm-inline-item" onClick={() => go("standings")}>
-                      <span className="hm-ico">🏆</span><span>League</span>
-                    </button>
-                    <button type="button" className="hm-inline-item" onClick={() => go("graphs")}>
-                      <span className="hm-ico">📈</span><span>Trends</span>
-                    </button>
-                    <button type="button" className="hm-inline-item" onClick={() => go("scorecard")}>
-                      <span className="hm-ico">🧾</span><span>My Card</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      className="hm-inline-item hm-inline-more"
-                      onClick={() => setShowMoreTools(v => !v)}
-                      aria-expanded={showMoreTools}
-                    >
-                      <span className="hm-ico">⋯</span><span>{showMoreTools ? "Less" : "More"}</span>
-                    </button>
-
-                    {showMoreTools && (
-                      <>
-                        <button type="button" className="hm-inline-item" onClick={() => go("course_stats")}>
-                          <span className="hm-ico">🗺️</span><span>Hard Holes</span>
-                        </button>
-                        <button type="button" className="hm-inline-item" onClick={() => go("ratings")}>
-                          <span className="hm-ico">⭐</span><span>Top Players</span>
-                        </button>
-                        <button type="button" className="hm-inline-item" onClick={() => go("story")}>
-                          <span className="hm-ico">📖</span><span>Round Recap</span>
-                        </button>
-                        <button type="button" className="hm-inline-item" onClick={() => go("replay")}>
-                          <span className="hm-ico">📺</span><span>Replay</span>
-                        </button>
-                        <button type="button" className="hm-inline-item" onClick={() => go("banter")}>
-                          <span className="hm-ico">😂</span><span>Banter</span>
-                        </button>
-                        <button type="button" className="hm-inline-item" onClick={() => go("style")}>
-                          <span className="hm-ico">🎯</span><span>Style</span>
-                        </button>
-                        <button type="button" className="hm-inline-item" onClick={() => go("casino")}>
-                          <span className="hm-ico">🎰</span><span>Casino</span>
-                        </button>
-                        <button type="button" className="hm-inline-item" onClick={() => go("trophies")}>
-                          <span className="hm-ico">🏅</span><span>Trophies</span>
-                        </button>
-                        <button type="button" className="hm-inline-item" onClick={() => go("partner")}>
-                          <span className="hm-ico">🤝</span><span>Partners</span>
-                        </button>
-                        <button type="button" className="hm-inline-item" onClick={() => go("headtohead")}>
-                          <span className="hm-ico">🥊</span><span>Rivalry</span>
-                        </button>
-                      </>
-                    )}
+                    <div className="hm-inline-item"><span className="hm-ico">⛳</span><span>Game</span></div>
+                    <div className="hm-inline-item"><span className="hm-ico">📈</span><span>Graphs</span></div>
+                    <div className="hm-inline-item"><span className="hm-ico">🧾</span><span>Player Scorecard</span></div>
+                    <div className="hm-inline-item"><span className="hm-ico">🗺️</span><span>Course Stats</span></div>
+                    <div className="hm-inline-item"><span className="hm-ico">⭐</span><span>Ratings</span></div>
+                    <div className="hm-inline-item"><span className="hm-ico">😂</span><span>Banter</span></div>
+                    <div className="hm-inline-item"><span className="hm-ico">🎯</span><span>Styles</span></div>
+                    <div className="hm-inline-item"><span className="hm-ico">📖</span><span>Story</span></div>
+                    <div className="hm-inline-item"><span className="hm-ico">📺</span><span>Replay</span></div>
+                    <div className="hm-inline-item"><span className="hm-ico">🤼</span><span>Teams</span></div>
+                    <div className="hm-inline-item"><span className="hm-ico">🎰</span><span>Casino</span></div>
+                    <div className="hm-inline-item"><span className="hm-ico">🏆</span><span>Trophies</span></div>
+                    <div className="hm-inline-item"><span className="hm-ico">🤝</span><span>Partners</span></div>
+                    <div className="hm-inline-item"><span className="hm-ico">🥊</span><span>Rivalry</span></div>
                   </div>
                 </div>
-</div>
               </div>
 
               <div className="hm-hero-right">
@@ -3369,12 +3239,11 @@ const nextAction = (() => {
           </div>
 
           {/* REVIEW & IMPROVE */}
-          <button className="hm-card heroish" onClick={() => go("player_progress")} style={{ textAlign: "left", cursor: "pointer" }}>
+          <button className="hm-card heroish" onClick={() => setView("player_progress")} style={{ textAlign: "left", cursor: "pointer" }}>
             <div className="hm-card-inner">
               <div style={{ minWidth: 0 }}>
                 <h3>Review &amp; Improve</h3>
                 <div className="hm-desc">Turn insight into better scores.</div>
-                <div className="hm-stats" style={{ marginTop: 6 }}>5 min: find leaks · 2 min: choose focus · 10 min: build a session</div>
                 <ul>
                   <li><span className="hm-ico2">🧾</span><span>See what actually costs you points</span></li>
                   <li><span className="hm-ico2">💪</span><span>Find your biggest strengths vs the field</span></li>
@@ -3383,7 +3252,7 @@ const nextAction = (() => {
               </div>
 
               <div className="hm-card-action">
-                <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); go("player_progress"); }}>
+                <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("player_progress"); }}>
                   <span>→ Review Performance</span>
                 </button>
                 <div className="hm-pill">⋯</div>
@@ -3393,7 +3262,7 @@ const nextAction = (() => {
 
           {/* TWO-UP ROW */}
           <div className="hm-row2">
-            <button className="hm-card heroish" onClick={() => go("standings")} style={{ textAlign: "left", cursor: "pointer" }}>
+            <button className="hm-card heroish" onClick={() => setView("standings")} style={{ textAlign: "left", cursor: "pointer" }}>
               <div className="hm-card-inner">
                 <div style={{ minWidth: 0 }}>
                   <h3>League Standings</h3>
@@ -3405,7 +3274,7 @@ const nextAction = (() => {
                   </ul>
                 </div>
                 <div className="hm-card-action">
-                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); go("standings"); }}>
+                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("standings"); }}>
                     <span>→ View League</span>
                   </button>
                   <div className="hm-pill">⋯</div>
@@ -3413,7 +3282,7 @@ const nextAction = (() => {
               </div>
             </button>
 
-            <button className="hm-card heroish" onClick={() => go("eclectic")} style={{ textAlign: "left", cursor: "pointer" }}>
+            <button className="hm-card heroish" onClick={() => setView("eclectic")} style={{ textAlign: "left", cursor: "pointer" }}>
               <div className="hm-card-inner">
                 <div style={{ minWidth: 0 }}>
                   <h3>Eclectic</h3>
@@ -3425,7 +3294,7 @@ const nextAction = (() => {
                   </ul>
                 </div>
                 <div className="hm-card-action">
-                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); go("eclectic"); }}>
+                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("eclectic"); }}>
                     <span>→ View Eclectic</span>
                   </button>
                   <div className="hm-pill">⋯</div>
@@ -3435,25 +3304,22 @@ const nextAction = (() => {
           </div>
 
           {/* ADMIN BAR */}
-{canAdmin && (
-  <button className="hm-admin" onClick={() => go("admin")} style={{ textAlign: "left", cursor: "pointer" }}>
-    <div className="hm-admin-inner">
-      <div>
-        <div className="hm-admin-title">
-          <span className="hm-gear">⚙️</span>
-          <span>Admin &amp; Setup</span>
-        </div>
-        <div className="hm-admin-sub">
-          Imports, season setup, players
-          {totalPlayersCount != null ? ` · Players: ${visiblePlayersCount}/${totalPlayersCount}` : ""}
-          {signedIn ? ` · Signed in as ${adminLabel}` : ""}
-        </div>
-      </div>
-      <div className="hm-pill" style={{ background: "rgba(255,255,255,0.10)", borderColor: "rgba(255,255,255,0.18)" }}>↗</div>
-    </div>
-  </button>
-)}
-
+          <button className="hm-admin" onClick={() => setView("admin")} style={{ textAlign: "left", cursor: "pointer" }}>
+            <div className="hm-admin-inner">
+              <div>
+                <div className="hm-admin-title">
+                  <span className="hm-gear">⚙️</span>
+                  <span>Admin</span>
+                </div>
+                <div className="hm-admin-sub">
+                  Settings, imports, season setup, players
+                  {totalPlayersCount != null ? ` \u00b7 Players: ${visiblePlayersCount}/${totalPlayersCount}` : ""}
+                  {signedIn ? ` \u00b7 Signed in as ${adminLabel}` : ""}
+                </div>
+              </div>
+              <div className="hm-pill" style={{ background: "rgba(255,255,255,0.10)", borderColor: "rgba(255,255,255,0.18)" }}>↗</div>
+            </div>
+          </button>
 
           <div className="hm-foot">
             Most players discover something new every time they explore their games. 💡
