@@ -1,15 +1,1 @@
-{
-  "name": "Den Society League",
-  "short_name": "Den League",
-  "start_url": "/golf/",
-  "scope": "/golf/",
-  "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#10b981",
-  "lang": "en",
-  "icons": [
-    { "src": "pwa-192.png", "sizes": "192x192", "type": "image/png" },
-    { "src": "pwa-512.png", "sizes": "512x512", "type": "image/png" },
-    { "src": "pwa-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable any" }
-  ]
-}
+{"name":"Den Society League","short_name":"Den League","start_url":"/golf/index.html","display":"standalone","background_color":"#ffffff","theme_color":"#10b981","lang":"en","scope":"/golf/","icons":[{"src":"pwa-192.png","sizes":"192x192","type":"image/png"},{"src":"pwa-512.png","sizes":"512x512","type":"image/png"},{"src":"pwa-512.png","sizes":"512x512","type":"image/png","purpose":"maskable any"}]}
