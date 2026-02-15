@@ -3,17 +3,30 @@
   <head>
     <meta charset="UTF-8" />
 
-    <!-- 🔧 REQUIRED: restore deep links after 404.html redirect -->
+    <!-- 🔧 REQUIRED: restore deep links after 404.html redirect (and handle iOS /index.html launches) -->
     <script>
       (function () {
-        var p = new URLSearchParams(window.location.search).get("p");
-        if (p) {
-          try {
-            var decoded = decodeURIComponent(p);
-            // decoded looks like "/den-society"
-            window.history.replaceState(null, "", "/golf" + decoded);
-          } catch (e) {}
-        }
+        try {
+          // ✅ iOS Home Screen sometimes launches "/golf/index.html"
+          if (window.location.pathname === "/golf/index.html") {
+            window.history.replaceState(null, "", "/golf/");
+          }
+
+          // Restore deep links from 404.html redirect
+          // Expected query params:
+          //   ?p=/den-society&q=?foo=1&h=#/something
+          var params = new URLSearchParams(window.location.search);
+          var p = params.get("p"); // path after /golf
+          var q = params.get("q"); // original search (e.g. "?x=1")
+          var h = params.get("h"); // original hash (e.g. "#/update-password")
+
+          if (p) {
+            var decodedP = decodeURIComponent(p); // e.g. "/den-society"
+            var decodedQ = q ? decodeURIComponent(q) : "";
+            var decodedH = h ? decodeURIComponent(h) : "";
+            window.history.replaceState(null, "", "/golf" + decodedP + decodedQ + decodedH);
+          }
+        } catch (e) {}
       })();
     </script>
 
@@ -45,3 +58,4 @@
     <script type="module" src="./src/main.jsx"></script>
   </body>
 </html>
+
