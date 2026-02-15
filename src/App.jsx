@@ -2010,7 +2010,6 @@ function readStablefordPerHole(row) {
 
         let parsedPars = null;
         let parsedSIs = null;
-        let parRowIdx = -1;
         for (let i = 0; i < lines.length; i++) {
           const row = lines[i];
           const k0 = String(row[0] || "").trim().toLowerCase();
@@ -2028,7 +2027,6 @@ function readStablefordPerHole(row) {
         for (let i = 0; i < lines.length; i++) {
           const row = lines[i];
           if ((row[0] || "").trim().toLowerCase() === "par") {
-            parRowIdx = i;
             const nums = [];
             for (let j = 3; j < row.length; j++) {
               const n = parseInt(String(row[j] || "").trim(), 10);
@@ -2123,52 +2121,6 @@ function readStablefordPerHole(row) {
           }
         }
 
-        // --- Fallback: scorecard-style CSV without a Name/Handicap header row ---
-        // Shape: Name, Tee Label, Handicap, H1..H9, OUT, H10..H18, IN, TOTAL (sometimes only 9 holes)
-        // Also sometimes includes extra rows like "Stableford" / "Singles Matchplay" with blank first cell.
-        if (!players.length && playerHeaderRow < 0) {
-          const seen = new Set();
-          const startScan = (parRowIdx >= 0 ? parRowIdx + 1 : (scorecardHeaderIdx >= 0 ? scorecardHeaderIdx + 1 : 0));
-
-          const looksLikeScorecardPlayerRow = (row) => {
-            if (!row || row.length < 4) return false;
-            const name = String(row[0] || "").trim();
-            if (!name) return false;
-            const tee = String(row[1] || "").trim().toLowerCase();
-            if (!tee || !tee.includes("tee")) return false;
-            const hcap = parseFloat(String(row[2] || "").trim().replace(",", "."));
-            if (!Number.isFinite(hcap)) return false;
-
-            let nums = 0;
-            for (let j = 3; j < row.length; j++) {
-              const raw = String(row[j] ?? "").trim();
-              if (!raw) continue;
-              const n = parseInt(raw.replace(/[^0-9\-]/g, ""), 10);
-              if (Number.isFinite(n) && n >= 1 && n <= 19) nums++;
-            }
-            return nums >= 6;
-          };
-
-          for (let i = startScan; i < lines.length; i++) {
-            const row = lines[i];
-            if (!looksLikeScorecardPlayerRow(row)) continue;
-
-            const name = String(row[0] || "").trim();
-            if (seen.has(name)) continue;
-            if (isTeamLike(name) || /^player$/i.test(name)) continue;
-
-            const teeLabel = String(row[1] || "").trim();
-            const hcap = parseFloat(String(row[2] || "").trim().replace(",", "."));
-            const g = /women|ladies/.test(teeLabel.toLowerCase()) ? "F" : "M";
-
-            players.push({ name, handicap: hcap, gender: g, teeLabel });
-            seen.add(name);
-          }
-        }
-
-        if (!players.length) {
-          console.warn("[parseSquabbitCSV] No players detected. CSV format may be unsupported.", { playerHeaderRow, parRowIdx, scorecardHeaderIdx });
-        }
         // --- Fallback heuristic: if export didn't include Gender/Tee in the player block ---
         // Try to infer tee labels and genders from anywhere in the file (legacy exports).
         const genderMap = {};
