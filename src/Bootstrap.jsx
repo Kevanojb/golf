@@ -9,6 +9,7 @@ const SITE_ORIGIN = "https://kevanojb.github.io";
 const SITE_URL = `${SITE_ORIGIN}${GH_PAGES_BASE}`;
 
 const LS_ACTIVE_SOCIETY = "den_active_society_id_v1";
+const LS_LAST_SOCIETY_SLUG = "den_last_society_slug_v1";
 
 const AppLazy = React.lazy(() => import("./App.jsx"));
 
@@ -147,8 +148,8 @@ export default function Bootstrap() {
     })
   );
 
-const hash = window.location.hash || "";
-const isUpdatePw = hash.startsWith("#/update-password");
+  const hash = window.location.hash || "";
+  const isUpdatePw = hash.startsWith("#/update-password");
 
   React.useEffect(() => {
     normalizeGolfRoot();
@@ -174,7 +175,11 @@ const isUpdatePw = hash.startsWith("#/update-password");
   const [societies, setSocieties] = React.useState([]);
   const [pickerOpen, setPickerOpen] = React.useState(false);
   const [activeSocietyId, setActiveSocietyId] = React.useState(() => {
-    try { return localStorage.getItem(LS_ACTIVE_SOCIETY) || ""; } catch { return ""; }
+    try {
+      return localStorage.getItem(LS_ACTIVE_SOCIETY) || "";
+    } catch {
+      return "";
+    }
   });
 
   // Create society UI
@@ -195,10 +200,27 @@ const isUpdatePw = hash.startsWith("#/update-password");
     if (!envOk) return;
     client.auth.getSession().then(({ data }) => setSession(data?.session || null));
     const { data: sub } = client.auth.onAuthStateChange((_evt, s) => setSession(s || null));
-    return () => { try { sub?.subscription?.unsubscribe?.(); } catch {} };
+    return () => {
+      try {
+        sub?.subscription?.unsubscribe?.();
+      } catch {}
+    };
   }, [client, envOk]);
 
   const slugInUrl = getSlugFromPath();
+
+  // ✅ FIX: iOS Add-to-Home-Screen often launches at /golf/ (no slug)
+  // Redirect to last society page if we have one saved.
+  React.useEffect(() => {
+    if (!envOk) return;
+    if (slugInUrl) return;
+    try {
+      const last = localStorage.getItem(LS_LAST_SOCIETY_SLUG);
+      if (last) {
+        window.location.replace(`${SITE_URL}${String(last)}`);
+      }
+    } catch {}
+  }, [envOk, slugInUrl]);
 
   // Load society by slug (viewer page) regardless of login
   React.useEffect(() => {
@@ -221,9 +243,17 @@ const isUpdatePw = hash.startsWith("#/update-password");
           .maybeSingle();
 
         if (error) throw error;
-        if (!data) { if (!cancelled) setPublicSociety(null); return; }
+        if (!data) {
+          if (!cancelled) setPublicSociety(null);
+          return;
+        }
         if (data.viewer_enabled === false) throw new Error("This society is not publicly viewable.");
         if (!cancelled) setPublicSociety(data);
+
+        // ✅ Save last viewed society for Home Screen launches
+        try {
+          if (data?.slug) localStorage.setItem(LS_LAST_SOCIETY_SLUG, String(data.slug));
+        } catch {}
       } catch (e) {
         const raw = e?.message || String(e);
         const code = e?.code || e?.error_code;
@@ -236,14 +266,19 @@ const isUpdatePw = hash.startsWith("#/update-password");
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [client, envOk, slugInUrl]);
 
   // If logged in on a slug page, figure out whether they're captain/player for THAT society
   React.useEffect(() => {
     if (!envOk) return;
     if (!slugInUrl) return;
-    if (!session?.user?.id) { setPublicRole("viewer"); return; }
+    if (!session?.user?.id) {
+      setPublicRole("viewer");
+      return;
+    }
     if (!publicSociety?.id) return;
 
     let cancelled = false;
@@ -268,7 +303,9 @@ const isUpdatePw = hash.startsWith("#/update-password");
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [client, envOk, slugInUrl, session?.user?.id, publicSociety?.id]);
 
   // Captain portal load (only when logged in on /golf root)
@@ -315,11 +352,18 @@ const isUpdatePw = hash.startsWith("#/update-password");
         if (!pick) pick = ids[0];
 
         setActiveSocietyId(String(pick));
-        try { localStorage.setItem(LS_ACTIVE_SOCIETY, String(pick)); } catch {}
+        try {
+          localStorage.setItem(LS_ACTIVE_SOCIETY, String(pick));
+        } catch {}
 
         // Default action: take them into their last society
         const soc = socs.find((x) => String(x.id) === String(pick));
-        if (soc?.slug) window.location.replace(`${SITE_URL}${soc.slug}`);
+        if (soc?.slug) {
+          try {
+            localStorage.setItem(LS_LAST_SOCIETY_SLUG, String(soc.slug));
+          } catch {}
+          window.location.replace(`${SITE_URL}${soc.slug}`);
+        }
       } catch (ex) {
         if (!cancelled) setMsg(ex?.message || String(ex));
       } finally {
@@ -327,7 +371,9 @@ const isUpdatePw = hash.startsWith("#/update-password");
       }
     })();
 
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [client, envOk, slugInUrl, session?.user?.id, activeSocietyId]);
 
   async function sendMagicLink(e) {
@@ -353,7 +399,9 @@ const isUpdatePw = hash.startsWith("#/update-password");
   }
 
   async function signOut() {
-    try { await client.auth.signOut(); } catch {}
+    try {
+      await client.auth.signOut();
+    } catch {}
   }
 
   async function createSociety(e) {
@@ -383,10 +431,7 @@ const isUpdatePw = hash.startsWith("#/update-password");
       const newSoc = insSoc.data;
       const sid = String(newSoc.id);
 
-      const insMem = await client
-        .from("memberships")
-        .insert({ society_id: sid, user_id: userId, role: "captain" });
-
+      const insMem = await client.from("memberships").insert({ society_id: sid, user_id: userId, role: "captain" });
       if (insMem.error) throw insMem.error;
 
       const today = new Date();
@@ -406,7 +451,13 @@ const isUpdatePw = hash.startsWith("#/update-password");
 
       if (insSeason.error) throw insSeason.error;
 
-      try { localStorage.setItem(LS_ACTIVE_SOCIETY, sid); } catch {}
+      try {
+        localStorage.setItem(LS_ACTIVE_SOCIETY, sid);
+      } catch {}
+      try {
+        if (newSoc?.slug) localStorage.setItem(LS_LAST_SOCIETY_SLUG, String(newSoc.slug));
+      } catch {}
+
       window.location.replace(`${SITE_URL}${newSoc.slug}`);
     } catch (ex) {
       setMsg(ex?.message || String(ex));
@@ -418,6 +469,9 @@ const isUpdatePw = hash.startsWith("#/update-password");
   function goViewSlug() {
     const s = slugify(viewSlug || "");
     if (!s) return;
+    try {
+      localStorage.setItem(LS_LAST_SOCIETY_SLUG, s);
+    } catch {}
     window.location.href = `${SITE_URL}${s}`;
   }
 
@@ -425,29 +479,26 @@ const isUpdatePw = hash.startsWith("#/update-password");
     return (
       <CenterCard>
         <div className="text-xl font-black text-neutral-900">Config missing</div>
-        <div className="mt-2 text-sm text-neutral-700">
-          VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are undefined in the deployed build.
-        </div>
+        <div className="mt-2 text-sm text-neutral-700">VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY are undefined in the deployed build.</div>
       </CenterCard>
     );
   }
 
-
-// Password recovery / set-password route (GitHub Pages friendly)
-if (isUpdatePw) {
-  return (
-    <UpdatePasswordScreen
-      supabase={client}
-      onDone={() => {
-        try {
-          window.location.replace(SITE_URL);
-        } catch {
-          window.location.href = SITE_URL;
-        }
-      }}
-    />
-  );
-}
+  // Password recovery / set-password route (GitHub Pages friendly)
+  if (isUpdatePw) {
+    return (
+      <UpdatePasswordScreen
+        supabase={client}
+        onDone={() => {
+          try {
+            window.location.replace(SITE_URL);
+          } catch {
+            window.location.href = SITE_URL;
+          }
+        }}
+      />
+    );
+  }
 
   if (slugInUrl) {
     if (publicLoading || (session?.user?.id && publicRoleLoading)) {
@@ -463,9 +514,16 @@ if (isUpdatePw) {
         <CenterCard>
           <div className="text-2xl font-black text-neutral-900">Society not found</div>
           <div className="text-sm text-neutral-600 mt-2">Ask your captain for the correct link.</div>
-          {msg ? <div className="mt-3"><InfoBox>{msg}</InfoBox></div> : null}
+          {msg ? (
+            <div className="mt-3">
+              <InfoBox>{msg}</InfoBox>
+            </div>
+          ) : null}
           <div className="mt-4">
-            <button className="w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold" onClick={() => window.location.replace(SITE_URL)}>
+            <button
+              className="w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
+              onClick={() => window.location.replace(SITE_URL)}
+            >
               Go to portal
             </button>
           </div>
@@ -493,16 +551,21 @@ if (isUpdatePw) {
     return (
       <CenterCard>
         <div className="text-2xl font-black text-neutral-900">Golf portal</div>
-        <div className="text-sm text-neutral-600 mt-2">
-          Golfers: view your society. Captains: sign in to manage.
-        </div>
+        <div className="text-sm text-neutral-600 mt-2">Golfers: view your society. Captains: sign in to manage.</div>
 
         <div className="mt-4 space-y-3">
           <div>
             <div className="text-xs font-black tracking-widest uppercase text-neutral-400">View a society</div>
             <div className="mt-2 flex gap-2">
-              <input className="flex-1 px-3 py-2 rounded-xl border border-neutral-200 bg-white" value={viewSlug} onChange={(e) => setViewSlug(e.target.value)} placeholder="e.g. den-society" />
-              <button className="rounded-xl bg-black text-white px-4 py-2.5 font-bold" onClick={goViewSlug}>View</button>
+              <input
+                className="flex-1 px-3 py-2 rounded-xl border border-neutral-200 bg-white"
+                value={viewSlug}
+                onChange={(e) => setViewSlug(e.target.value)}
+                placeholder="e.g. den-society"
+              />
+              <button className="rounded-xl bg-black text-white px-4 py-2.5 font-bold" onClick={goViewSlug}>
+                View
+              </button>
             </div>
             <div className="text-xs text-neutral-500 mt-1">Or use the full link a captain sends you.</div>
           </div>
@@ -514,7 +577,14 @@ if (isUpdatePw) {
             <form className="mt-2 space-y-3" onSubmit={sendMagicLink}>
               <div>
                 <label className="block text-xs font-bold text-neutral-700 mb-1">Email</label>
-                <input className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white" type="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
+                <input
+                  className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
+                  type="email"
+                  autoComplete="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="name@example.com"
+                />
               </div>
 
               {msg ? <InfoBox>{msg}</InfoBox> : null}
@@ -554,11 +624,20 @@ if (isUpdatePw) {
 
         <div className="mt-4 space-y-2">
           {options.map((s) => (
-            <button key={s.id} className="w-full text-left rounded-2xl border border-neutral-200 bg-white px-4 py-3 hover:bg-neutral-50" onClick={() => {
-              const sid = String(s.id);
-              try { localStorage.setItem(LS_ACTIVE_SOCIETY, sid); } catch {}
-              window.location.replace(`${SITE_URL}${s.slug || ""}`);
-            }}>
+            <button
+              key={s.id}
+              className="w-full text-left rounded-2xl border border-neutral-200 bg-white px-4 py-3 hover:bg-neutral-50"
+              onClick={() => {
+                const sid = String(s.id);
+                try {
+                  localStorage.setItem(LS_ACTIVE_SOCIETY, sid);
+                } catch {}
+                try {
+                  if (s.slug) localStorage.setItem(LS_LAST_SOCIETY_SLUG, String(s.slug));
+                } catch {}
+                window.location.replace(`${SITE_URL}${s.slug || ""}`);
+              }}
+            >
               <div className="font-black text-neutral-900">{s.name || s.slug || s.id}</div>
               <div className="text-xs text-neutral-500">{s.slug ? `/${s.slug}` : s.id}</div>
             </button>
@@ -566,7 +645,14 @@ if (isUpdatePw) {
         </div>
 
         <div className="mt-4 grid grid-cols-2 gap-2">
-          <button className="rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold" onClick={() => { setMsg(""); setPickerOpen(false); setCreateOpen(true); }}>
+          <button
+            className="rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
+            onClick={() => {
+              setMsg("");
+              setPickerOpen(false);
+              setCreateOpen(true);
+            }}
+          >
             Create society
           </button>
           <button className="rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold" onClick={signOut}>
@@ -581,37 +667,60 @@ if (isUpdatePw) {
     return (
       <CenterCard>
         <div className="text-2xl font-black text-neutral-900">Create society</div>
-        <div className="text-sm text-neutral-600 mt-2">
-          Creates a public viewer link for golfers and makes you the captain.
-        </div>
+        <div className="text-sm text-neutral-600 mt-2">Creates a public viewer link for golfers and makes you the captain.</div>
 
         <form className="mt-4 space-y-3" onSubmit={createSociety}>
           <div>
             <label className="block text-xs font-bold text-neutral-700 mb-1">Society name</label>
-            <input className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white" value={societyName} onChange={(e) => setSocietyName(e.target.value)} placeholder="e.g. Dennis The Menace" />
+            <input
+              className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
+              value={societyName}
+              onChange={(e) => setSocietyName(e.target.value)}
+              placeholder="e.g. Dennis The Menace"
+            />
           </div>
 
           <div>
             <label className="block text-xs font-bold text-neutral-700 mb-1">Slug</label>
-            <input className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white" value={societySlug} onChange={(e) => setSocietySlug(e.target.value)} placeholder="e.g. dennis-the-menace" />
+            <input
+              className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
+              value={societySlug}
+              onChange={(e) => setSocietySlug(e.target.value)}
+              placeholder="e.g. dennis-the-menace"
+            />
             <div className="text-xs text-neutral-500 mt-1">
-              Golfers will use: <span className="font-mono">{SITE_URL}</span><span className="font-mono">{societySlug || "your-slug"}</span>
+              Golfers will use: <span className="font-mono">{SITE_URL}</span>
+              <span className="font-mono">{societySlug || "your-slug"}</span>
             </div>
           </div>
 
           <div>
             <label className="block text-xs font-bold text-neutral-700 mb-1">First season</label>
-            <input className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white" value={seasonLabel} onChange={(e) => setSeasonLabel(e.target.value)} placeholder="e.g. 2026" />
+            <input
+              className="w-full px-3 py-2 rounded-xl border border-neutral-200 bg-white"
+              value={seasonLabel}
+              onChange={(e) => setSeasonLabel(e.target.value)}
+              placeholder="e.g. 2026"
+            />
           </div>
 
           {msg ? <InfoBox>{msg}</InfoBox> : null}
 
           <div className="grid grid-cols-2 gap-2">
-            <button type="button" className="rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold" onClick={() => {
-              setMsg("");
-              if (options.length > 0) { setCreateOpen(false); setPickerOpen(true); }
-              else { signOut(); }
-            }} disabled={creating}>
+            <button
+              type="button"
+              className="rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold"
+              onClick={() => {
+                setMsg("");
+                if (options.length > 0) {
+                  setCreateOpen(false);
+                  setPickerOpen(true);
+                } else {
+                  signOut();
+                }
+              }}
+              disabled={creating}
+            >
               Back
             </button>
             <button type="submit" className="rounded-xl bg-black text-white px-4 py-2.5 font-bold disabled:opacity-60" disabled={creating}>
@@ -627,7 +736,11 @@ if (isUpdatePw) {
     <CenterCard>
       <div className="text-2xl font-black text-neutral-900">Captain portal</div>
       <div className="text-sm text-neutral-600 mt-2">{session.user.email}</div>
-      {msg ? <div className="mt-3"><InfoBox>{msg}</InfoBox></div> : null}
+      {msg ? (
+        <div className="mt-3">
+          <InfoBox>{msg}</InfoBox>
+        </div>
+      ) : null}
 
       <div className="mt-4 space-y-2">
         <button className="w-full rounded-xl border border-neutral-200 bg-white px-4 py-2.5 font-bold" onClick={() => { setMsg(""); setCreateOpen(true); }}>
