@@ -2943,32 +2943,52 @@ function SeasonPicker({ seasonsDef, seasonYear, setSeasonYear, leagueTitle }) {
     const baseLower = base.toLowerCase();
     const brandLower = brand.toLowerCase();
     if (brand && !baseLower.includes(brandLower)) base = `${brand} ${base}`.trim();
-return base || id || "";
+    return base || id || "";
   };
 
-  const opts = (seasonsDef || []).map((s) => ({
-    id: String(s.season_id),
-    label: labelFor(s),
-  }));
+  const normalizeSeasonId = React.useCallback((value) => {
+    const v = String(value ?? "").trim();
+    if (!v) return "";
+    if (v.toLowerCase() === "all") return "All";
+    const m = v.match(/^(\d{4})-(\d{2})$/);
+    if (m) return `${m[1]}-${String(Number(m[1].slice(0, 2) + m[2]))}`;
+    return v;
+  }, []);
 
-  // Prevent the <select> going blank when the current value isn't in the options.
-  const cur = String(seasonYear ?? "");
+  const opts = React.useMemo(() => (
+    (seasonsDef || []).map((s) => ({
+      id: String(s?.season_id ?? "").trim(),
+      label: labelFor(s),
+    }))
+  ), [seasonsDef, leagueTitle]);
+
+  const cur = normalizeSeasonId(seasonYear);
   const fallback = (opts[0]?.id) ? String(opts[0].id) : "All";
-  const safeValue = (cur && (cur.toLowerCase() === 'all' || opts.some(o => o.id === cur))) ? cur : fallback;
+  const matchedOpt = opts.find((o) => normalizeSeasonId(o.id) === cur);
+  const resolvedValue = matchedOpt ? matchedOpt.id : (cur === "All" ? "All" : fallback);
 
   React.useEffect(() => {
-    const cur2 = String(seasonYear ?? "");
-    const ok = (cur2 && (cur2.toLowerCase() === 'all' || opts.some(o => o.id === cur2)));
-    if (!ok && safeValue && safeValue !== cur2) setSeasonYear(safeValue);
-  }, [seasonsDef]);
+    const next = String(resolvedValue || "");
+    const prev = String(seasonYear ?? "");
+    if (!next || next === prev) return;
+
+    const prevNorm = normalizeSeasonId(prev);
+    const nextNorm = normalizeSeasonId(next);
+    const prevExists = prevNorm === "All" || opts.some((o) => normalizeSeasonId(o.id) === prevNorm);
+
+    if (!prevExists || (prevNorm && nextNorm && prevNorm !== nextNorm && !matchedOpt)) {
+      setSeasonYear(next);
+    }
+  }, [seasonYear, resolvedValue, opts, matchedOpt, normalizeSeasonId, setSeasonYear]);
 
   return (
     <div className="flex items-center gap-2">
       <span className="text-xs font-black tracking-widest uppercase text-neutral-500">Season</span>
       <div className="select-wrap">
         <select
+          key={String(resolvedValue || "All")}
           className="select-premium"
-          value={String(safeValue || "")}
+          value={String(resolvedValue || "All")}
           onChange={(e) => setSeasonYear(e.target.value)}
         >
           <option value="All">All</option>
