@@ -5108,7 +5108,8 @@ for (let s = 0; s < sims; s++){
 
 
           const handicapYearExportRows = useMemo(() => {
-            const currentYear = new Date().getFullYear();
+            // Build this from FULL season/current-year history, not from the current event table.
+            // The current event rows are only used as an overlay for today's players.
             const currentByKey = new Map();
             (Array.isArray(computed) ? computed : []).forEach((r) => {
               const k = normalizeName(String(r?.name || ""));
@@ -5126,7 +5127,6 @@ for (let s = 0; s < sims; s++){
                   name: nm,
                   roundsThisYear: 0,
                   latestDateMs: NaN,
-                  latestHI: NaN,
                   previousHI: NaN,
                   newHI: NaN,
                   change: NaN,
@@ -5137,12 +5137,6 @@ for (let s = 0; s < sims; s++){
                 byKey.get(k).name = nm;
               }
               return byKey.get(k);
-            };
-
-            const sameCalendarYear = (ms) => {
-              const n = Number(ms);
-              if (!Number.isFinite(n)) return true; // season data may already be pre-filtered; keep it rather than accidentally dropping players
-              try { return new Date(n).getFullYear() === currentYear; } catch { return true; }
             };
 
             const readPts = (obj) => {
@@ -5165,50 +5159,103 @@ for (let s = 0; s < sims; s++){
               return NaN;
             };
 
-            const addSeasonRound = (name, roundObj, playerObj) => {
-              const row = ensure(name);
-              if (!row) return;
-              const dateMs = Number(roundObj?.dateMs ?? playerObj?.dateMs);
-              if (!sameCalendarYear(dateMs)) return;
-              row.roundsThisYear += 1;
-              const hi = readHI(roundObj, playerObj);
-              const pts = readPts(roundObj);
-              if (!Number.isFinite(row.latestDateMs) || (Number.isFinite(dateMs) && dateMs >= row.latestDateMs) || !Number.isFinite(row.latestHI)) {
-                row.latestDateMs = Number.isFinite(dateMs) ? dateMs : row.latestDateMs;
-                if (Number.isFinite(hi)) row.latestHI = hi;
-                if (Number.isFinite(pts)) row.points = pts;
+            const readDateMs = (obj, fallbackObj) => {
+              const n = Number(obj?.dateMs ?? obj?.date_ms ?? fallbackObj?.dateMs ?? fallbackObj?.date_ms);
+              if (Number.isFinite(n)) return n;
+              return NaN;
+            };
+
+            const roundPlayersFromSeasonRound = (sr) => {
+              const parsed = sr?.parsed ? sr.parsed : sr;
+              const players = Array.isArray(parsed?.players) ? parsed.players : [];
+              const dateMs = readDateMs(sr, parsed);
+              return { parsed, players, dateMs };
+            };
+
+            const winnerKeysForPlayers = (players) => {
+              try {
+                const rows = (Array.isArray(players) ? players : [])
+                  .map((p) => ({
+                    key: normalizeName(String(p?.name || p?.player || p?.playerName || "")),
+                    pts: readPts(p),
+                    back9: Number(p?.back9 ?? p?.backNine ?? 0),
+                  }))
+                  .filter(x => x.key && Number.isFinite(x.pts))
+                  .sort((a,b) => (b.pts - a.pts) || (b.back9 - a.back9));
+                if (!rows.length) return new Set();
+                const top = rows[0];
+                return new Set(rows.filter(r => r.pts === top.pts && r.back9 === top.back9).map(r => r.key));
+              } catch {
+                return new Set();
               }
             };
 
-            if (seasonModelAll && Array.isArray(seasonModelAll.players)) {
+            const addPlayerRound = (name, roundObj, playerObj, meta) => {
+              const row = ensure(name);
+              if (!row) return;
+              const dateMs = readDateMs(roundObj, playerObj);
+              const hi = readHI(roundObj, playerObj);
+              const pts = readPts(roundObj);
+              const back9 = Number(roundObj?.back9 ?? playerObj?.back9 ?? 0);
+              const gender = String(roundObj?.gender ?? playerObj?.gender ?? playerObj?.sex ?? "M");
+              const isWinner = !!meta?.isWinner;
+              const nextCalc = (Number.isFinite(hi) && Number.isFinite(pts))
+                ? computeNewExactHandicap(hi, gender, pts, back9, isWinner)
+                : null;
+              const next = Number(nextCalc?.nextExact);
+
+              row.roundsThisYear += 1;
+              const isLatest = !Number.isFinite(row.latestDateMs)
+                || (Number.isFinite(dateMs) && dateMs >= row.latestDateMs)
+                || (!Number.isFinite(dateMs) && !Number.isFinite(row.previousHI));
+
+              if (isLatest) {
+                row.latestDateMs = Number.isFinite(dateMs) ? dateMs : row.latestDateMs;
+                if (Number.isFinite(hi)) row.previousHI = hi;
+                if (Number.isFinite(next)) row.newHI = Math.max(0, Math.min(36, next));
+                else if (Number.isFinite(hi)) row.newHI = hi;
+                if (Number.isFinite(pts)) row.points = pts;
+                row.source = meta?.source || "Season";
+              }
+            };
+
+            // PRIMARY SOURCE: selected current season/year rounds. This is what makes the export/table include everyone, not just this game.
+            const seasonRoundSource = Array.isArray(seasonRoundsFiltered) && seasonRoundsFiltered.length
+              ? seasonRoundsFiltered
+              : (Array.isArray(seasonRoundsAll) ? seasonRoundsAll : []);
+
+            (seasonRoundSource || []).forEach((sr) => {
+              const { players, dateMs } = roundPlayersFromSeasonRound(sr);
+              if (!players.length) return;
+              const winners = winnerKeysForPlayers(players);
+              players.forEach((pl) => {
+                const nm = String(pl?.name || pl?.player || pl?.playerName || "").trim();
+                const k = normalizeName(nm);
+                if (!k || isTeamLike(nm)) return;
+                addPlayerRound(nm, { ...pl, dateMs }, pl, { source: "Season", isWinner: winners.has(k) });
+              });
+            });
+
+            // SECONDARY SOURCE: Player Progress model, in case the season rounds weren't loaded yet.
+            if (!byKey.size && seasonModelAll && Array.isArray(seasonModelAll.players)) {
               (seasonModelAll.players || []).forEach((p) => {
                 const nm = String(p?.name || p?.player || p?.playerName || "").trim();
                 const series = Array.isArray(p?.series) ? p.series : [];
                 if (series.length) {
-                  series.forEach((r) => addSeasonRound(nm, r, p));
+                  series.forEach((r) => addPlayerRound(nm, r, p, { source: "Season" }));
                 } else {
                   const row = ensure(nm);
                   const hi = readHI(p, null);
-                  if (row && Number.isFinite(hi)) row.latestHI = hi;
+                  if (row && Number.isFinite(hi)) {
+                    row.previousHI = hi;
+                    row.newHI = hi;
+                  }
                 }
               });
             }
 
-            if ((!byKey.size) && Array.isArray(seasonRoundsAll)) {
-              (seasonRoundsAll || []).forEach((sr) => {
-                const parsed = sr?.parsed ? sr.parsed : sr;
-                const dateMs = Number(sr?.dateMs ?? parsed?.dateMs);
-                if (!sameCalendarYear(dateMs)) return;
-                const players = Array.isArray(parsed?.players) ? parsed.players : [];
-                players.forEach((pl) => {
-                  const nm = String(pl?.name || pl?.player || pl?.playerName || "").trim();
-                  addSeasonRound(nm, { ...pl, dateMs }, pl);
-                });
-              });
-            }
-
-            // Overlay current round calculations so players in today's imported round get their true new HI/change.
-            currentByKey.forEach((r, k) => {
+            // Overlay current round calculations so today's imported players get their exact preview values.
+            currentByKey.forEach((r) => {
               const row = ensure(r?.name);
               if (!row) return;
               const start = Number(r?.startExact);
@@ -5217,20 +5264,20 @@ for (let s = 0; s < sims; s++){
               if (Number.isFinite(start)) row.previousHI = start;
               if (Number.isFinite(next)) row.newHI = Math.max(0, Math.min(36, next));
               if (Number.isFinite(pts)) row.points = pts;
-              row.source = "Current round";
+              row.source = row.roundsThisYear > 0 ? "Season + current round" : "Current round";
               if (row.roundsThisYear < 1) row.roundsThisYear = 1;
             });
 
             const rows = Array.from(byKey.values()).map((row) => {
-              const prev = Number.isFinite(row.previousHI) ? row.previousHI : row.latestHI;
-              const next = Number.isFinite(row.newHI) ? row.newHI : prev;
+              const prev = Number(row.previousHI);
+              const next = Number(row.newHI);
               const change = (Number.isFinite(prev) && Number.isFinite(next)) ? (next - prev) : NaN;
               return { ...row, previousHI: prev, newHI: next, change };
-            }).filter((r) => r.name && (r.roundsThisYear > 0 || currentByKey.has(r.key)));
+            }).filter((r) => r.name && r.roundsThisYear > 0);
 
             rows.sort((a, b) => String(a.name).localeCompare(String(b.name)));
             return rows;
-          }, [computed, seasonModelAll, seasonRoundsAll]);
+          }, [computed, seasonModelAll, seasonRoundsAll, seasonRoundsFiltered]);
 
 return (
             <section className="content-card p-4 md:p-6">
@@ -5336,7 +5383,7 @@ return (
                     <div>
                       <div className="text-xs uppercase tracking-wider text-neutral-500 font-bold">Handicap Changes</div>
                       <div className="text-lg font-black text-neutral-900">Current-year handicap export</div>
-                      <div className="text-xs text-neutral-500 mt-1">The table shows this round; Export CSV includes every player found in the current year/season data.</div>
+                      <div className="text-xs text-neutral-500 mt-1">The table and export both include every player found in the current year/season data.</div>
                     </div>
                     <button
                       type="button"
@@ -5387,9 +5434,9 @@ return (
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-neutral-100">
-                        {computed.map((r, i) => {
-                          const start = Number(r.startExact);
-                          const next = Number(r.nextExactNum);
+                        {(handicapYearExportRows || []).map((r, i) => {
+                          const start = Number(r.previousHI);
+                          const next = Number(r.newHI);
                           const delta = (Number.isFinite(start) && Number.isFinite(next)) ? (next - start) : NaN;
                           const cut = Number.isFinite(delta) && delta < 0;
                           const rise = Number.isFinite(delta) && delta > 0;
@@ -5398,7 +5445,7 @@ return (
                               <td className="py-3 px-3 font-bold text-neutral-900">{r.name}</td>
                               <td className="py-3 px-3 text-right font-mono text-neutral-700">{Number.isFinite(start) ? start.toFixed(1) : "—"}</td>
                               <td className="py-3 px-3 text-right font-mono text-neutral-700">{r.points ?? "—"}</td>
-                              <td className="py-3 px-3 text-right font-mono font-black text-neutral-900">{Number.isFinite(next) ? next.toFixed(1) : (r.nextDisplay ?? "—")}</td>
+                              <td className="py-3 px-3 text-right font-mono font-black text-neutral-900">{Number.isFinite(next) ? next.toFixed(1) : "—"}</td>
                               <td className={`py-3 px-3 text-right font-mono font-black ${cut ? "text-emerald-700" : rise ? "text-rose-700" : "text-neutral-500"}`}>
                                 {Number.isFinite(delta) ? `${delta > 0 ? "+" : ""}${delta.toFixed(1)}` : "—"}
                               </td>
