@@ -685,6 +685,65 @@ function useReportNextHcapMode(defaultMode="den") {
   return [mode, setMode];
 }
 
+// --- Shared handicap change helpers (used by Event leaderboard + exports) ---
+function fmtHandicapChange(start, next) {
+  const a = Number(start);
+  const b = Number(next);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return "—";
+  const d = Math.round((b - a) * 10) / 10;
+  if (Math.abs(d) < 0.05) return "No change";
+  return (d > 0 ? "+" : "") + d.toFixed(1);
+}
+
+function handicapChangeTone(start, next) {
+  const a = Number(start);
+  const b = Number(next);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return "text-neutral-500";
+  const d = b - a;
+  if (Math.abs(d) < 0.05) return "text-neutral-500";
+  // Lower handicap is a cut, higher handicap is an increase.
+  return d < 0 ? "text-emerald-700" : "text-amber-700";
+}
+
+function handicapChangeLabel(start, next) {
+  const a = Number(start);
+  const b = Number(next);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return "Unknown";
+  const d = b - a;
+  if (Math.abs(d) < 0.05) return "No change";
+  return d < 0 ? "Cut" : "Increase";
+}
+
+function exportHandicapChangesCsv(rows) {
+  try {
+    const arr = Array.isArray(rows) ? rows : [];
+    const header = ["Player", "Previous HI", "New HI", "Change", "Points", "Position", "Result"];
+    const body = arr.map(r => [
+      r.name,
+      Number.isFinite(Number(r.startExact)) ? Number(r.startExact).toFixed(1) : "",
+      Number.isFinite(Number(r.nextExactNum)) ? Number(r.nextExactNum).toFixed(1) : (r.nextDisplay || ""),
+      r.hcapChangeDisplay || fmtHandicapChange(r.startExact, r.nextExactNum),
+      Number.isFinite(Number(r.points)) ? Number(r.points) : "",
+      Number.isFinite(Number(r.position)) ? Number(r.position) : "",
+      r.hcapChangeLabel || handicapChangeLabel(r.startExact, r.nextExactNum),
+    ]);
+    const csv = [header].concat(body)
+      .map(row => row.map(csvEscape).join(","))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "handicap_changes.csv";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1500);
+  } catch (e) {
+    try { toast("Could not export handicap changes"); } catch {}
+  }
+}
+
 
 const POINTS_TABLE = [20, 17, 15, 13, 11, 9, 8, 7, 6, 5, 4, 3, 2, 1];
 const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
@@ -2943,52 +3002,32 @@ function SeasonPicker({ seasonsDef, seasonYear, setSeasonYear, leagueTitle }) {
     const baseLower = base.toLowerCase();
     const brandLower = brand.toLowerCase();
     if (brand && !baseLower.includes(brandLower)) base = `${brand} ${base}`.trim();
-    return base || id || "";
+return base || id || "";
   };
 
-  const normalizeSeasonId = React.useCallback((value) => {
-    const v = String(value ?? "").trim();
-    if (!v) return "";
-    if (v.toLowerCase() === "all") return "All";
-    const m = v.match(/^(\d{4})-(\d{2})$/);
-    if (m) return `${m[1]}-${String(Number(m[1].slice(0, 2) + m[2]))}`;
-    return v;
-  }, []);
+  const opts = (seasonsDef || []).map((s) => ({
+    id: String(s.season_id),
+    label: labelFor(s),
+  }));
 
-  const opts = React.useMemo(() => (
-    (seasonsDef || []).map((s) => ({
-      id: String(s?.season_id ?? "").trim(),
-      label: labelFor(s),
-    }))
-  ), [seasonsDef, leagueTitle]);
-
-  const cur = normalizeSeasonId(seasonYear);
+  // Prevent the <select> going blank when the current value isn't in the options.
+  const cur = String(seasonYear ?? "");
   const fallback = (opts[0]?.id) ? String(opts[0].id) : "All";
-  const matchedOpt = opts.find((o) => normalizeSeasonId(o.id) === cur);
-  const resolvedValue = matchedOpt ? matchedOpt.id : (cur === "All" ? "All" : fallback);
+  const safeValue = (cur && (cur.toLowerCase() === 'all' || opts.some(o => o.id === cur))) ? cur : fallback;
 
   React.useEffect(() => {
-    const next = String(resolvedValue || "");
-    const prev = String(seasonYear ?? "");
-    if (!next || next === prev) return;
-
-    const prevNorm = normalizeSeasonId(prev);
-    const nextNorm = normalizeSeasonId(next);
-    const prevExists = prevNorm === "All" || opts.some((o) => normalizeSeasonId(o.id) === prevNorm);
-
-    if (!prevExists || (prevNorm && nextNorm && prevNorm !== nextNorm && !matchedOpt)) {
-      setSeasonYear(next);
-    }
-  }, [seasonYear, resolvedValue, opts, matchedOpt, normalizeSeasonId, setSeasonYear]);
+    const cur2 = String(seasonYear ?? "");
+    const ok = (cur2 && (cur2.toLowerCase() === 'all' || opts.some(o => o.id === cur2)));
+    if (!ok && safeValue && safeValue !== cur2) setSeasonYear(safeValue);
+  }, [seasonsDef]);
 
   return (
     <div className="flex items-center gap-2">
       <span className="text-xs font-black tracking-widest uppercase text-neutral-500">Season</span>
       <div className="select-wrap">
         <select
-          key={String(resolvedValue || "All")}
           className="select-premium"
-          value={String(resolvedValue || "All")}
+          value={String(safeValue || "")}
           onChange={(e) => setSeasonYear(e.target.value)}
         >
           <option value="All">All</option>
@@ -5105,6 +5144,26 @@ for (let s = 0; s < sims; s++){
               gap,
             };
           }, [computed, nextHcapMode, oddsMaxRounds, seasonRoundsAll, seasonRoundsFiltered, seasonModelAll]);
+
+          const handicapChanges = useMemo(() => {
+            const rows = Array.isArray(computed) ? computed.slice() : [];
+            const decorated = rows.map(r => {
+              const start = Number(r.startExact);
+              const next = Number(r.nextExactNum);
+              const delta = (Number.isFinite(start) && Number.isFinite(next)) ? Math.round((next - start) * 10) / 10 : NaN;
+              return { ...r, deltaHcap: delta };
+            });
+            const changed = decorated.filter(r => Number.isFinite(r.deltaHcap) && Math.abs(r.deltaHcap) >= 0.05);
+            const cuts = changed.filter(r => r.deltaHcap < 0).sort((a,b) => a.deltaHcap - b.deltaHcap);
+            const increases = changed.filter(r => r.deltaHcap > 0).sort((a,b) => b.deltaHcap - a.deltaHcap);
+            return {
+              changed,
+              cuts,
+              increases,
+              biggest: changed.slice().sort((a,b) => Math.abs(b.deltaHcap) - Math.abs(a.deltaHcap)).slice(0, 8),
+            };
+          }, [computed]);
+
 return (
             <section className="content-card p-4 md:p-6">
               <Breadcrumbs items={[{ label: "Round Leaderboard" }]} />
@@ -5166,18 +5225,79 @@ return (
                  </div>
               </div>
 
+              <div className="mb-4 rounded-2xl border border-neutral-200 bg-white/90 shadow-sm overflow-hidden">
+                <div className="p-4 border-b border-neutral-100 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <div className="text-xs uppercase tracking-wider text-neutral-500 font-black">Handicap changes</div>
+                    <div className="text-sm text-neutral-600 mt-1">
+                      Quick view of the new handicap after this round, using the selected preview mode above.
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={() => exportHandicapChangesCsv(computed)}
+                    disabled={!computed || !computed.length}
+                    title="Download current handicap changes as a CSV"
+                  >
+                    Export CSV
+                  </button>
+                </div>
+
+                <div className="p-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div className="rounded-2xl bg-emerald-50 border border-emerald-100 p-3">
+                    <div className="text-xs uppercase tracking-wider text-emerald-700 font-black">Cuts</div>
+                    <div className="mt-1 text-2xl font-black text-emerald-900">{handicapChanges.cuts.length}</div>
+                    <div className="mt-1 text-xs text-emerald-800">
+                      {handicapChanges.cuts[0]
+                        ? `${handicapChanges.cuts[0].name}: ${Number(handicapChanges.cuts[0].startExact).toFixed(1)} → ${Number(handicapChanges.cuts[0].nextExactNum).toFixed(1)}`
+                        : "No handicap cuts from this round."}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-amber-50 border border-amber-100 p-3">
+                    <div className="text-xs uppercase tracking-wider text-amber-700 font-black">Increases</div>
+                    <div className="mt-1 text-2xl font-black text-amber-900">{handicapChanges.increases.length}</div>
+                    <div className="mt-1 text-xs text-amber-800">
+                      {handicapChanges.increases[0]
+                        ? `${handicapChanges.increases[0].name}: ${Number(handicapChanges.increases[0].startExact).toFixed(1)} → ${Number(handicapChanges.increases[0].nextExactNum).toFixed(1)}`
+                        : "No handicap increases from this round."}
+                    </div>
+                  </div>
+
+                  <div className="rounded-2xl bg-neutral-50 border border-neutral-200 p-3">
+                    <div className="text-xs uppercase tracking-wider text-neutral-500 font-black">Changed</div>
+                    <div className="mt-1 text-2xl font-black text-neutral-900">{handicapChanges.changed.length}</div>
+                    <div className="mt-1 text-xs text-neutral-600">
+                      {handicapChanges.changed.length ? "Sorted below on the leaderboard and available as CSV." : "Everyone remains on the same handicap."}
+                    </div>
+                  </div>
+                </div>
+
+                {handicapChanges.biggest.length ? (
+                  <div className="px-4 pb-4 flex flex-wrap gap-2">
+                    {handicapChanges.biggest.map(r => (
+                      <span key={r.name} className="pill-mini bg-white border-neutral-200 text-neutral-700">
+                        {r.name}: <b className={r.hcapChangeClass}>{Number(r.startExact).toFixed(1)} → {Number(r.nextExactNum).toFixed(1)} ({r.hcapChangeDisplay})</b>
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+
               <div className="overflow-auto table-wrap">
                 <table className="min-w-full text-sm table-zebra">
                   <thead className="bg-neutral-50">
                     <tr className="text-left text-xs uppercase tracking-wide text-neutral-500 font-bold border-b border-squab-200">
                       <th className="py-3 px-3">#</th>
                       <th className="py-3 px-3">Name</th>
-                      <th className="py-3 px-3 text-center">Index</th>
+                      <th className="py-3 px-3 text-center">Previous HI</th>
                       <th className="py-3 px-3 bg-squab-50 text-squab-800 border-x border-squab-200 text-center w-24">Playing</th>
                       <th className="py-3 px-3 text-center">Pts</th>
                       <th className="py-3 px-3 text-center">Back9</th>
                       <th className="py-3 px-3 text-center">League</th>
-                      <th className="py-3 px-3 bg-neutral-100 border-l border-neutral-200 text-neutral-700 text-right">{nextHcapMode === 'whs' ? "Diff" : "Next"}</th>
+                      <th className="py-3 px-3 text-center">Change</th>
+                      <th className="py-3 px-3 bg-neutral-100 border-l border-neutral-200 text-neutral-700 text-right">New HI</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-100">
@@ -5190,7 +5310,8 @@ return (
                         <td className="py-3 px-3 text-center font-bold text-neutral-800">{r.points}</td>
                         <td className="py-3 px-3 text-center text-neutral-500 text-xs">{r.back9}</td>
                         <td className="py-3 px-3 text-center font-bold text-emerald-600">{r.leaguePoints}</td>
-                        <td className="py-3 px-3 text-right bg-neutral-50 border-l border-neutral-200 font-mono text-neutral-700 font-bold">{r.nextDisplay}</td>
+                        <td className={`py-3 px-3 text-center font-mono font-bold ${r.hcapChangeClass || "text-neutral-500"}`}>{r.hcapChangeDisplay || "—"}</td>
+                        <td className="py-3 px-3 text-right bg-neutral-50 border-l border-neutral-200 font-mono text-neutral-900 font-black">{r.nextDisplay}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -16962,12 +17083,53 @@ if (_cur.length) groups.push(_cur);
 
 
 
-              out.push({ ...r, position: start, leaguePoints: ptsValue, isWinner, nextDisplay, nextExactNum, formN, oddsRoundsUsed, oddsSimilarRounds, oddsUsedSimilar, formMu, formTrend, formSigma, expPts });
+              const hcapChangeDisplay = fmtHandicapChange(r.startExact, nextExactNum);
+              const hcapChangeLabelText = handicapChangeLabel(r.startExact, nextExactNum);
+              const hcapChangeClass = handicapChangeTone(r.startExact, nextExactNum);
+
+              out.push({
+                ...r,
+                position: start,
+                leaguePoints: ptsValue,
+                isWinner,
+                nextDisplay,
+                nextExactNum,
+                hcapChangeDisplay,
+                hcapChangeLabel: hcapChangeLabelText,
+                hcapChangeClass,
+                formN,
+                oddsRoundsUsed,
+                oddsSimilarRounds,
+                oddsUsedSimilar,
+                formMu,
+                formTrend,
+                formSigma,
+                expPts
+              });
             }
             pos += g.length;
           }
           return out.sort((a, b) => a.position - b.position);
         }, [players, courseTees, courseSlope, courseRating, startHcapMode, nextHcapMode, seasonRounds, oddsMaxRounds]);
+
+        const handicapChanges = useMemo(() => {
+          const rows = Array.isArray(computed) ? computed.slice() : [];
+          const decorated = rows.map(r => {
+            const start = Number(r.startExact);
+            const next = Number(r.nextExactNum);
+            const delta = (Number.isFinite(start) && Number.isFinite(next)) ? Math.round((next - start) * 10) / 10 : NaN;
+            return { ...r, deltaHcap: delta };
+          });
+          const changed = decorated.filter(r => Number.isFinite(r.deltaHcap) && Math.abs(r.deltaHcap) >= 0.05);
+          const cuts = changed.filter(r => r.deltaHcap < 0).sort((a,b) => a.deltaHcap - b.deltaHcap);
+          const increases = changed.filter(r => r.deltaHcap > 0).sort((a,b) => b.deltaHcap - a.deltaHcap);
+          return {
+            changed,
+            cuts,
+            increases,
+            biggest: changed.slice().sort((a,b) => Math.abs(b.deltaHcap) - Math.abs(a.deltaHcap)).slice(0, 8),
+          };
+        }, [computed]);
 
         
 async function ensureSeasonExists(client) {
