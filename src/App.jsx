@@ -16723,11 +16723,47 @@ function pickDefaultSeasonId(seasonsArr) {
   try {
     const arr = Array.isArray(seasonsArr) ? seasonsArr.slice() : [];
     if (!arr.length) return "";
+
     const today = new Date();
     const todayIso = today.toISOString().slice(0, 10);
     const currentYear = String(today.getFullYear());
 
-    // 1) Prefer the season whose date range contains today.
+    const dateMs = (s, keyA, keyB) => {
+      const raw = String(s?.[keyA] || s?.[keyB] || "").slice(0, 10);
+      const ms = raw ? Date.parse(raw + "T00:00:00Z") : NaN;
+      return Number.isFinite(ms) ? ms : 0;
+    };
+
+    const textOf = (s) => `${String(s?.season_id || "")} ${String(s?.label || "")}`.trim();
+
+    // IMPORTANT DEFAULT RULE:
+    // When there is a calendar-year league like "2026", prefer it over a spanning
+    // legacy/winter season like "2025-2026". The old logic used "contains today",
+    // which could select the previous spanning season even when a 2026 league exists.
+    const rankedCurrentYear = arr
+      .map((s, idx) => {
+        const id = String(s?.season_id || "").trim();
+        const label = String(s?.label || "").trim();
+        const text = textOf(s);
+        const start = String(s?.start_date || s?.startDate || "").slice(0, 10);
+        const end = String(s?.end_date || s?.endDate || "").slice(0, 10);
+
+        let rank = 0;
+        if (id === currentYear || label === currentYear) rank = 100;
+        else if (start.startsWith(currentYear)) rank = 90;
+        else if (id.startsWith(currentYear) || label.startsWith(currentYear)) rank = 80;
+        else if (s?.is_active && text.includes(currentYear)) rank = 70;
+        else if (text.includes(currentYear)) rank = 60;
+        else if (end.startsWith(currentYear)) rank = 50;
+
+        return { s, idx, rank, startMs: dateMs(s, "start_date", "startDate") };
+      })
+      .filter(x => x.rank > 0)
+      .sort((a, b) => (b.rank - a.rank) || (b.startMs - a.startMs) || (a.idx - b.idx));
+
+    if (rankedCurrentYear[0]?.s?.season_id) return String(rankedCurrentYear[0].s.season_id);
+
+    // Fallback only when there is no current-year season at all.
     const containsToday = arr.find((s) => {
       const a = String(s?.start_date || s?.startDate || "").slice(0, 10);
       const b = String(s?.end_date || s?.endDate || "").slice(0, 10);
@@ -16735,15 +16771,6 @@ function pickDefaultSeasonId(seasonsArr) {
     });
     if (containsToday?.season_id) return String(containsToday.season_id);
 
-    // 2) Then prefer an explicitly active season in the current calendar year.
-    const activeThisYear = arr.find((s) => s?.is_active && String(s?.season_id || s?.label || "").includes(currentYear));
-    if (activeThisYear?.season_id) return String(activeThisYear.season_id);
-
-    // 3) Then prefer the newest season mentioning the current year (e.g. 2026 or 2025-2026).
-    const thisYear = arr.find((s) => String(s?.season_id || s?.label || "").includes(currentYear));
-    if (thisYear?.season_id) return String(thisYear.season_id);
-
-    // 4) Fallback to active, then newest by start_date (query already normally returns this order).
     const active = arr.find((s) => s?.is_active) || arr[0];
     return active?.season_id ? String(active.season_id) : "";
   } catch {
@@ -16763,26 +16790,12 @@ async function fetchSeasons(c) {
   const defaultSeasonId = pickDefaultSeasonId(arr) || activeId;
   setActiveSeasonId(defaultSeasonId || activeId);
 
-  // Default the league/season selector to the latest current-year season (e.g. 2026),
-  // rather than sticking on an older still-valid season. If the user later changes it,
-  // this fetch does not keep fighting them unless their value is blank/All/outdated-by-year.
-  setLeagueSeasonYear(prev => {
-    const p = String(prev || '');
-    const curYear = String(new Date().getFullYear());
-    const valid = arr.some(x => String(x?.season_id || '') === p);
-    if (!p || p.toLowerCase() === 'all' || !valid) return defaultSeasonId || activeId || 'All';
-    if (defaultSeasonId && !String(p).includes(curYear) && String(defaultSeasonId).includes(curYear)) return defaultSeasonId;
-    return p;
-  });
-
-  setSeasonYear(prev => {
-    const p = String(prev || '');
-    const curYear = String(new Date().getFullYear());
-    const valid = arr.some(x => String(x?.season_id || '') === p);
-    if (!p || p.toLowerCase() === 'all' || !valid) return defaultSeasonId || activeId || 'All';
-    if (defaultSeasonId && !String(p).includes(curYear) && String(defaultSeasonId).includes(curYear)) return defaultSeasonId;
-    return p;
-  });
+  // On app load, always default both season selectors to the newest current-year league
+  // (for example 2026). Do not keep an older valid value such as 2025-2026 just because
+  // it is still in the dropdown or was previously viewed.
+  const selectedDefaultSeason = defaultSeasonId || activeId || 'All';
+  setLeagueSeasonYear(selectedDefaultSeason);
+  setSeasonYear(selectedDefaultSeason);
 }
 
 async function refreshShared(c) {
