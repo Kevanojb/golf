@@ -5220,9 +5220,9 @@ for (let s = 0; s < sims; s++){
             };
 
             // PRIMARY SOURCE: selected current season/year rounds. This is what makes the export/table include everyone, not just this game.
-            const seasonRoundSource = Array.isArray(seasonRoundsFiltered) && seasonRoundsFiltered.length
-              ? seasonRoundsFiltered
-              : (Array.isArray(seasonRoundsAll) ? seasonRoundsAll : []);
+            const seasonRoundSource = Array.isArray(seasonRoundsAll) && seasonRoundsAll.length
+              ? seasonRoundsAll
+              : (Array.isArray(seasonRoundsFiltered) ? seasonRoundsFiltered : []);
 
             (seasonRoundSource || []).forEach((sr) => {
               const { players, dateMs } = roundPlayersFromSeasonRound(sr);
@@ -15276,6 +15276,13 @@ const seasonRoundsAllForOdds = React.useMemo(() => {
   try { return Array.isArray(seasonRounds) ? seasonRounds.slice() : []; } catch { return []; }
 }, [seasonRounds]);
 
+// Model for the selected season with NO round-limit applied.
+// Used by handicap export so absent players still get their latest handicap from their own last 2026 round.
+const seasonModelInSeasonAll = React.useMemo(() => {
+  try { return buildSeasonPlayerModel(seasonRoundsInSeasonAll, { hiddenKeys: hiddenKeySet }); }
+  catch { try { return buildSeasonPlayerModel(seasonRoundsInSeasonAll); } catch { return null; } }
+}, [seasonRoundsInSeasonAll, hiddenPlayerKeys]);
+
 // Winner Odds should respect admin-hidden players, but should NOT be constrained by season filters.
 const seasonModelOddsAll = React.useMemo(() => {
   try { return buildSeasonPlayerModel(seasonRoundsAllForOdds, { hiddenKeys: hiddenKeySet }); }
@@ -16711,6 +16718,39 @@ function seasonIdForDateMs(ms, seasonsArr) {
   } catch { return null; }
 }
 
+
+function pickDefaultSeasonId(seasonsArr) {
+  try {
+    const arr = Array.isArray(seasonsArr) ? seasonsArr.slice() : [];
+    if (!arr.length) return "";
+    const today = new Date();
+    const todayIso = today.toISOString().slice(0, 10);
+    const currentYear = String(today.getFullYear());
+
+    // 1) Prefer the season whose date range contains today.
+    const containsToday = arr.find((s) => {
+      const a = String(s?.start_date || s?.startDate || "").slice(0, 10);
+      const b = String(s?.end_date || s?.endDate || "").slice(0, 10);
+      return a && b && todayIso >= a && todayIso < b;
+    });
+    if (containsToday?.season_id) return String(containsToday.season_id);
+
+    // 2) Then prefer an explicitly active season in the current calendar year.
+    const activeThisYear = arr.find((s) => s?.is_active && String(s?.season_id || s?.label || "").includes(currentYear));
+    if (activeThisYear?.season_id) return String(activeThisYear.season_id);
+
+    // 3) Then prefer the newest season mentioning the current year (e.g. 2026 or 2025-2026).
+    const thisYear = arr.find((s) => String(s?.season_id || s?.label || "").includes(currentYear));
+    if (thisYear?.season_id) return String(thisYear.season_id);
+
+    // 4) Fallback to active, then newest by start_date (query already normally returns this order).
+    const active = arr.find((s) => s?.is_active) || arr[0];
+    return active?.season_id ? String(active.season_id) : "";
+  } catch {
+    return "";
+  }
+}
+
 async function fetchSeasons(c) {
   c = c || client; if (!c) return;
   const r = await c.from('seasons').select('competition,season_id,label,start_date,end_date,is_active').eq('competition', COMPETITION).eq('society_id', SOCIETY_ID).eq('society_id', SOCIETY_ID).order('start_date', { ascending: false });
@@ -16720,11 +16760,27 @@ async function fetchSeasons(c) {
   try { if (typeof window !== 'undefined') window.__dslSeasonsDef = arr; } catch(e) {}
   const active = arr.find(x => x.is_active) || arr[0];
   const activeId = active ? String(active.season_id) : '';
-  setActiveSeasonId(activeId);
-  // If user hasn't chosen, default to active
+  const defaultSeasonId = pickDefaultSeasonId(arr) || activeId;
+  setActiveSeasonId(defaultSeasonId || activeId);
+
+  // Default the league/season selector to the latest current-year season (e.g. 2026),
+  // rather than sticking on an older still-valid season. If the user later changes it,
+  // this fetch does not keep fighting them unless their value is blank/All/outdated-by-year.
   setLeagueSeasonYear(prev => {
     const p = String(prev || '');
-    if (!p || p.toLowerCase() === 'all') return activeId || 'All';
+    const curYear = String(new Date().getFullYear());
+    const valid = arr.some(x => String(x?.season_id || '') === p);
+    if (!p || p.toLowerCase() === 'all' || !valid) return defaultSeasonId || activeId || 'All';
+    if (defaultSeasonId && !String(p).includes(curYear) && String(defaultSeasonId).includes(curYear)) return defaultSeasonId;
+    return p;
+  });
+
+  setSeasonYear(prev => {
+    const p = String(prev || '');
+    const curYear = String(new Date().getFullYear());
+    const valid = arr.some(x => String(x?.season_id || '') === p);
+    if (!p || p.toLowerCase() === 'all' || !valid) return defaultSeasonId || activeId || 'All';
+    if (defaultSeasonId && !String(p).includes(curYear) && String(defaultSeasonId).includes(curYear)) return defaultSeasonId;
     return p;
   });
 }
@@ -17620,7 +17676,7 @@ if (res.error) toast("Error: " + res.error.message);
   />
 )}
 {view === "past" && <PastEvents sharedGroups={sharedGroups} loadShared={loadShared} setView={setView} />}
-              {view === "event" && <EventScreen computed={computedFiltered} setView={setView} courseSlope={courseSlope} setCourseSlope={setCourseSlope} courseRating={courseRating} setCourseRating={setCourseRating} startHcapMode={startHcapMode} setStartHcapMode={setStartHcapMode} nextHcapMode={nextHcapMode} setNextHcapMode={setNextHcapMode} oddsMaxRounds={oddsMaxRounds} setOddsMaxRounds={setOddsMaxRounds} seasonRoundsFiltered={seasonRoundsFiltered} seasonRoundsAll={seasonRoundsAllForOdds} seasonModelAll={seasonModelOddsAll} oddsExcludeMap={oddsExcludeMap} oddsExcludedNames={oddsExcludedNames} setExcludeFromOdds={setExcludeFromOdds} />}
+              {view === "event" && <EventScreen computed={computedFiltered} setView={setView} courseSlope={courseSlope} setCourseSlope={setCourseSlope} courseRating={courseRating} setCourseRating={setCourseRating} startHcapMode={startHcapMode} setStartHcapMode={setStartHcapMode} nextHcapMode={nextHcapMode} setNextHcapMode={setNextHcapMode} oddsMaxRounds={oddsMaxRounds} setOddsMaxRounds={setOddsMaxRounds} seasonRoundsFiltered={seasonRoundsFiltered} seasonRoundsAll={seasonRoundsInSeasonAll} seasonModelAll={seasonModelInSeasonAll} oddsExcludeMap={oddsExcludeMap} oddsExcludedNames={oddsExcludedNames} setExcludeFromOdds={setExcludeFromOdds} />}
               {view === "banter" && <BanterStats computed={computedFiltered} setView={setView} />}
               {view === "guide" && <GuideView setView={setView} leagueTitle={LEAGUE_TITLE} />}
               {view === "mirror_read" && <MirrorReadView setView={setView} />}
