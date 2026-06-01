@@ -2955,12 +2955,25 @@ function SeasonPicker({ seasonsDef, seasonYear, setSeasonYear, leagueTitle }) {
     return v;
   }, []);
 
-  const opts = React.useMemo(() => (
-    (seasonsDef || []).map((s) => ({
-      id: String(s?.season_id ?? "").trim(),
-      label: labelFor(s),
-    }))
-  ), [seasonsDef, leagueTitle]);
+  const opts = React.useMemo(() => {
+    const baseOpts = (seasonsDef || [])
+      .map((s) => ({
+        id: String(s?.season_id ?? "").trim(),
+        label: labelFor(s),
+      }))
+      .filter((o) => o.id);
+
+    // Always offer the real calendar year as its own league/filter option.
+    // This prevents a spanning season such as "2025-2026" from being selected
+    // when the organiser expects only games actually dated in 2026.
+    const currentYear = String(new Date().getFullYear());
+    const hasCalendarYear = baseOpts.some((o) => normalizeSeasonId(o.id) === currentYear);
+    if (!hasCalendarYear) {
+      const brand = String(leagueTitle || "Den Society League").trim();
+      baseOpts.unshift({ id: currentYear, label: `${brand} ${currentYear}`.trim() });
+    }
+    return baseOpts;
+  }, [seasonsDef, leagueTitle, normalizeSeasonId]);
 
   const cur = normalizeSeasonId(seasonYear);
   const fallback = (opts[0]?.id) ? String(opts[0].id) : "All";
@@ -15221,7 +15234,23 @@ const handleAdminPassword = React.useCallback((pw) => {
             return "";
           };
           if (yearSel && yearSel !== "All") {
-            arr = arr.filter(r => _sidFor(r) === String(yearSel));
+            const selected = String(yearSel).trim();
+
+            // Calendar-year leagues (e.g. "2026") must be filtered by the actual
+            // round/event date, not by a database season range. Otherwise a season
+            // like "2025-2026" can incorrectly pull in 2025 games or hide 2026-only data.
+            if (/^\d{4}$/.test(selected)) {
+              arr = arr.filter((r) => {
+                const ms = Number.isFinite(Number(r?.dateMs)) ? Number(r.dateMs)
+                  : (Number.isFinite(Number(r?.parsed?.dateMs)) ? Number(r.parsed.dateMs)
+                  : (r?.date ? _coerceDateMs(r.date) : NaN));
+                if (!Number.isFinite(ms)) return false;
+                try { return String(new Date(ms).getFullYear()) === selected; }
+                catch { return false; }
+              });
+            } else {
+              arr = arr.filter(r => _sidFor(r) === selected);
+            }
           }
           if (limitSel && limitSel !== "All") {
             const n = Number(limitSel);
@@ -16761,7 +16790,19 @@ function pickDefaultSeasonId(seasonsArr) {
       .filter(x => x.rank > 0)
       .sort((a, b) => (b.rank - a.rank) || (b.startMs - a.startMs) || (a.idx - b.idx));
 
-    if (rankedCurrentYear[0]?.s?.season_id) return String(rankedCurrentYear[0].s.season_id);
+    // Prefer a true calendar-year league, e.g. season_id/label exactly "2026".
+    const exactCalendarYear = arr.find((s) => {
+      const id = String(s?.season_id || "").trim();
+      const label = String(s?.label || "").trim();
+      return id === currentYear || label === currentYear;
+    });
+    if (exactCalendarYear?.season_id) return String(exactCalendarYear.season_id);
+
+    // If no explicit calendar-year row exists, still default the UI to the
+    // calendar year itself. _filterSeasonRounds treats "2026" as a date-year
+    // filter, so this gives exactly the 2026 games rather than a mixed
+    // 2025-2026 season.
+    return currentYear;
 
     // Fallback only when there is no current-year season at all.
     const containsToday = arr.find((s) => {
