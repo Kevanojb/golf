@@ -17613,20 +17613,132 @@ if (res.error) toast("Error: " + res.error.message);
           return names.map(name => ({ name }));
         }, [season, seasonModelAll, computed]);
 
-        // Apply admin player visibility filter to League standings + all derived views
-        const seasonFiltered = React.useMemo(() => {
+        // Build League/Eclectic standings directly from scanned CSV rounds when a calendar year
+        // like "2026" is selected. This prevents a spanning DB season such as "2025-2026"
+        // from mixing old-year games into the displayed 2026 league.
+        function _buildSeasonTableFromCalendarRounds(roundsIn) {
+          const next = {};
+
+          const _sumPts = (arr, s, e) => (Array.isArray(arr) ? arr.slice(s, e) : []).reduce((x, y) => x + (Number(y) || 0), 0);
+          const _roundCbKey = (r) => {
+            const ph = Array.isArray(r?.perHole) ? r.perHole : [];
+            const b9 = _sumPts(ph, 9, 18);
+            const l6 = _sumPts(ph, 12, 18);
+            const l3 = _sumPts(ph, 15, 18);
+            return `${Number(r?.points) || 0}|${b9}|${l6}|${l3}`;
+          };
+
+          const _cmpCountback = (a, b) => {
+            const pa = Array.isArray(a?.perHole) ? a.perHole : [];
+            const pb = Array.isArray(b?.perHole) ? b.perHole : [];
+            const aB9 = _sumPts(pa, 9, 18), bB9 = _sumPts(pb, 9, 18);
+            if (aB9 !== bB9) return bB9 - aB9;
+            const aL6 = _sumPts(pa, 12, 18), bL6 = _sumPts(pb, 12, 18);
+            if (aL6 !== bL6) return bL6 - aL6;
+            const aL3 = _sumPts(pa, 15, 18), bL3 = _sumPts(pb, 15, 18);
+            if (aL3 !== bL3) return bL3 - aL3;
+            return 0;
+          };
+
+          for (const rr of (Array.isArray(roundsIn) ? roundsIn : [])) {
+            const ps = Array.isArray(rr?.parsed?.players) ? rr.parsed.players : [];
+            if (!ps.length) continue;
+
+            const rows = ps
+              .filter((p) => p && p.name && !isTeamLike(p.name))
+              .map((p, idx) => ({
+                idx,
+                name: String(p.name || '').trim(),
+                points: Number(p.points) || 0,
+                perHole: Array.isArray(p.perHole) ? p.perHole.map(v => Number(v) || 0) : Array(18).fill(0),
+              }));
+
+            const base = rows.slice().sort((a, b) => (b.points - a.points) || _cmpCountback(a, b));
+            const groups = [];
+            let cur = [];
+            let prevKey = null;
+            for (const r of base) {
+              const k = _roundCbKey(r);
+              if (prevKey === null || k === prevKey) cur.push(r);
+              else { groups.push(cur); cur = [r]; }
+              prevKey = k;
+            }
+            if (cur.length) groups.push(cur);
+
+            let pos = 1;
+            for (const g of groups) {
+              const leaguePts = POINTS_TABLE[pos - 1] || 0;
+              for (const r of g) {
+                const prev = next[r.name] || {
+                  name: r.name,
+                  totalPoints: 0,
+                  events: 0,
+                  bestPerHole: Array(18).fill(0),
+                  eclecticTotal: 0,
+                  bestEventPoints: 0,
+                  bestHolePoints: 0,
+                };
+
+                const eventPerHole = (Array.isArray(r.perHole) ? r.perHole : []).map((v) => Math.max(0, Math.min(6, Number(v) || 0)));
+                const bestPerHole = (prev.bestPerHole || Array(18).fill(0)).map((v, i) => Math.max(Number(v) || 0, Number(eventPerHole[i]) || 0));
+                const eclecticTotal = bestPerHole.reduce((s, v) => s + (Number(v) || 0), 0);
+                const bestEvent = Math.max(Number(prev.bestEventPoints) || 0, Number(r.points) || 0);
+                const bestHole = Math.max(Number(prev.bestHolePoints) || 0, ...eventPerHole);
+
+                next[r.name] = {
+                  name: r.name,
+                  totalPoints: (Number(prev.totalPoints) || 0) + leaguePts,
+                  events: (Number(prev.events) || 0) + 1,
+                  bestEventPoints: bestEvent,
+                  bestHolePoints: bestHole,
+                  eclecticTotal,
+                  bestPerHole,
+                };
+              }
+              pos += g.length;
+            }
+          }
+          return next;
+        }
+
+        const calendarYearLeagueSeason = React.useMemo(() => {
           try {
-            if (!hiddenKeySet || hiddenKeySet.size === 0) return season;
+            const y = String(leagueSeasonYear || '').trim();
+            if (!/^\d{4}$/.test(y)) return null;
+            const roundsForYear = _filterSeasonRounds(Array.isArray(seasonRounds) ? seasonRounds : [], y, 'All');
+            return _buildSeasonTableFromCalendarRounds(roundsForYear);
+          } catch (e) { return null; }
+        }, [leagueSeasonYear, seasonRounds]);
+
+        // Load the CSV ledger automatically when League/Eclectic needs a real calendar-year view.
+        React.useEffect(() => {
+          try {
+            const y = String(leagueSeasonYear || '').trim();
+            if ((view === 'standings' || view === 'eclectic') && /^\d{4}$/.test(y) && (!Array.isArray(seasonRounds) || !seasonRounds.length) && !seasonLoading) {
+              loadAllGamesAndBuildPlayerModel({ afterView: view });
+            }
+          } catch (e) {}
+        }, [view, leagueSeasonYear, seasonRounds, seasonLoading]);
+
+        // Apply admin player visibility filter to League standings + all derived views.
+        // For calendar-year selections (e.g. 2026), use the CSV-built season so the League
+        // and Eclectic pages contain ONLY games actually dated in that year.
+        const seasonFiltered = React.useMemo(() => {
+          const sourceSeason = (calendarYearLeagueSeason && /^\d{4}$/.test(String(leagueSeasonYear || '').trim()))
+            ? calendarYearLeagueSeason
+            : season;
+          try {
+            if (!hiddenKeySet || hiddenKeySet.size === 0) return sourceSeason;
             const out = {};
-            Object.entries(season || {}).forEach(([k, v]) => {
+            Object.entries(sourceSeason || {}).forEach(([k, v]) => {
               const name = (v && v.name) ? String(v.name) : String(k || "");
               const key = normalizeName(name);
               if (key && hiddenKeySet.has(key)) return;
               out[k] = v;
             });
             return out;
-          } catch (e) { return season; }
-        }, [season, hiddenKeySet]);
+          } catch (e) { return sourceSeason; }
+        }, [season, calendarYearLeagueSeason, leagueSeasonYear, hiddenKeySet]);
 
         const computedFiltered = React.useMemo(() => {
           try {
