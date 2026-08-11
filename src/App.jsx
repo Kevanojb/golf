@@ -12728,6 +12728,56 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
         >
           Generate Season Report
         </button>
+
+        <button
+          className="btn-secondary"
+          onClick={() => {
+            try{
+              const model = seasonModel;
+              const lens = (localStorage.getItem("dsl_lens") || "pointsField");
+              const uiCohort = (window.__dslUiState && window.__dslUiState.cohortMode) ? window.__dslUiState.cohortMode : null;
+              const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
+                : ((window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode)
+                    ? window.__dslSeasonReportParams.comparatorMode
+                    : "band");
+
+              window.__dslSeasonReportParams = {
+                model: seasonModel,
+                playerName: seasonPlayer,
+                yearLabel: seasonYear,
+                seasonLimit: seasonLimit,
+                scoringMode,
+                lensMode: lens,
+                comparatorMode: comparator
+              };
+
+              const r = PR_generateSeasonReportHTML({
+                model: seasonModel,
+                playerName: seasonPlayer,
+                yearLabel: seasonYear,
+                seasonLimit: seasonLimit,
+                scoringMode,
+                lensMode: lens,
+                comparatorMode: comparator
+              });
+
+              if (!r || !r.ok) {
+                alert(r?.error || "Could not generate PDF report.");
+                return;
+              }
+
+              // Show exactly the same report on screen, then export that rendered report.
+              PR_showInlineSeasonReport(r.htmlFragment || r.html);
+              setTimeout(() => PR_downloadSeasonReportPDF(), 100);
+            }catch(e){
+              console.error(e);
+              alert("Could not generate PDF report.");
+            }
+          }}
+          title="Generate and download the season report as PDF"
+        >
+          Download PDF Report
+        </button>
         </div>
 
 
