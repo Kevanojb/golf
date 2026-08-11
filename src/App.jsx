@@ -10908,6 +10908,7 @@ function PR_showInlineSeasonReport(htmlFragment){
           <div style="position:sticky; top:0; background:#fff; border-bottom:1px solid #e5e7eb; padding:12px 14px; display:flex; align-items:center; gap:10px; z-index:2;">
             <div style="font-weight:900; color:#0f172a;">Season Report</div>
             <div style="flex:1"></div>
+            <button id="PR_downloadSeasonReportPDF" style="border:1px solid #0f172a; background:#0f172a; color:#fff; border-radius:10px; padding:8px 10px; font-weight:800; cursor:pointer;">Download PDF</button>
             <button id="PR_closeSeasonReport" style="border:1px solid #e5e7eb; background:#fff; border-radius:10px; padding:8px 10px; font-weight:800; cursor:pointer;">Close</button>
           </div>
           <div id="PR_seasonReportBody" style="padding:16px 18px;"></div>
@@ -10916,6 +10917,7 @@ function PR_showInlineSeasonReport(htmlFragment){
       document.body.appendChild(wrap);
       wrap.addEventListener("click", (e)=>{ if(e.target===wrap) PR_hideInlineSeasonReport(); });
       wrap.querySelector("#PR_closeSeasonReport").addEventListener("click", PR_hideInlineSeasonReport);
+      wrap.querySelector("#PR_downloadSeasonReportPDF").addEventListener("click", PR_downloadSeasonReportPDF);
     }
     wrap.querySelector("#PR_seasonReportBody").innerHTML = htmlFragment;
     PR_wireSeasonReportControls();
@@ -11548,6 +11550,140 @@ const worstDeltaCls = (__effComparatorMode==="par") ? "PRneutral" : "PRbad";
   return { ok:true, htmlFragment, html: htmlFragment, filename: `SeasonReport_${PR_safeSlug(playerName||'player')}.html` };
 
 }
+
+
+function PR_loadHtml2Pdf(){
+  return new Promise((resolve, reject) => {
+    try{
+      if(typeof window !== "undefined" && typeof window.html2pdf === "function"){
+        resolve(window.html2pdf);
+        return;
+      }
+
+      const existing = document.getElementById("PR_html2pdf_script");
+      if(existing){
+        const started = Date.now();
+        const timer = setInterval(() => {
+          if(typeof window.html2pdf === "function"){
+            clearInterval(timer);
+            resolve(window.html2pdf);
+          } else if(Date.now() - started > 15000){
+            clearInterval(timer);
+            reject(new Error("Timed out loading PDF library."));
+          }
+        }, 100);
+        return;
+      }
+
+      const script = document.createElement("script");
+      script.id = "PR_html2pdf_script";
+      script.src = "https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js";
+      script.async = true;
+      script.onload = () => {
+        if(typeof window.html2pdf === "function") resolve(window.html2pdf);
+        else reject(new Error("PDF library loaded but html2pdf was unavailable."));
+      };
+      script.onerror = () => reject(new Error("Could not load PDF library."));
+      document.head.appendChild(script);
+    }catch(e){
+      reject(e);
+    }
+  });
+}
+
+async function PR_downloadSeasonReportPDF(){
+  const btn = document.getElementById("PR_downloadSeasonReportPDF");
+  let holder = null;
+
+  try{
+    const body = document.getElementById("PR_seasonReportBody");
+    if(!body){
+      alert("Generate the season report first.");
+      return;
+    }
+
+    if(btn){
+      btn.disabled = true;
+      btn.textContent = "Creating PDF...";
+      btn.style.opacity = "0.65";
+    }
+
+    const html2pdf = await PR_loadHtml2Pdf();
+
+    const params = (typeof window !== "undefined" && window.__dslSeasonReportParams)
+      ? window.__dslSeasonReportParams
+      : {};
+
+    const safePart = (value, fallback) => {
+      const raw = String(value || fallback || "");
+      if(typeof PR_safeSlug === "function"){
+        try { return PR_safeSlug(raw); } catch(e) {}
+      }
+      return raw
+        .trim()
+        .replace(/[^a-z0-9_-]+/gi, "_")
+        .replace(/^_+|_+$/g, "") || fallback || "report";
+    };
+
+    const filename = `SeasonReport_${safePart(params.playerName, "player")}_${safePart(params.yearLabel, "season")}.pdf`;
+
+    holder = document.createElement("div");
+    holder.style.position = "fixed";
+    holder.style.left = "-100000px";
+    holder.style.top = "0";
+    holder.style.width = "794px";
+    holder.style.background = "#ffffff";
+
+    const clone = body.cloneNode(true);
+    clone.removeAttribute("id");
+    clone.style.width = "760px";
+    clone.style.maxWidth = "760px";
+    clone.style.background = "#ffffff";
+    clone.style.padding = "16px";
+    clone.style.boxSizing = "border-box";
+
+    holder.appendChild(clone);
+    document.body.appendChild(holder);
+
+    await html2pdf()
+      .set({
+        margin: [8, 8, 8, 8],
+        filename,
+        image: { type: "jpeg", quality: 0.98 },
+        html2canvas: {
+          scale: 2,
+          useCORS: true,
+          backgroundColor: "#ffffff",
+          logging: false
+        },
+        jsPDF: {
+          unit: "mm",
+          format: "a4",
+          orientation: "portrait"
+        },
+        pagebreak: {
+          mode: ["css", "legacy"],
+          avoid: [".PRbox", "tr"]
+        }
+      })
+      .from(clone)
+      .save();
+
+  }catch(e){
+    try { console.error("PDF export failed:", e); } catch(_) {}
+    alert("Could not create the PDF report.");
+  }finally{
+    if(holder && holder.parentNode){
+      try { holder.parentNode.removeChild(holder); } catch(e) {}
+    }
+    if(btn){
+      btn.disabled = false;
+      btn.textContent = "Download PDF";
+      btn.style.opacity = "1";
+    }
+  }
+}
+
 
 function PR_downloadHtmlFile(filename, html){
   try{
