@@ -10980,6 +10980,8 @@ function PR_regenSeasonReport(mode){
 function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit, scoringMode, lensMode, comparatorMode }){
   var peerBand = "—"; // ensure defined for template safety
   var peerMin = NaN, peerMax = NaN, peerPlayersN = 0;
+  var __usingVirtualSameHcapPeer = false;
+  var __virtualSameHcapCH = NaN;
 
   const players = Array.isArray(model?.players) ? model.players : [];
   let cur = players.find(p => String(p?.name||"") === String(playerName||"")) || players[0] || null;
@@ -11086,6 +11088,190 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
 
 
   
+
+  // ------------------------------------------------------------
+  // SOLO ROUND FALLBACK: virtual player with the SAME playing/course handicap.
+  // If the selected report window contains exactly one round and that event
+  // contains no other real players, benchmark the entire report against a
+  // computer-generated player who plays every hole to net par.
+  //
+  // Stableford: virtual player = 2 pts on every played hole (36 for 18 holes).
+  // Gross: virtual gross = par + strokes received on that hole.
+  // ------------------------------------------------------------
+  function __roundsMatchEvent(a, b){
+    if (!a || !b) return false;
+    const af = String(a?.file || "");
+    const bf = String(b?.file || "");
+    if (af && bf) return af === bf;
+
+    const ai = Number(a?.idx);
+    const bi = Number(b?.idx);
+    const ac = String(a?.courseName || a?.course || "").trim().toLowerCase();
+    const bc = String(b?.courseName || b?.course || "").trim().toLowerCase();
+    if (Number.isFinite(ai) && Number.isFinite(bi) && ai === bi && ac && bc && ac === bc) return true;
+
+    const am = Number(a?.dateMs);
+    const bm = Number(b?.dateMs);
+    return Number.isFinite(am) && Number.isFinite(bm) && am === bm && (!ac || !bc || ac === bc);
+  }
+
+  function __eventRealPeerCount(round){
+    if (!round) return 0;
+    let n = 0;
+    for (const p of players){
+      if (!p || String(p?.name||"") === String(cur?.name||"")) continue;
+      const s = Array.isArray(p?.series) ? p.series : [];
+      if (s.some(r => __roundsMatchEvent(r, round))) n++;
+    }
+    return n;
+  }
+
+  function __virtualYardBand(y){
+    const n = Number(y);
+    if (!Number.isFinite(n)) return "Unknown";
+    if (n < 150) return "<150";
+    if (n <= 200) return "150–200";
+    if (n <= 350) return "201–350";
+    if (n <= 420) return "351–420";
+    return "420+";
+  }
+
+  function __virtualSIBand(si){
+    const n = Number(si);
+    if (!Number.isFinite(n)) return "Unknown";
+    if (n <= 6) return "1–6";
+    if (n <= 12) return "7–12";
+    return "13–18";
+  }
+
+  function __virtualStrokesReceived(courseHcp, si){
+    const ch = Math.max(0, Math.round(Number(courseHcp) || 0));
+    const s = Number(si);
+    if (!Number.isFinite(s) || s < 1 || s > 18) return 0;
+    const full = Math.floor(ch / 18);
+    const rem = ch % 18;
+    return full + ((rem > 0 && s <= rem) ? 1 : 0);
+  }
+
+  function __makeVirtualSameHcapAgg(round){
+    if (!round) return null;
+
+    const pars = Array.isArray(round?.parsArr) ? round.parsArr
+      : Array.isArray(round?.parsPerHole) ? round.parsPerHole
+      : Array.isArray(round?.pars) ? round.pars
+      : [];
+    const sis = Array.isArray(round?.siArr) ? round.siArr
+      : Array.isArray(round?.siPerHole) ? round.siPerHole
+      : Array.isArray(round?.si) ? round.si
+      : [];
+    const yards = Array.isArray(round?.yardsArr) ? round.yardsArr
+      : Array.isArray(round?.yardsPerHole) ? round.yardsPerHole
+      : Array.isArray(round?.yards) ? round.yards
+      : [];
+    const pts = Array.isArray(round?.perHole) ? round.perHole : [];
+    const gross = Array.isArray(round?.grossPerHole) ? round.grossPerHole : [];
+
+    // round.hcap is the playing/course handicap stored by the season model.
+    const ch = Number.isFinite(Number(round?.hcap)) ? Number(round.hcap)
+      : Number.isFinite(Number(round?.playingHcap)) ? Number(round.playingHcap)
+      : Number.isFinite(Number(round?.courseHandicap)) ? Number(round.courseHandicap)
+      : NaN;
+
+    const mkPts = () => ({ holes:0, pts:0, wipes:0, p0:0, p1:0, p2:0, p3:0, p4:0, p5:0 });
+    const mkGross = () => ({ holes:0, val:0, sumSq:0, bogeyPlus:0, parOrBetter:0, birdieOrBetter:0, doublePlus:0, eaglePlus:0, birdies:0, pars:0, bogeys:0, doubles:0, triplesPlus:0 });
+
+    const addPts = (a, v) => {
+      const x = Number(v);
+      if (!a || !Number.isFinite(x)) return;
+      a.holes += 1; a.pts += x;
+      const k = Math.max(0, Math.min(5, Math.floor(x)));
+      a["p"+k] = (a["p"+k] || 0) + 1;
+      if (x === 0) a.wipes += 1;
+    };
+
+    const addGross = (a, over) => {
+      const d = Number(over);
+      if (!a || !Number.isFinite(d)) return;
+      a.holes += 1; a.val += d; a.sumSq += d*d;
+      if (d >= 1) a.bogeyPlus += 1;
+      if (d <= 0) a.parOrBetter += 1;
+      if (d <= -1) a.birdieOrBetter += 1;
+      if (d >= 2) a.doublePlus += 1;
+      if (d <= -2) a.eaglePlus += 1;
+      if (d === -1) a.birdies += 1;
+      if (d === 0) a.pars += 1;
+      if (d === 1) a.bogeys += 1;
+      if (d === 2) a.doubles += 1;
+      if (d >= 3) a.triplesPlus += 1;
+    };
+
+    const out = {
+      totals: mkPts(),
+      totalsGross: mkGross(),
+      byPar: {"Par 3":mkPts(),"Par 4":mkPts(),"Par 5":mkPts(),"Unknown":mkPts()},
+      byParGross: {"Par 3":mkGross(),"Par 4":mkGross(),"Par 5":mkGross(),"Unknown":mkGross()},
+      bySI: {"1–6":mkPts(),"7–12":mkPts(),"13–18":mkPts(),"Unknown":mkPts()},
+      bySIGross: {"1–6":mkGross(),"7–12":mkGross(),"13–18":mkGross(),"Unknown":mkGross()},
+      byYards: {},
+      byYardsGross: {}
+    };
+
+    const n = Math.min(18, Math.max(pars.length, sis.length, yards.length, pts.length, gross.length));
+    for (let i=0; i<n; i++){
+      const par = Number(pars[i]);
+      const si = Number(sis[i]);
+      const y = Number(yards[i]);
+
+      // Only include holes actually present/played on the imported card.
+      const played = Number.isFinite(Number(pts[i])) || (Number.isFinite(Number(gross[i])) && Number(gross[i]) > 0);
+      if (!played) continue;
+
+      const parKey = (par===3 || par===4 || par===5) ? `Par ${par}` : "Unknown";
+      const siKey = __virtualSIBand(si);
+      const yKey = __virtualYardBand(y);
+
+      out.byYards[yKey] ||= mkPts();
+      out.byYardsGross[yKey] ||= mkGross();
+
+      // A same-handicap golfer playing exactly to handicap makes net par:
+      // 2 Stableford points on every hole.
+      addPts(out.totals, 2);
+      addPts(out.byPar[parKey], 2);
+      addPts(out.bySI[siKey], 2);
+      addPts(out.byYards[yKey], 2);
+
+      // Gross equivalent of net par = par + handicap strokes received.
+      const recv = __virtualStrokesReceived(ch, si);
+      addGross(out.totalsGross, recv);
+      addGross(out.byParGross[parKey], recv);
+      addGross(out.bySIGross[siKey], recv);
+      addGross(out.byYardsGross[yKey], recv);
+    }
+
+    out.__virtualSameHcap = true;
+    out.__courseHcp = ch;
+    return out;
+  }
+
+  const __selectedRoundsForSolo = __filterSeries(cur?.series);
+  const __selectedSoloRound = (__selectedRoundsForSolo.length === 1) ? __selectedRoundsForSolo[0] : null;
+  const __selectedSoloPeerCount = __selectedSoloRound ? __eventRealPeerCount(__selectedSoloRound) : 0;
+
+  if (__effComparatorMode !== "par" && __selectedSoloRound && __selectedSoloPeerCount === 0){
+    const va = __makeVirtualSameHcapAgg(__selectedSoloRound);
+    if (va && Number(va?.totals?.holes || va?.totalsGross?.holes || 0) > 0){
+      __peerAgg = va;
+      __usingVirtualSameHcapPeer = true;
+      __virtualSameHcapCH = Number(va.__courseHcp);
+      peerBand = Number.isFinite(__virtualSameHcapCH)
+        ? `Virtual same-handicap player (CH ${Math.round(__virtualSameHcapCH)})`
+        : "Virtual same-handicap player";
+      peerPlayersN = 1;
+      peerMin = NaN;
+      peerMax = NaN;
+    }
+  }
+
 // Peer group baseline — if we didn't get a snapshot, fall back to the existing report logic.
   let peers = players.filter(p => p && String(p?.name||"") !== String(cur?.name||""));
   if (!__peerAgg) {
@@ -11424,6 +11610,41 @@ const postRoundIntel = (() => {
     });
     const isGrossMode = String(scoringMode) === "gross";
 
+    // Is this latest round a true solo event?
+    // Match by source file first; fall back to round index/date + course.
+    const sameEvent = (a,b) => {
+      if (!a || !b) return false;
+      const af=String(a?.file||""), bf=String(b?.file||"");
+      if (af && bf) return af===bf;
+      const ai=Number(a?.idx), bi=Number(b?.idx);
+      const ac=String(a?.courseName||a?.course||"").trim().toLowerCase();
+      const bc=String(b?.courseName||b?.course||"").trim().toLowerCase();
+      if (Number.isFinite(ai)&&Number.isFinite(bi)&&ai===bi&&ac&&bc&&ac===bc) return true;
+      const am=Number(a?.dateMs), bm=Number(b?.dateMs);
+      return Number.isFinite(am)&&Number.isFinite(bm)&&am===bm&&(!ac||!bc||ac===bc);
+    };
+
+    const realEventPeers = (players || []).filter(p => {
+      if (!p || String(p?.name||"")===String(cur?.name||"")) return false;
+      const s=Array.isArray(p?.series)?p.series:[];
+      return s.some(r=>sameEvent(r,latest));
+    });
+    const isSoloRound = realEventPeers.length===0;
+
+    // The season model stores playing/course handicap as r.hcap.
+    const virtualCH = Number.isFinite(Number(latest?.hcap)) ? Number(latest.hcap)
+      : Number.isFinite(Number(latest?.playingHcap)) ? Number(latest.playingHcap)
+      : Number.isFinite(Number(latest?.courseHandicap)) ? Number(latest.courseHandicap)
+      : NaN;
+
+    const virtualStrokesReceived = (ch,si) => {
+      const h=Math.max(0,Math.round(Number(ch)||0));
+      const s=Number(si);
+      if(!Number.isFinite(s)||s<1||s>18) return 0;
+      const full=Math.floor(h/18), rem=h%18;
+      return full+((rem>0&&s<=rem)?1:0);
+    };
+
     const arrPars = r => {
       const x = r && (r.parsPerHole || r.parPerHole || r.parsArr || r.pars || r.parHoles || r.par);
       return Array.isArray(x) ? x.map(Number) : [];
@@ -11488,6 +11709,16 @@ const postRoundIntel = (() => {
     };
 
     const expectationFor = (par,si,y) => {
+      // SOLO ROUND: compare with a computer-generated player on the SAME
+      // playing/course handicap. Net par = 2 Stableford pts on every hole.
+      // In gross mode, net par translates to par + strokes received.
+      if (isSoloRound){
+        if (isGrossMode){
+          return {expected:virtualStrokesReceived(virtualCH,si),samples:18,virtual:true};
+        }
+        return {expected:2,samples:18,virtual:true};
+      }
+
       const sb=siBand(si), yb=yardBand(y);
       const tiers=[
         {rows:obs.filter(o=>o.par===par&&o.siBand===sb&&o.yardBand===yb),min:4},
@@ -11546,11 +11777,18 @@ const postRoundIntel = (() => {
       : NaN;
 
     const scale=Math.max(0.5,coverage/18);
-    let verdict="About your normal game";
-    if(roundDelta>=2.5*scale) verdict="Clearly better than your recent normal";
-    else if(roundDelta>=0.75*scale) verdict="Slightly better than your recent normal";
-    else if(roundDelta<=-2.5*scale) verdict="A costly day compared with your recent normal";
-    else if(roundDelta<=-0.75*scale) verdict="Slightly below your recent normal";
+    let verdict = isSoloRound ? "Played approximately to your handicap target" : "About your normal game";
+    if (isSoloRound){
+      if(roundDelta>=2.5*scale) verdict="Clearly beat your handicap target";
+      else if(roundDelta>=0.75*scale) verdict="Slightly beat your handicap target";
+      else if(roundDelta<=-2.5*scale) verdict="Well below your handicap target";
+      else if(roundDelta<=-0.75*scale) verdict="Slightly below your handicap target";
+    } else {
+      if(roundDelta>=2.5*scale) verdict="Clearly better than your recent normal";
+      else if(roundDelta>=0.75*scale) verdict="Slightly better than your recent normal";
+      else if(roundDelta<=-2.5*scale) verdict="A costly day compared with your recent normal";
+      else if(roundDelta<=-0.75*scale) verdict="Slightly below your recent normal";
+    }
 
     const cats=new Map();
     const add=(label,h)=>{
@@ -11592,13 +11830,16 @@ const postRoundIntel = (() => {
       .sort((a,b)=>a.impact-b.impact);
 
     const biggestLever=allHist[0]||null;
-    const confidence=(prior.length>=8&&coverage>=12)?"HIGH":(prior.length>=4&&coverage>=9)?"MEDIUM":"LOW";
+    const confidence = isSoloRound ? "HIGH"
+      : ((prior.length>=8&&coverage>=12)?"HIGH":(prior.length>=4&&coverage>=9)?"MEDIUM":"LOW");
 
     let oneJob="Keep the card clean: avoid the one or two holes that turn a normal round into a poor one.";
     let oneJobWhy="No single weakness is strong enough yet to justify a more specific prescription.";
     if(weakness){
       oneJob=`Prioritise ${weakness.label}.`;
-      oneJobWhy="It was the clearest scoring weakness in the latest round against your own recent expectation.";
+      oneJobWhy = isSoloRound
+        ? "It was the clearest area where you lost ground to the virtual same-handicap player."
+        : "It was the clearest scoring weakness in the latest round against your own recent expectation.";
     } else if(biggestLever){
       oneJob=`Prioritise ${String(biggestLever.label||biggestLever.key||"your biggest recurring leak")}.`;
       oneJobWhy=`It is the largest recurring historical deficit at about ${Math.abs(biggestLever.impact).toFixed(1)} ${isGrossMode?"strokes":"points"} per round.`;
@@ -11609,7 +11850,7 @@ const postRoundIntel = (() => {
     return {
       ok:true,priorRounds:prior.length,coverage,roundDelta,actualTotal,expectedTotal,
       verdict,costly,damageShare,weakness,strength,dna,dnaWhy,biggestLever,
-      confidence,oneJob,oneJobWhy,isGrossMode,eventName
+      confidence,oneJob,oneJobWhy,isGrossMode,eventName,isSoloRound,virtualCH
     };
   } catch(e) {
     console.error("Post-round intelligence failed:",e);
@@ -11673,27 +11914,35 @@ const postRoundIntel = (() => {
       Benchmark: <b>${PR_escapeHtml(peerBand||"—")}</b>
       · <b>${PR_num(rounds,0)}</b> rounds
       · <b>${PR_num(holes,0)}</b> holes analysed
-      <span class="PRpill" style="margin-left:8px;">${(String(scoringMode)==="gross" ? "Gross strokes" : "Stableford points")} vs ${(__effComparatorMode==="par" ? "Par baseline" : (__effComparatorMode==="field" ? "Field" : "Handicap band"))}</span>
-      ${__effComparatorMode==="par" ? "" : `<span class="PRpill" style="margin-left:8px;">Peers: <b>${peerPlayersN}</b>${Number.isFinite(peerMin)&&Number.isFinite(peerMax)?` · Avg hcap range <b>${peerMin.toFixed(1)}–${peerMax.toFixed(1)}</b>`:""}</span>`}
+      <span class="PRpill" style="margin-left:8px;">${(String(scoringMode)==="gross" ? "Gross strokes" : "Stableford points")} vs ${(__usingVirtualSameHcapPeer ? "Virtual same-handicap player" : (__effComparatorMode==="par" ? "Par baseline" : (__effComparatorMode==="field" ? "Field" : "Handicap band")))}</span>
+      ${__effComparatorMode==="par" ? "" : (__usingVirtualSameHcapPeer
+        ? `<span class="PRpill" style="margin-left:8px;">Computer benchmark: <b>same CH ${Number.isFinite(__virtualSameHcapCH)?Math.round(__virtualSameHcapCH):"—"}</b> · target <b>36 pts</b></span>`
+        : `<span class="PRpill" style="margin-left:8px;">Peers: <b>${peerPlayersN}</b>${Number.isFinite(peerMin)&&Number.isFinite(peerMax)?` · Avg hcap range <b>${peerMin.toFixed(1)}–${peerMax.toFixed(1)}</b>`:""}</span>`)}
     </div>
 
     ${postRoundIntel?.ok ? `
     <div class="PRbox PRsec">
       <div class="PRsecTitle">Post-Round Intelligence — ${PR_escapeHtml(postRoundIntel.eventName)}</div>
       <div style="font-size:18px;font-weight:950;">${PR_escapeHtml(postRoundIntel.verdict)}</div>
-      <div class="PRmuted" style="font-size:12px;margin-top:4px;">Confidence: <b>${postRoundIntel.confidence}</b> · ${postRoundIntel.priorRounds} prior rounds · ${postRoundIntel.coverage} comparable holes</div>
+      <div class="PRmuted" style="font-size:12px;margin-top:4px;">
+        Confidence: <b>${postRoundIntel.confidence}</b>
+        · ${postRoundIntel.isSoloRound
+            ? `benchmark: <b>virtual player, same CH ${Number.isFinite(postRoundIntel.virtualCH)?Math.round(postRoundIntel.virtualCH):"—"}</b>`
+            : `${postRoundIntel.priorRounds} prior rounds`}
+        · ${postRoundIntel.coverage} comparable holes
+      </div>
 
       <div class="PRintelGrid">
         <div class="PRintelCard">
-          <div class="PRintelLabel">Actual vs own expectation</div>
+          <div class="PRintelLabel">${postRoundIntel.isSoloRound ? "Actual vs playing-to-handicap target" : "Actual vs own expectation"}</div>
           <div class="PRintelValue ${postRoundIntel.roundDelta>=0?"PRgood":"PRbad"}">
             ${postRoundIntel.roundDelta>=0?"+":""}${postRoundIntel.roundDelta.toFixed(1)} ${postRoundIntel.isGrossMode?"strokes":"pts"}
           </div>
           <div class="PRmuted" style="font-size:11px;margin-top:3px;">
             ${Number.isFinite(postRoundIntel.actualTotal)&&Number.isFinite(postRoundIntel.expectedTotal)
               ? (postRoundIntel.isGrossMode
-                  ? `Actual ${postRoundIntel.actualTotal.toFixed(0)} · own-history benchmark ≈ ${postRoundIntel.expectedTotal.toFixed(1)}`
-                  : `Actual ${postRoundIntel.actualTotal.toFixed(0)} pts · own-history benchmark ≈ ${postRoundIntel.expectedTotal.toFixed(1)} pts`)
+                  ? `Actual ${postRoundIntel.actualTotal.toFixed(0)} · ${postRoundIntel.isSoloRound?"same-handicap target":"own-history benchmark"} ≈ ${postRoundIntel.expectedTotal.toFixed(1)}`
+                  : `Actual ${postRoundIntel.actualTotal.toFixed(0)} pts · ${postRoundIntel.isSoloRound?"same-handicap target":"own-history benchmark"} ≈ ${postRoundIntel.expectedTotal.toFixed(1)} pts`)
               : ""}
           </div>
         </div>
@@ -11733,7 +11982,11 @@ const postRoundIntel = (() => {
         <div class="PRmuted" style="font-size:12px;margin-top:4px;">${PR_escapeHtml(postRoundIntel.oneJobWhy)}</div>
       </div>
 
-      <div class="PRnote">This diagnoses scoring patterns only; it does not claim the cause was driving, irons, short game or putting without shot-level data.</div>
+      <div class="PRnote">
+        ${postRoundIntel.isSoloRound
+          ? `Solo-round rule: because no real opponents were present, the benchmark is a computer-generated player on the same playing/course handicap. That player makes net par on every hole (2 Stableford points per hole; 36 points over 18 holes).`
+          : `This diagnoses scoring patterns only; it does not claim the cause was driving, irons, short game or putting without shot-level data.`}
+      </div>
     </div>
     ` : `
     <div class="PRbox PRsec">
