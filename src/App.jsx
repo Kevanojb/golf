@@ -11380,6 +11380,218 @@ const damageCls = (__effComparatorMode==="par") ? "PRneutral" : PR_cls(damageDel
 const bestDeltaCls = (__effComparatorMode==="par") ? "PRneutral" : "PRgood";
 const worstDeltaCls = (__effComparatorMode==="par") ? "PRneutral" : "PRbad";
 
+// ============================================================
+// POST-ROUND INTELLIGENCE
+// Latest round vs this player's own prior expectation.
+// ============================================================
+const postRoundIntel = (() => {
+  try {
+    const series0 = Array.isArray(windowSeries) ? windowSeries.filter(Boolean).slice() : [];
+    const series = series0.slice().sort((a,b) => {
+      const ax = Number.isFinite(Number(a?.dateMs)) ? Number(a.dateMs) : Number(a?.idx || 0);
+      const bx = Number.isFinite(Number(b?.dateMs)) ? Number(b.dateMs) : Number(b?.idx || 0);
+      return ax - bx;
+    });
+
+    if (!series.length) return { ok:false };
+
+    const latest = series[series.length - 1];
+    const prior = series.slice(0, -1);
+    const isGrossMode = String(scoringMode) === "gross";
+
+    const arrPars = r => {
+      const x = r && (r.parsPerHole || r.parPerHole || r.parsArr || r.pars || r.parHoles || r.par);
+      return Array.isArray(x) ? x.map(Number) : [];
+    };
+    const arrSI = r => {
+      const x = r && (r.siPerHole || r.strokeIndexPerHole || r.siArr || r.si || r.strokeIndex);
+      return Array.isArray(x) ? x.map(Number) : [];
+    };
+    const arrYards = r => {
+      const x = r && (r.yardsPerHole || r.ydsPerHole || r.yardsArr || r.yards || r.holeYards || r.yardages || r.yardage);
+      return Array.isArray(x) ? x.map(Number) : [];
+    };
+    const arrPts = r => {
+      const x = r && (r.perHole || r.perHolePts || r.pointsPerHole || r.ptsPerHole || r.stablefordPerHole || r.stablefordHoles);
+      return Array.isArray(x) ? x.map(Number) : [];
+    };
+    const arrGross = r => {
+      const x = r && (r.grossPerHole || r.grossHoles || r.holeGross || r.scoresPerHole || r.scores || r.grossArr);
+      return Array.isArray(x) ? x.map(Number) : [];
+    };
+
+    const siBand = si => {
+      const n = Number(si);
+      if (!Number.isFinite(n)) return "SI ?";
+      if (n <= 6) return "SI 1–6";
+      if (n <= 12) return "SI 7–12";
+      return "SI 13–18";
+    };
+
+    const yardBand = y => {
+      const n = Number(y);
+      if (!Number.isFinite(n)) return "Yardage ?";
+      if (n < 150) return "<150";
+      if (n <= 200) return "150–200";
+      if (n <= 350) return "201–350";
+      if (n <= 420) return "351–420";
+      return "420+";
+    };
+
+    const obs = [];
+    prior.forEach((r, ri) => {
+      const ps=arrPars(r), sis=arrSI(r), ys=arrYards(r), pts=arrPts(r), gs=arrGross(r);
+      const n=Math.min(18,Math.max(ps.length,sis.length,ys.length,pts.length,gs.length));
+      for(let i=0;i<n;i++){
+        const par=Number(ps[i]), si=Number(sis[i]), y=Number(ys[i]);
+        const raw=isGrossMode?Number(gs[i]):Number(pts[i]);
+        if(!Number.isFinite(raw)) continue;
+        if(isGrossMode && !Number.isFinite(par)) continue;
+        obs.push({ri,par,siBand:siBand(si),yardBand:yardBand(y),value:isGrossMode?(raw-par):raw});
+      }
+    });
+
+    const weightedMean = rows => {
+      if(!rows.length) return NaN;
+      let sw=0, sv=0;
+      for(const o of rows){
+        const age=Math.max(0,(prior.length-1)-Number(o.ri||0));
+        const w=Math.pow(0.90,age);
+        sw+=w; sv+=w*Number(o.value);
+      }
+      return sw ? sv/sw : NaN;
+    };
+
+    const expectationFor = (par,si,y) => {
+      const sb=siBand(si), yb=yardBand(y);
+      const tiers=[
+        {rows:obs.filter(o=>o.par===par&&o.siBand===sb&&o.yardBand===yb),min:4},
+        {rows:obs.filter(o=>o.par===par&&o.siBand===sb),min:6},
+        {rows:obs.filter(o=>o.par===par&&o.yardBand===yb),min:6},
+        {rows:obs.filter(o=>o.par===par),min:8},
+        {rows:obs,min:18},
+      ];
+      for(const t of tiers){
+        if(t.rows.length>=t.min){
+          const v=weightedMean(t.rows);
+          if(Number.isFinite(v)) return {expected:v,samples:t.rows.length};
+        }
+      }
+      return {expected:NaN,samples:0};
+    };
+
+    const lp=arrPars(latest), ls=arrSI(latest), ly=arrYards(latest), lpts=arrPts(latest), lg=arrGross(latest);
+    const holesN=Math.min(18,Math.max(lp.length,ls.length,ly.length,lpts.length,lg.length));
+    const holesIntel=[];
+
+    for(let i=0;i<holesN;i++){
+      const par=Number(lp[i]), si=Number(ls[i]), y=Number(ly[i]);
+      const raw=isGrossMode?Number(lg[i]):Number(lpts[i]);
+      if(!Number.isFinite(raw)) continue;
+      if(isGrossMode&&!Number.isFinite(par)) continue;
+
+      const actualNorm=isGrossMode?(raw-par):raw;
+      const ex=expectationFor(par,si,y);
+      if(!Number.isFinite(ex.expected)) continue;
+
+      const delta=isGrossMode?(ex.expected-actualNorm):(actualNorm-ex.expected);
+      holesIntel.push({
+        hole:i+1,par,si,y,delta,
+        cost:Math.max(0,-delta),
+        gain:Math.max(0,delta),
+        samples:ex.samples
+      });
+    }
+
+    if(!holesIntel.length) return {ok:false};
+
+    const coverage=holesIntel.length;
+    const roundDelta=holesIntel.reduce((s,h)=>s+h.delta,0);
+    const totalCost=holesIntel.reduce((s,h)=>s+h.cost,0);
+    const costly=holesIntel.filter(h=>h.cost>0).sort((a,b)=>b.cost-a.cost);
+    const top3Cost=costly.slice(0,3).reduce((s,h)=>s+h.cost,0);
+    const damageShare=totalCost>0?top3Cost/totalCost:NaN;
+
+    const actualTotal=isGrossMode
+      ? lg.filter(Number.isFinite).reduce((a,b)=>a+b,0)
+      : lpts.filter(Number.isFinite).reduce((a,b)=>a+b,0);
+
+    const expectedTotal=Number.isFinite(actualTotal)
+      ? (isGrossMode ? actualTotal + roundDelta : actualTotal - roundDelta)
+      : NaN;
+
+    const scale=Math.max(0.5,coverage/18);
+    let verdict="About your normal game";
+    if(roundDelta>=2.5*scale) verdict="Clearly better than your recent normal";
+    else if(roundDelta>=0.75*scale) verdict="Slightly better than your recent normal";
+    else if(roundDelta<=-2.5*scale) verdict="A costly day compared with your recent normal";
+    else if(roundDelta<=-0.75*scale) verdict="Slightly below your recent normal";
+
+    const cats=new Map();
+    const add=(label,h)=>{
+      if(!label||label.includes("?")) return;
+      const r=cats.get(label)||{label,sum:0,n:0,cost:0,gain:0};
+      r.sum+=h.delta; r.n++; r.cost+=h.cost; r.gain+=h.gain;
+      cats.set(label,r);
+    };
+
+    holesIntel.forEach(h=>{
+      add(`Par ${h.par}`,h);
+      add(siBand(h.si),h);
+      add(yardBand(h.y),h);
+    });
+
+    const catRows=Array.from(cats.values()).map(r=>({...r,avg:r.sum/r.n}));
+    const weakness=catRows.filter(r=>r.n>=2&&r.avg<0).sort((a,b)=>b.cost-a.cost)[0]||null;
+    const strength=catRows.filter(r=>r.n>=2&&r.avg>0).sort((a,b)=>b.gain-a.gain)[0]||null;
+
+    let dna="Balanced Scorer";
+    let dnaWhy="Your scoring creation and damage rate are broadly in line with peers.";
+    if(Number.isFinite(birdieDelta)&&Number.isFinite(damageDelta)){
+      const b=birdieDelta*100,d=damageDelta*100;
+      if(b>=2&&d>=2){dna="Volatile Attacker";dnaWhy="You create more big scoring holes than peers, but give too much back through damage holes.";}
+      else if(b>=2&&d<=-2){dna="Complete Scorer";dnaWhy="You create more big scoring holes while also avoiding damage better than peers.";}
+      else if(b<=-2&&d<=-2){dna="Steady Grinder";dnaWhy="You create fewer big scoring holes, but protect the card by avoiding damage better than peers.";}
+      else if(d>=3){dna="Damage-Limited";dnaWhy="Your scoring ceiling is being constrained mainly by the frequency of damaging holes.";}
+      else if(d<=-3){dna="Card Protector";dnaWhy="Your strongest scoring trait is keeping damaging holes off the card.";}
+    }
+
+    const allHist=[...(bySI||[]),...(byPar||[]),...(byYd||[])]
+      .map(r=>{
+        const d=Number.isFinite(Number(r?.delta))?Number(r.delta):_deltaOfRow(r);
+        const hh=Number(r?.holes||0);
+        const rr=Math.max(1,Number(rounds)||prior.length||1);
+        return {...r,impact:Number.isFinite(d)?d*(hh/rr):NaN};
+      })
+      .filter(r=>Number.isFinite(r.impact)&&r.impact<0)
+      .sort((a,b)=>a.impact-b.impact);
+
+    const biggestLever=allHist[0]||null;
+    const confidence=(prior.length>=8&&coverage>=12)?"HIGH":(prior.length>=4&&coverage>=9)?"MEDIUM":"LOW";
+
+    let oneJob="Keep the card clean: avoid the one or two holes that turn a normal round into a poor one.";
+    let oneJobWhy="No single weakness is strong enough yet to justify a more specific prescription.";
+    if(weakness){
+      oneJob=`Prioritise ${weakness.label}.`;
+      oneJobWhy="It was the clearest scoring weakness in the latest round against your own recent expectation.";
+    } else if(biggestLever){
+      oneJob=`Prioritise ${String(biggestLever.label||biggestLever.key||"your biggest recurring leak")}.`;
+      oneJobWhy=`It is the largest recurring historical deficit at about ${Math.abs(biggestLever.impact).toFixed(1)} ${isGrossMode?"strokes":"points"} per round.`;
+    }
+
+    const eventName=String(latest?.eventName||latest?.event||latest?.competition||latest?.courseName||latest?.course||"Latest round");
+
+    return {
+      ok:true,priorRounds:prior.length,coverage,roundDelta,actualTotal,expectedTotal,
+      verdict,costly,damageShare,weakness,strength,dna,dnaWhy,biggestLever,
+      confidence,oneJob,oneJobWhy,isGrossMode,eventName
+    };
+  } catch(e) {
+    console.error("Post-round intelligence failed:",e);
+    return {ok:false};
+  }
+})();
+
   const htmlFragment = `
   <style>
     .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a}
@@ -11423,6 +11635,11 @@ const worstDeltaCls = (__effComparatorMode==="par") ? "PRneutral" : "PRbad";
     .PRtbl th:not(:first-child),.PRtbl td:not(:first-child){text-align:right}
     .PRnote{font-size:12px;color:#475569;margin-top:10px}
     .PRpill{display:inline-block;border:1px solid #e5e7eb;border-radius:999px;padding:3px 8px;font-size:12px;color:#0f172a;background:#fff}
+    .PRintelGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px}
+    .PRintelCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
+    .PRintelLabel{font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.07em;color:#64748b}
+    .PRintelValue{font-size:16px;font-weight:950;margin-top:3px;color:#0f172a}
+    @media(max-width:700px){.PRintelGrid{grid-template-columns:1fr}}
   </style>
 
   <div class="PRr">
@@ -11434,6 +11651,71 @@ const worstDeltaCls = (__effComparatorMode==="par") ? "PRneutral" : "PRbad";
       <span class="PRpill" style="margin-left:8px;">${(String(scoringMode)==="gross" ? "Gross strokes" : "Stableford points")} vs ${(__effComparatorMode==="par" ? "Par baseline" : (__effComparatorMode==="field" ? "Field" : "Handicap band"))}</span>
       ${__effComparatorMode==="par" ? "" : `<span class="PRpill" style="margin-left:8px;">Peers: <b>${peerPlayersN}</b>${Number.isFinite(peerMin)&&Number.isFinite(peerMax)?` · Avg hcap range <b>${peerMin.toFixed(1)}–${peerMax.toFixed(1)}</b>`:""}</span>`}
     </div>
+
+    ${postRoundIntel?.ok ? `
+    <div class="PRbox PRsec">
+      <div class="PRsecTitle">Post-Round Intelligence — ${PR_escapeHtml(postRoundIntel.eventName)}</div>
+      <div style="font-size:18px;font-weight:950;">${PR_escapeHtml(postRoundIntel.verdict)}</div>
+      <div class="PRmuted" style="font-size:12px;margin-top:4px;">Confidence: <b>${postRoundIntel.confidence}</b> · ${postRoundIntel.priorRounds} prior rounds · ${postRoundIntel.coverage} comparable holes</div>
+
+      <div class="PRintelGrid">
+        <div class="PRintelCard">
+          <div class="PRintelLabel">Actual vs own expectation</div>
+          <div class="PRintelValue ${postRoundIntel.roundDelta>=0?"PRgood":"PRbad"}">
+            ${postRoundIntel.roundDelta>=0?"+":""}${postRoundIntel.roundDelta.toFixed(1)} ${postRoundIntel.isGrossMode?"strokes":"pts"}
+          </div>
+          <div class="PRmuted" style="font-size:11px;margin-top:3px;">
+            ${Number.isFinite(postRoundIntel.actualTotal)&&Number.isFinite(postRoundIntel.expectedTotal)
+              ? (postRoundIntel.isGrossMode
+                  ? `Actual ${postRoundIntel.actualTotal.toFixed(0)} · own-history benchmark ≈ ${postRoundIntel.expectedTotal.toFixed(1)}`
+                  : `Actual ${postRoundIntel.actualTotal.toFixed(0)} pts · own-history benchmark ≈ ${postRoundIntel.expectedTotal.toFixed(1)} pts`)
+              : ""}
+          </div>
+        </div>
+
+        <div class="PRintelCard">
+          <div class="PRintelLabel">Scoring DNA</div>
+          <div class="PRintelValue">${PR_escapeHtml(postRoundIntel.dna)}</div>
+          <div class="PRmuted" style="font-size:11px;margin-top:3px;">${PR_escapeHtml(postRoundIntel.dnaWhy)}</div>
+        </div>
+
+        <div class="PRintelCard">
+          <div class="PRintelLabel">Strongest area today</div>
+          <div class="PRintelValue">${postRoundIntel.strength?PR_escapeHtml(postRoundIntel.strength.label):"No clear standout"}</div>
+        </div>
+
+        <div class="PRintelCard">
+          <div class="PRintelLabel">Main weakness today</div>
+          <div class="PRintelValue">${postRoundIntel.weakness?PR_escapeHtml(postRoundIntel.weakness.label):"No clear weakness"}</div>
+        </div>
+      </div>
+
+      <div class="PRintelCard" style="margin-top:10px;">
+        <div class="PRintelLabel">Where the round was lost</div>
+        ${postRoundIntel.costly.length ? `
+          <div style="font-weight:900;margin-top:4px;">
+            ${Number.isFinite(postRoundIntel.damageShare)?`The three costliest holes produced ${(postRoundIntel.damageShare*100).toFixed(0)}% of measured under-performance.`:""}
+          </div>
+          <div style="margin-top:5px;line-height:1.6;">
+            ${postRoundIntel.costly.slice(0,3).map(h=>`<div><b>Hole ${h.hole}</b>${Number.isFinite(h.par)?` (Par ${h.par}`:""}${Number.isFinite(h.si)?`, SI ${h.si}`:""}): cost ≈ <span class="PRbad">${h.cost.toFixed(1)}</span> ${postRoundIntel.isGrossMode?"strokes":"pts"}</div>`).join("")}
+          </div>
+        ` : `<div class="PRmuted" style="margin-top:4px;">No meaningful damage holes identified.</div>`}
+      </div>
+
+      <div class="PRintelCard" style="margin-top:10px;border-width:2px;">
+        <div class="PRintelLabel">Your one job before the next round</div>
+        <div style="font-size:17px;font-weight:950;margin-top:4px;">${PR_escapeHtml(postRoundIntel.oneJob)}</div>
+        <div class="PRmuted" style="font-size:12px;margin-top:4px;">${PR_escapeHtml(postRoundIntel.oneJobWhy)}</div>
+      </div>
+
+      <div class="PRnote">This diagnoses scoring patterns only; it does not claim the cause was driving, irons, short game or putting without shot-level data.</div>
+    </div>
+    ` : `
+    <div class="PRbox PRsec">
+      <div class="PRsecTitle">Post-Round Intelligence</div>
+      <div class="PRmuted">Not enough prior hole-by-hole history yet to build a reliable latest-round expectation.</div>
+    </div>
+    `}
 
     <div class="PRbox PRsec">
       <div class="PRsecTitle">1. The Season Headline</div>
