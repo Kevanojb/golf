@@ -11386,17 +11386,42 @@ const worstDeltaCls = (__effComparatorMode==="par") ? "PRneutral" : "PRbad";
 // ============================================================
 const postRoundIntel = (() => {
   try {
-    const series0 = Array.isArray(windowSeries) ? windowSeries.filter(Boolean).slice() : [];
-    const series = series0.slice().sort((a,b) => {
+    // The report display window can be limited (e.g. Last 1 / Last 3), but
+    // expectation needs the player's real historical hole-by-hole series.
+    // cur.series is the canonical series created by the season model.
+    const sortRounds = (arr) => (Array.isArray(arr) ? arr.filter(Boolean).slice() : []).sort((a,b) => {
       const ax = Number.isFinite(Number(a?.dateMs)) ? Number(a.dateMs) : Number(a?.idx || 0);
       const bx = Number.isFinite(Number(b?.dateMs)) ? Number(b.dateMs) : Number(b?.idx || 0);
       return ax - bx;
     });
 
-    if (!series.length) return { ok:false };
+    const displaySeries = sortRounds(windowSeries);
+    const fullSeries = sortRounds(cur?.series);
 
-    const latest = series[series.length - 1];
-    const prior = series.slice(0, -1);
+    // Latest round follows the report's selected window where possible.
+    const latest = displaySeries.length
+      ? displaySeries[displaySeries.length - 1]
+      : (fullSeries.length ? fullSeries[fullSeries.length - 1] : null);
+
+    if (!latest) return { ok:false };
+
+    // Build the baseline from ALL genuinely earlier rounds in cur.series.
+    // This prevents "Last 1" / "Last 3" report filters from destroying history.
+    const latestMs = Number.isFinite(Number(latest?.dateMs)) ? Number(latest.dateMs) : NaN;
+    const latestIdx = Number.isFinite(Number(latest?.idx)) ? Number(latest.idx) : NaN;
+    const latestFile = String(latest?.file || "");
+
+    const prior = (fullSeries.length ? fullSeries : displaySeries).filter(r => {
+      if (!r || r === latest) return false;
+      if (latestFile && String(r?.file || "") === latestFile) return false;
+
+      const rMs = Number.isFinite(Number(r?.dateMs)) ? Number(r.dateMs) : NaN;
+      const rIdx = Number.isFinite(Number(r?.idx)) ? Number(r.idx) : NaN;
+
+      if (Number.isFinite(latestMs) && Number.isFinite(rMs)) return rMs < latestMs;
+      if (Number.isFinite(latestIdx) && Number.isFinite(rIdx)) return rIdx < latestIdx;
+      return true;
+    });
     const isGrossMode = String(scoringMode) === "gross";
 
     const arrPars = r => {
