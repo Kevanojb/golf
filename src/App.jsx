@@ -11119,7 +11119,8 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
     if (!round) return 0;
     let n = 0;
     for (const p of players){
-      if (!p || String(p?.name||"") === String(cur?.name||"")) continue;
+      if (!p) continue;
+      if (__normPlayerName(p?.name) === __normPlayerName(cur?.name)) continue;
       const s = Array.isArray(p?.series) ? p.series : [];
       if (s.some(r => __roundsMatchEvent(r, round))) n++;
     }
@@ -11254,15 +11255,37 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
   }
 
   // Selected-window solo detection.
-  // If EVERY selected round has no real opponents, build one virtual
-  // same-handicap benchmark per round and aggregate them.
-  const __selectedRoundsForSolo = __filterSeries(cur?.series);
+  // IMPORTANT: use cur.roundSeries first because it is the ACTUAL report
+  // window already prepared by the season model. Manually imported rounds
+  // may not contain seasonId metadata, so __filterSeries(cur.series) can
+  // incorrectly return an empty array even though the report is showing them.
+  const __reportRoundSeries =
+    (Array.isArray(cur?.roundSeries) && cur.roundSeries.length)
+      ? cur.roundSeries.filter(Boolean).slice()
+      : __filterSeries(cur?.series);
+
+  const __selectedRoundsForSolo =
+    (__reportRoundSeries.length
+      ? __reportRoundSeries
+      : (Array.isArray(cur?.series) ? cur.series.filter(Boolean).slice() : []));
+
+  const __normPlayerName = (s) =>
+    String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
+
   const __soloFlags = __selectedRoundsForSolo.map(r => ({
     round: r,
     realPeers: __eventRealPeerCount(r)
   }));
+  const __distinctOtherPlayers = players.filter(p =>
+    p && __normPlayerName(p?.name) !== __normPlayerName(cur?.name)
+  );
+
   const __allSelectedRoundsSolo =
-    __soloFlags.length > 0 && __soloFlags.every(x => x.realPeers === 0);
+    __selectedRoundsForSolo.length > 0 &&
+    (
+      __distinctOtherPlayers.length === 0 ||
+      __soloFlags.every(x => x.realPeers === 0)
+    );
 
   function __mergeVirtualAggs(items){
     const good = (Array.isArray(items) ? items : []).filter(Boolean);
@@ -12071,9 +12094,9 @@ const postRoundIntel = (() => {
     <div class="PRbox PRsec" style="border:2px solid #0f172a;background:#f8fafc;">
       <div style="font-size:13px;font-weight:950;letter-spacing:.04em;">SOLO ROUND BENCHMARK ACTIVE</div>
       <div style="font-size:12px;margin-top:4px;">
-        No real opponents were found in the selected round${__selectedRoundsForSolo.length===1?"":"s"}.
-        The report is comparing you with a computer-generated player using your exact playing/course handicap for each round.
-        The virtual player makes net par on every hole = 2 Stableford points per hole.
+        No real opponents were found in the ${__selectedRoundsForSolo.length} selected round${__selectedRoundsForSolo.length===1?"":"s"}.
+        The ENTIRE report is comparing you with a computer-generated player using your exact playing/course handicap for each round.
+        The virtual player makes net par on every hole = 2 Stableford points per hole (36 points over 18 holes).
       </div>
     </div>
     ` : ""}
