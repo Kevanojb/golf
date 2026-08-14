@@ -11179,11 +11179,60 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
     const pts = Array.isArray(round?.perHole) ? round.perHole : [];
     const gross = Array.isArray(round?.grossPerHole) ? round.grossPerHole : [];
 
-    // round.hcap is the playing/course handicap stored by the season model.
-    const ch = Number.isFinite(Number(round?.hcap)) ? Number(round.hcap)
-      : Number.isFinite(Number(round?.playingHcap)) ? Number(round.playingHcap)
-      : Number.isFinite(Number(round?.courseHandicap)) ? Number(round.courseHandicap)
+    // IMPORTANT: virtual golfer must use the player's HANDICAP INDEX converted
+    // to the Course Handicap for THIS tee/course, not simply round.hcap.
+    //
+    // WHS/GB&I:
+    // Course Handicap = round(HI * (Slope / 113) + (Course Rating - Par))
+    //
+    // The season model stores:
+    // - startExact = Handicap Index for the round
+    // - slope / teeSlope
+    // - rating / teeRating
+    // - parsArr / parsPerHole
+    //
+    // Only fall back to an explicitly stored courseHandicap/hcap if the
+    // rating data required for the WHS calculation is genuinely unavailable.
+    const parTotalForCH = pars.reduce((sum, v) => {
+      const n = Number(v);
+      return sum + (Number.isFinite(n) ? n : 0);
+    }, 0);
+
+    const hiForCH = Number.isFinite(Number(round?.startExact)) ? Number(round.startExact)
+      : Number.isFinite(Number(round?.handicapIndex)) ? Number(round.handicapIndex)
+      : Number.isFinite(Number(round?.handicap)) ? Number(round.handicap)
       : NaN;
+
+    const slopeForCH = Number.isFinite(Number(round?.teeSlope)) ? Number(round.teeSlope)
+      : Number.isFinite(Number(round?.slope)) ? Number(round.slope)
+      : Number.isFinite(Number(round?.slopeRating)) ? Number(round.slopeRating)
+      : NaN;
+
+    const ratingForCH = Number.isFinite(Number(round?.teeRating)) ? Number(round.teeRating)
+      : Number.isFinite(Number(round?.rating)) ? Number(round.rating)
+      : Number.isFinite(Number(round?.courseRating)) ? Number(round.courseRating)
+      : NaN;
+
+    let ch = NaN;
+
+    if (
+      Number.isFinite(hiForCH) &&
+      Number.isFinite(slopeForCH) && slopeForCH > 0 &&
+      Number.isFinite(ratingForCH) &&
+      Number.isFinite(parTotalForCH) && parTotalForCH > 0
+    ){
+      // Reuse the app's existing WHS utility so the virtual benchmark and
+      // the rest of the app use one identical Course Handicap formula.
+      ch = WHS_courseHandicap(hiForCH, slopeForCH, ratingForCH, parTotalForCH);
+    }
+
+    // Fallbacks only when the WHS inputs are unavailable.
+    if (!Number.isFinite(ch)) {
+      ch = Number.isFinite(Number(round?.courseHandicap)) ? Number(round.courseHandicap)
+        : Number.isFinite(Number(round?.playingHcap)) ? Number(round.playingHcap)
+        : Number.isFinite(Number(round?.hcap)) ? Number(round.hcap)
+        : NaN;
+    }
 
     const mkPts = () => ({ holes:0, pts:0, wipes:0, p0:0, p1:0, p2:0, p3:0, p4:0, p5:0 });
     const mkGross = () => ({ holes:0, val:0, sumSq:0, bogeyPlus:0, parOrBetter:0, birdieOrBetter:0, doublePlus:0, eaglePlus:0, birdies:0, pars:0, bogeys:0, doubles:0, triplesPlus:0 });
@@ -11258,6 +11307,10 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
 
     out.__virtualSameHcap = true;
     out.__courseHcp = ch;
+    out.__handicapIndex = hiForCH;
+    out.__slope = slopeForCH;
+    out.__courseRating = ratingForCH;
+    out.__parTotal = parTotalForCH;
     return out;
   }
 
@@ -11730,11 +11783,51 @@ const postRoundIntel = (() => {
     });
     const isSoloRound = realEventPeers.length===0;
 
-    // The season model stores playing/course handicap as r.hcap.
-    const virtualCH = Number.isFinite(Number(latest?.hcap)) ? Number(latest.hcap)
-      : Number.isFinite(Number(latest?.playingHcap)) ? Number(latest.playingHcap)
-      : Number.isFinite(Number(latest?.courseHandicap)) ? Number(latest.courseHandicap)
+    // SOLO virtual player must use the Handicap Index converted to the
+    // Course Handicap for the actual tee played.
+    const latestParsForCH = arrPars(latest);
+    const latestParTotalForCH = latestParsForCH.reduce((sum, v) => {
+      const n = Number(v);
+      return sum + (Number.isFinite(n) ? n : 0);
+    }, 0);
+
+    const latestHIForCH = Number.isFinite(Number(latest?.startExact)) ? Number(latest.startExact)
+      : Number.isFinite(Number(latest?.handicapIndex)) ? Number(latest.handicapIndex)
+      : Number.isFinite(Number(latest?.handicap)) ? Number(latest.handicap)
       : NaN;
+
+    const latestSlopeForCH = Number.isFinite(Number(latest?.teeSlope)) ? Number(latest.teeSlope)
+      : Number.isFinite(Number(latest?.slope)) ? Number(latest.slope)
+      : Number.isFinite(Number(latest?.slopeRating)) ? Number(latest.slopeRating)
+      : NaN;
+
+    const latestRatingForCH = Number.isFinite(Number(latest?.teeRating)) ? Number(latest.teeRating)
+      : Number.isFinite(Number(latest?.rating)) ? Number(latest.rating)
+      : Number.isFinite(Number(latest?.courseRating)) ? Number(latest.courseRating)
+      : NaN;
+
+    let virtualCH = NaN;
+
+    if (
+      Number.isFinite(latestHIForCH) &&
+      Number.isFinite(latestSlopeForCH) && latestSlopeForCH > 0 &&
+      Number.isFinite(latestRatingForCH) &&
+      Number.isFinite(latestParTotalForCH) && latestParTotalForCH > 0
+    ){
+      virtualCH = WHS_courseHandicap(
+        latestHIForCH,
+        latestSlopeForCH,
+        latestRatingForCH,
+        latestParTotalForCH
+      );
+    }
+
+    if (!Number.isFinite(virtualCH)) {
+      virtualCH = Number.isFinite(Number(latest?.courseHandicap)) ? Number(latest.courseHandicap)
+        : Number.isFinite(Number(latest?.playingHcap)) ? Number(latest.playingHcap)
+        : Number.isFinite(Number(latest?.hcap)) ? Number(latest.hcap)
+        : NaN;
+    }
 
     const virtualStrokesReceived = (ch,si) => {
       const h=Math.max(0,Math.round(Number(ch)||0));
@@ -12106,9 +12199,9 @@ const postRoundIntel = (() => {
       <div style="font-size:13px;font-weight:950;letter-spacing:.04em;">SOLO ROUND BENCHMARK ACTIVE</div>
       <div style="font-size:12px;margin-top:4px;">
         No real opponents were found in the ${__selectedRoundsForSolo.length} selected round${__selectedRoundsForSolo.length===1?"":"s"}.
-        The ENTIRE report is comparing you with a computer-generated player using your exact playing/course handicap for each round.
+        The ENTIRE report is comparing you with a computer-generated player using your Handicap Index converted to the correct Course Handicap for the tee played (using Slope, Course Rating and Par).
         The virtual benchmark contains <b>${PR_num(__peerAgg?.totalsGross?.holes ?? __peerAgg?.totals?.holes, 0)}</b> holes.
-        The virtual player makes net par on every hole = 2 Stableford points per hole (36 points over 18 holes).
+        The virtual player then makes net par on every hole = 2 Stableford points per hole (36 points over 18 holes).
       </div>
     </div>
     ` : ""}
@@ -12203,7 +12296,7 @@ const postRoundIntel = (() => {
 
       <div class="PRnote">
         ${postRoundIntel.isSoloRound
-          ? `Solo-round rule: because no real opponents were present, the benchmark is a computer-generated player on the same playing/course handicap. That player makes net par on every hole (2 Stableford points per hole; 36 points over 18 holes).`
+          ? `Solo-round rule: because no real opponents were present, the benchmark is a computer-generated player using your Handicap Index converted to the correct Course Handicap for those tees from Slope, Course Rating and Par. That player then makes net par on every hole (2 Stableford points per hole; 36 points over 18 holes).`
           : `This diagnoses scoring patterns only; it does not claim the cause was driving, irons, short game or putting without shot-level data.`}
       </div>
     </div>
