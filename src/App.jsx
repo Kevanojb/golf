@@ -11253,20 +11253,85 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
     return out;
   }
 
+  // Selected-window solo detection.
+  // If EVERY selected round has no real opponents, build one virtual
+  // same-handicap benchmark per round and aggregate them.
   const __selectedRoundsForSolo = __filterSeries(cur?.series);
-  const __selectedSoloRound = (__selectedRoundsForSolo.length === 1) ? __selectedRoundsForSolo[0] : null;
-  const __selectedSoloPeerCount = __selectedSoloRound ? __eventRealPeerCount(__selectedSoloRound) : 0;
+  const __soloFlags = __selectedRoundsForSolo.map(r => ({
+    round: r,
+    realPeers: __eventRealPeerCount(r)
+  }));
+  const __allSelectedRoundsSolo =
+    __soloFlags.length > 0 && __soloFlags.every(x => x.realPeers === 0);
 
-  if (__effComparatorMode !== "par" && __selectedSoloRound && __selectedSoloPeerCount === 0){
-    const va = __makeVirtualSameHcapAgg(__selectedSoloRound);
+  function __mergeVirtualAggs(items){
+    const good = (Array.isArray(items) ? items : []).filter(Boolean);
+    if (!good.length) return null;
+
+    const mkPts = () => ({ holes:0, pts:0, wipes:0, p0:0, p1:0, p2:0, p3:0, p4:0, p5:0 });
+    const mkGross = () => ({ holes:0, val:0, sumSq:0, bogeyPlus:0, parOrBetter:0, birdieOrBetter:0, doublePlus:0, eaglePlus:0, birdies:0, pars:0, bogeys:0, doubles:0, triplesPlus:0 });
+
+    const out = {
+      totals: mkPts(),
+      totalsGross: mkGross(),
+      byPar: {"Par 3":mkPts(),"Par 4":mkPts(),"Par 5":mkPts(),"Unknown":mkPts()},
+      byParGross: {"Par 3":mkGross(),"Par 4":mkGross(),"Par 5":mkGross(),"Unknown":mkGross()},
+      bySI: {"1–6":mkPts(),"7–12":mkPts(),"13–18":mkPts(),"Unknown":mkPts()},
+      bySIGross: {"1–6":mkGross(),"7–12":mkGross(),"13–18":mkGross(),"Unknown":mkGross()},
+      byYards: {},
+      byYardsGross: {},
+      __virtualSameHcap: true,
+      __courseHcps: []
+    };
+
+    const addObj = (dst, src) => {
+      if (!dst || !src) return;
+      Object.keys(src).forEach(k => {
+        const v = Number(src[k]);
+        if (Number.isFinite(v)) dst[k] = (Number(dst[k]) || 0) + v;
+      });
+    };
+
+    const mergeMap = (dst, src, make) => {
+      if (!src) return;
+      Object.keys(src).forEach(k => {
+        dst[k] ||= make();
+        addObj(dst[k], src[k]);
+      });
+    };
+
+    for (const a of good){
+      addObj(out.totals, a.totals);
+      addObj(out.totalsGross, a.totalsGross);
+      mergeMap(out.byPar, a.byPar, mkPts);
+      mergeMap(out.byParGross, a.byParGross, mkGross);
+      mergeMap(out.bySI, a.bySI, mkPts);
+      mergeMap(out.bySIGross, a.bySIGross, mkGross);
+      mergeMap(out.byYards, a.byYards, mkPts);
+      mergeMap(out.byYardsGross, a.byYardsGross, mkGross);
+      if (Number.isFinite(Number(a.__courseHcp))) out.__courseHcps.push(Number(a.__courseHcp));
+    }
+
+    return out;
+  }
+
+  if (__effComparatorMode !== "par" && __allSelectedRoundsSolo){
+    const virtualRounds = __selectedRoundsForSolo.map(__makeVirtualSameHcapAgg).filter(Boolean);
+    const va = __mergeVirtualAggs(virtualRounds);
+
     if (va && Number(va?.totals?.holes || va?.totalsGross?.holes || 0) > 0){
       __peerAgg = va;
       __usingVirtualSameHcapPeer = true;
-      __virtualSameHcapCH = Number(va.__courseHcp);
-      peerBand = Number.isFinite(__virtualSameHcapCH)
-        ? `Virtual same-handicap player (CH ${Math.round(__virtualSameHcapCH)})`
-        : "Virtual same-handicap player";
-      peerPlayersN = 1;
+
+      const chs = Array.isArray(va.__courseHcps) ? va.__courseHcps.filter(Number.isFinite) : [];
+      const uniqueCH = Array.from(new Set(chs.map(v => Math.round(v))));
+      __virtualSameHcapCH = uniqueCH.length === 1 ? uniqueCH[0] : NaN;
+
+      peerBand = uniqueCH.length === 1
+        ? `Virtual same-handicap player (CH ${uniqueCH[0]})`
+        : "Virtual same-handicap player (same CH as you each round)";
+
+      peerPlayersN = __selectedRoundsForSolo.length;
       peerMin = NaN;
       peerMax = NaN;
     }
@@ -11805,8 +11870,67 @@ const postRoundIntel = (() => {
     });
 
     const catRows=Array.from(cats.values()).map(r=>({...r,avg:r.sum/r.n}));
-    const weakness=catRows.filter(r=>r.n>=2&&r.avg<0).sort((a,b)=>b.cost-a.cost)[0]||null;
-    const strength=catRows.filter(r=>r.n>=2&&r.avg>0).sort((a,b)=>b.gain-a.gain)[0]||null;
+
+    // Historical evidence for the same categories.  This is deliberately
+    // based on the player's PRIOR rounds only, so today's result does not
+    // manufacture its own "recurring" diagnosis.
+    const histCats = new Map();
+    const addHist = (label, delta) => {
+      if(!label || label.includes("?") || !Number.isFinite(delta)) return;
+      const r=histCats.get(label)||{label,sum:0,n:0,badRounds:0,roundsSeen:0};
+      r.sum+=delta; r.n+=1;
+      histCats.set(label,r);
+    };
+
+    prior.forEach(r=>{
+      const ps=arrPars(r), sis=arrSI(r), ys=arrYards(r), pts=arrPts(r), gs=arrGross(r);
+      const n=Math.min(18,Math.max(ps.length,sis.length,ys.length,pts.length,gs.length));
+      const roundCat=new Map();
+      const addRoundCat=(label,d)=>{
+        if(!label||label.includes("?")||!Number.isFinite(d)) return;
+        const x=roundCat.get(label)||{sum:0,n:0}; x.sum+=d; x.n++; roundCat.set(label,x);
+      };
+      for(let i=0;i<n;i++){
+        const par=Number(ps[i]), si=Number(sis[i]), y=Number(ys[i]);
+        const raw=isGrossMode?Number(gs[i]):Number(pts[i]);
+        if(!Number.isFinite(raw) || (isGrossMode&&!Number.isFinite(par))) continue;
+
+        // Prior-round target is playing to that round's handicap for solo-style
+        // evidence; this gives an apples-to-apples "did this bucket beat target?".
+        const ch=Number.isFinite(Number(r?.hcap))?Number(r.hcap):NaN;
+        const expected=isGrossMode?virtualStrokesReceived(ch,si):2;
+        const actualNorm=isGrossMode?(raw-par):raw;
+        const d=isGrossMode?(expected-actualNorm):(actualNorm-expected); // + good
+        addRoundCat(`Par ${par}`,d); addRoundCat(siBand(si),d); addRoundCat(yardBand(y),d);
+      }
+      for(const [label,x] of roundCat.entries()){
+        if(!x.n) continue;
+        const avg=x.sum/x.n;
+        const h=histCats.get(label)||{label,sum:0,n:0,badRounds:0,roundsSeen:0};
+        h.sum+=x.sum; h.n+=x.n; h.roundsSeen+=1; if(avg<0) h.badRounds+=1;
+        histCats.set(label,h);
+      }
+    });
+
+    const evidenceFor=(row,positive=false)=>{
+      if(!row) return null;
+      const h=histCats.get(row.label);
+      if(!h || h.roundsSeen<2 || !h.n) return {status:positive?"TODAY STRENGTH":"TODAY ONLY",historyAvg:NaN,badRate:NaN,rounds:0};
+      const historyAvg=h.sum/h.n;
+      const badRate=h.roundsSeen?h.badRounds/h.roundsSeen:NaN;
+      if(positive){
+        if(historyAvg>0.10 && h.roundsSeen>=4) return {status:"ESTABLISHED STRENGTH",historyAvg,badRate,rounds:h.roundsSeen};
+        return {status:"GOOD TODAY",historyAvg,badRate,rounds:h.roundsSeen};
+      }
+      if(historyAvg<-0.10 && h.roundsSeen>=4 && badRate>=0.60) return {status:"CONFIRMED WEAKNESS",historyAvg,badRate,rounds:h.roundsSeen};
+      if(historyAvg<0 && h.roundsSeen>=2) return {status:"EMERGING LEAK",historyAvg,badRate,rounds:h.roundsSeen};
+      return {status:"TODAY ONLY",historyAvg,badRate,rounds:h.roundsSeen};
+    };
+
+    let weakness=catRows.filter(r=>r.n>=2&&r.avg<0).sort((a,b)=>b.cost-a.cost)[0]||null;
+    let strength=catRows.filter(r=>r.n>=2&&r.avg>0).sort((a,b)=>b.gain-a.gain)[0]||null;
+    if(weakness) weakness={...weakness,...evidenceFor(weakness,false)};
+    if(strength) strength={...strength,...evidenceFor(strength,true)};
 
     let dna="Balanced Scorer";
     let dnaWhy="Your scoring creation and damage rate are broadly in line with peers.";
@@ -11829,27 +11953,50 @@ const postRoundIntel = (() => {
       .filter(r=>Number.isFinite(r.impact)&&r.impact<0)
       .sort((a,b)=>a.impact-b.impact);
 
-    const biggestLever=allHist[0]||null;
+    // Keep one candidate per label and cap the "recoverable" estimate at a
+    // realistic fraction of the measured deficit.  This avoids promising that
+    // a golfer can simply erase 100% of a weakness overnight.
+    const seenLever=new Set();
+    const recoverable=allHist.filter(x=>{
+      const k=String(x?.label||x?.key||"");
+      if(!k||seenLever.has(k)) return false; seenLever.add(k); return true;
+    }).slice(0,3).map(x=>({
+      ...x,
+      recoverable: Math.min(2.5, Math.max(0.2, Math.abs(Number(x.impact))*0.60))
+    }));
+
+    const biggestLever=recoverable[0]||allHist[0]||null;
+    const totalRecoverable=recoverable.reduce((s,x)=>s+(Number(x.recoverable)||0),0);
+
+    // How much of the round was a few bad holes rather than a generally poor card?
+    const top3HoleNums=new Set(costly.slice(0,3).map(h=>h.hole));
+    const rest=holesIntel.filter(h=>!top3HoleNums.has(h.hole));
+    const restDelta=rest.reduce((s,h)=>s+h.delta,0);
+    const restHoles=rest.length;
+
     const confidence = isSoloRound ? "HIGH"
       : ((prior.length>=8&&coverage>=12)?"HIGH":(prior.length>=4&&coverage>=9)?"MEDIUM":"LOW");
 
     let oneJob="Keep the card clean: avoid the one or two holes that turn a normal round into a poor one.";
     let oneJobWhy="No single weakness is strong enough yet to justify a more specific prescription.";
-    if(weakness){
+    if(weakness && weakness.status==="CONFIRMED WEAKNESS"){
       oneJob=`Prioritise ${weakness.label}.`;
-      oneJobWhy = isSoloRound
-        ? "It was the clearest area where you lost ground to the virtual same-handicap player."
-        : "It was the clearest scoring weakness in the latest round against your own recent expectation.";
+      oneJobWhy=`This is not just today's result: it has underperformed target in ${Number.isFinite(weakness.badRate)?Math.round(weakness.badRate*100):"—"}% of the prior rounds where it appeared.`;
     } else if(biggestLever){
       oneJob=`Prioritise ${String(biggestLever.label||biggestLever.key||"your biggest recurring leak")}.`;
-      oneJobWhy=`It is the largest recurring historical deficit at about ${Math.abs(biggestLever.impact).toFixed(1)} ${isGrossMode?"strokes":"points"} per round.`;
+      oneJobWhy=Number.isFinite(Number(biggestLever.recoverable))
+        ? `A realistic first target is to recover about ${Number(biggestLever.recoverable).toFixed(1)} ${isGrossMode?"strokes":"points"} per round here, rather than trying to fix everything at once.`
+        : `It is the largest recurring historical deficit.`;
+    } else if(weakness){
+      oneJob=`Do not overreact to ${weakness.label} yet.`;
+      oneJobWhy=`It hurt today, but the history does not yet confirm it as a recurring weakness.`;
     }
 
     const eventName=String(latest?.eventName||latest?.event||latest?.competition||latest?.courseName||latest?.course||"Latest round");
 
     return {
       ok:true,priorRounds:prior.length,coverage,roundDelta,actualTotal,expectedTotal,
-      verdict,costly,damageShare,weakness,strength,dna,dnaWhy,biggestLever,
+      verdict,costly,damageShare,weakness,strength,dna,dnaWhy,biggestLever,recoverable,totalRecoverable,restDelta,restHoles,
       confidence,oneJob,oneJobWhy,isGrossMode,eventName,isSoloRound,virtualCH
     };
   } catch(e) {
@@ -11916,9 +12063,20 @@ const postRoundIntel = (() => {
       · <b>${PR_num(holes,0)}</b> holes analysed
       <span class="PRpill" style="margin-left:8px;">${(String(scoringMode)==="gross" ? "Gross strokes" : "Stableford points")} vs ${(__usingVirtualSameHcapPeer ? "Virtual same-handicap player" : (__effComparatorMode==="par" ? "Par baseline" : (__effComparatorMode==="field" ? "Field" : "Handicap band")))}</span>
       ${__effComparatorMode==="par" ? "" : (__usingVirtualSameHcapPeer
-        ? `<span class="PRpill" style="margin-left:8px;">Computer benchmark: <b>same CH ${Number.isFinite(__virtualSameHcapCH)?Math.round(__virtualSameHcapCH):"—"}</b> · target <b>36 pts</b></span>`
+        ? `<span class="PRpill" style="margin-left:8px;">Computer benchmark: <b>${Number.isFinite(__virtualSameHcapCH)?`same CH ${Math.round(__virtualSameHcapCH)}`:"same CH as you each round"}</b> · target <b>2 pts/hole (36 per 18)</b></span>`
         : `<span class="PRpill" style="margin-left:8px;">Peers: <b>${peerPlayersN}</b>${Number.isFinite(peerMin)&&Number.isFinite(peerMax)?` · Avg hcap range <b>${peerMin.toFixed(1)}–${peerMax.toFixed(1)}</b>`:""}</span>`)}
     </div>
+
+    ${__usingVirtualSameHcapPeer ? `
+    <div class="PRbox PRsec" style="border:2px solid #0f172a;background:#f8fafc;">
+      <div style="font-size:13px;font-weight:950;letter-spacing:.04em;">SOLO ROUND BENCHMARK ACTIVE</div>
+      <div style="font-size:12px;margin-top:4px;">
+        No real opponents were found in the selected round${__selectedRoundsForSolo.length===1?"":"s"}.
+        The report is comparing you with a computer-generated player using your exact playing/course handicap for each round.
+        The virtual player makes net par on every hole = 2 Stableford points per hole.
+      </div>
+    </div>
+    ` : ""}
 
     ${postRoundIntel?.ok ? `
     <div class="PRbox PRsec">
@@ -11956,11 +12114,13 @@ const postRoundIntel = (() => {
         <div class="PRintelCard">
           <div class="PRintelLabel">Strongest area today</div>
           <div class="PRintelValue">${postRoundIntel.strength?PR_escapeHtml(postRoundIntel.strength.label):"No clear standout"}</div>
+          ${postRoundIntel.strength?`<div class="PRmuted" style="font-size:11px;margin-top:3px;"><b>${PR_escapeHtml(postRoundIntel.strength.status||"")}</b>${Number.isFinite(postRoundIntel.strength.historyAvg)?` · prior avg ${postRoundIntel.strength.historyAvg>=0?"+":""}${postRoundIntel.strength.historyAvg.toFixed(2)} / hole`:""}</div>`:""}
         </div>
 
         <div class="PRintelCard">
           <div class="PRintelLabel">Main weakness today</div>
           <div class="PRintelValue">${postRoundIntel.weakness?PR_escapeHtml(postRoundIntel.weakness.label):"No clear weakness"}</div>
+          ${postRoundIntel.weakness?`<div class="PRmuted" style="font-size:11px;margin-top:3px;"><b>${PR_escapeHtml(postRoundIntel.weakness.status||"")}</b>${Number.isFinite(postRoundIntel.weakness.badRate)?` · below target in ${Math.round(postRoundIntel.weakness.badRate*100)}% of prior rounds`:""}</div>`:""}
         </div>
       </div>
 
@@ -11974,6 +12134,30 @@ const postRoundIntel = (() => {
             ${postRoundIntel.costly.slice(0,3).map(h=>`<div><b>Hole ${h.hole}</b>${Number.isFinite(h.par)?` (Par ${h.par}`:""}${Number.isFinite(h.si)?`, SI ${h.si}`:""}): cost ≈ <span class="PRbad">${h.cost.toFixed(1)}</span> ${postRoundIntel.isGrossMode?"strokes":"pts"}</div>`).join("")}
           </div>
         ` : `<div class="PRmuted" style="margin-top:4px;">No meaningful damage holes identified.</div>`}
+      </div>
+
+      <div class="PRintelCard" style="margin-top:10px;">
+        <div class="PRintelLabel">Was it the whole game — or a few holes?</div>
+        <div style="font-weight:900;margin-top:4px;">
+          ${postRoundIntel.restHoles>0
+            ? `${postRoundIntel.restHoles} holes excluding the three costliest were ${postRoundIntel.restDelta>=0?"+":""}${postRoundIntel.restDelta.toFixed(1)} ${postRoundIntel.isGrossMode?"strokes":"pts"} vs target.`
+            : "Not enough comparable holes."}
+        </div>
+        <div class="PRmuted" style="font-size:11px;margin-top:3px;">
+          ${postRoundIntel.restHoles>0
+            ? (postRoundIntel.restDelta>=0 ? "The core of the round was good enough; the score was disproportionately damaged by a small number of holes." : "The deficit was broader than just the worst three holes, so the priority is overall scoring consistency rather than one isolated mistake.")
+            : ""}
+        </div>
+      </div>
+
+      <div class="PRintelCard" style="margin-top:10px;">
+        <div class="PRintelLabel">Where the next points are realistically hiding</div>
+        ${postRoundIntel.recoverable&&postRoundIntel.recoverable.length ? `
+          <div style="margin-top:5px;line-height:1.65;">
+            ${postRoundIntel.recoverable.map((x,i)=>`<div><b>${i+1}. ${PR_escapeHtml(String(x.label||x.key||"—"))}</b> — realistic first gain ≈ <span class="PRgood"><b>${Number(x.recoverable).toFixed(1)}</b></span> ${postRoundIntel.isGrossMode?"strokes":"pts"}/round</div>`).join("")}
+            <div class="PRmuted" style="font-size:10px;margin-top:3px;">Opportunity estimates can overlap, so they are priorities rather than additive promises.</div>
+          </div>
+        ` : `<div class="PRmuted" style="margin-top:4px;">No recurring scoring leak is strong enough to quantify yet.</div>`}
       </div>
 
       <div class="PRintelCard" style="margin-top:10px;border-width:2px;">
