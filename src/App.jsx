@@ -10987,6 +10987,13 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
   let cur = players.find(p => String(p?.name||"") === String(playerName||"")) || players[0] || null;
   if (!cur) return { ok:false, error:"No player selected." };
 
+  // IMPORTANT:
+  // Keep the real selected player object untouched.
+  // The Overview snapshot may replace `cur` below with an aggregate-only object
+  // that does not contain the actual round series. Virtual same-handicap
+  // benchmarking MUST use the real player's round-by-round scorecards.
+  const __sourcePlayer = cur;
+
   // ------------------------------------------------------------
   // IMPORTANT: Use the Overview-computed benchmark outputs when available.
   // This keeps the report identical to the Overview (single source of truth).
@@ -11120,7 +11127,7 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
     let n = 0;
     for (const p of players){
       if (!p) continue;
-      if (__normPlayerName(p?.name) === __normPlayerName(cur?.name)) continue;
+      if (__normPlayerName(p?.name) === __normPlayerName(__sourcePlayer?.name)) continue;
       const s = Array.isArray(p?.series) ? p.series : [];
       if (s.some(r => __roundsMatchEvent(r, round))) n++;
     }
@@ -11260,14 +11267,14 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
   // may not contain seasonId metadata, so __filterSeries(cur.series) can
   // incorrectly return an empty array even though the report is showing them.
   const __reportRoundSeries =
-    (Array.isArray(cur?.roundSeries) && cur.roundSeries.length)
-      ? cur.roundSeries.filter(Boolean).slice()
-      : __filterSeries(cur?.series);
+    (Array.isArray(__sourcePlayer?.roundSeries) && __sourcePlayer.roundSeries.length)
+      ? __sourcePlayer.roundSeries.filter(Boolean).slice()
+      : __filterSeries(__sourcePlayer?.series);
 
   const __selectedRoundsForSolo =
     (__reportRoundSeries.length
       ? __reportRoundSeries
-      : (Array.isArray(cur?.series) ? cur.series.filter(Boolean).slice() : []));
+      : (Array.isArray(__sourcePlayer?.series) ? __sourcePlayer.series.filter(Boolean).slice() : []));
 
   const __normPlayerName = (s) =>
     String(s || "").trim().toLowerCase().replace(/\s+/g, " ");
@@ -11277,7 +11284,7 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
     realPeers: __eventRealPeerCount(r)
   }));
   const __distinctOtherPlayers = players.filter(p =>
-    p && __normPlayerName(p?.name) !== __normPlayerName(cur?.name)
+    p && __normPlayerName(p?.name) !== __normPlayerName(__sourcePlayer?.name)
   );
 
   const __allSelectedRoundsSolo =
@@ -11361,7 +11368,9 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
   }
 
 // Peer group baseline — if we didn't get a snapshot, fall back to the existing report logic.
-  let peers = players.filter(p => p && String(p?.name||"") !== String(cur?.name||""));
+  let peers = players.filter(p =>
+    p && __normPlayerName(p?.name) !== __normPlayerName(__sourcePlayer?.name)
+  );
   if (!__peerAgg) {
     const mode = (String(comparatorMode||"band") === "field") ? "field" : "band";
     try{
@@ -11373,14 +11382,16 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
         const bw = Number.isFinite(avgH) ? (avgH >= 18 ? 6 : (avgH >= 10 ? 4 : 3)) : 4;
 
         const picks = players.filter(p => {
-          if (!p || String(p?.name||"") === String(cur?.name||"")) return false;
+          if (!p || __normPlayerName(p?.name) === __normPlayerName(__sourcePlayer?.name)) return false;
           const s = __filterSeries(p?.series);
           const a = _mean(s.map(x => _num(x?.hcap, NaN)));
           return Number.isFinite(avgH) && Number.isFinite(a) && Math.abs(a - avgH) <= bw;
         });
 
         if (picks.length < 3){
-          peers = players.filter(p => p && String(p?.name||"") !== String(cur?.name||""));
+          peers = players.filter(p =>
+            p && __normPlayerName(p?.name) !== __normPlayerName(__sourcePlayer?.name)
+          );
           peerBand = "Field (band too small)";
         } else {
           peers = picks.slice();
@@ -12096,6 +12107,7 @@ const postRoundIntel = (() => {
       <div style="font-size:12px;margin-top:4px;">
         No real opponents were found in the ${__selectedRoundsForSolo.length} selected round${__selectedRoundsForSolo.length===1?"":"s"}.
         The ENTIRE report is comparing you with a computer-generated player using your exact playing/course handicap for each round.
+        The virtual benchmark contains <b>${PR_num(__peerAgg?.totalsGross?.holes ?? __peerAgg?.totals?.holes, 0)}</b> holes.
         The virtual player makes net par on every hole = 2 Stableford points per hole (36 points over 18 holes).
       </div>
     </div>
