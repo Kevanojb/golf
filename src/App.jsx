@@ -11311,6 +11311,12 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
     out.__slope = slopeForCH;
     out.__courseRating = ratingForCH;
     out.__parTotal = parTotalForCH;
+    // Explicit gross target, rather than merely relying on the equivalent
+    // "strokes over par" aggregate representation.
+    out.__targetGross = (
+      Number.isFinite(parTotalForCH) &&
+      Number.isFinite(ch)
+    ) ? (parTotalForCH + Math.round(ch)) : NaN;
     return out;
   }
 
@@ -11364,7 +11370,9 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
       byYards: {},
       byYardsGross: {},
       __virtualSameHcap: true,
-      __courseHcps: []
+      __courseHcps: [],
+      __targetGrosses: [],
+      __parTotals: []
     };
 
     const addObj = (dst, src) => {
@@ -11393,7 +11401,14 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
       mergeMap(out.byYards, a.byYards, mkPts);
       mergeMap(out.byYardsGross, a.byYardsGross, mkGross);
       if (Number.isFinite(Number(a.__courseHcp))) out.__courseHcps.push(Number(a.__courseHcp));
+      if (Number.isFinite(Number(a.__targetGross))) out.__targetGrosses.push(Number(a.__targetGross));
+      if (Number.isFinite(Number(a.__parTotal))) out.__parTotals.push(Number(a.__parTotal));
     }
+
+    out.__targetGrossTotal = out.__targetGrosses.reduce((s,v)=>s+v,0);
+    out.__targetGrossAvg = out.__targetGrosses.length
+      ? out.__targetGrossTotal / out.__targetGrosses.length
+      : NaN;
 
     return out;
   }
@@ -11762,6 +11777,27 @@ const postRoundIntel = (() => {
     });
     const isGrossMode = String(scoringMode) === "gross";
 
+    const arrPars = r => {
+      const x = r && (r.parsPerHole || r.parPerHole || r.parsArr || r.pars || r.parHoles || r.par);
+      return Array.isArray(x) ? x.map(Number) : [];
+    };
+    const arrSI = r => {
+      const x = r && (r.siPerHole || r.strokeIndexPerHole || r.siArr || r.si || r.strokeIndex);
+      return Array.isArray(x) ? x.map(Number) : [];
+    };
+    const arrYards = r => {
+      const x = r && (r.yardsPerHole || r.ydsPerHole || r.yardsArr || r.yards || r.holeYards || r.yardages || r.yardage);
+      return Array.isArray(x) ? x.map(Number) : [];
+    };
+    const arrPts = r => {
+      const x = r && (r.perHole || r.perHolePts || r.pointsPerHole || r.ptsPerHole || r.stablefordPerHole || r.stablefordHoles);
+      return Array.isArray(x) ? x.map(Number) : [];
+    };
+    const arrGross = r => {
+      const x = r && (r.grossPerHole || r.grossHoles || r.holeGross || r.scoresPerHole || r.scores || r.grossArr);
+      return Array.isArray(x) ? x.map(Number) : [];
+    };
+
     // Is this latest round a true solo event?
     // Match by source file first; fall back to round index/date + course.
     const sameEvent = (a,b) => {
@@ -11837,27 +11873,6 @@ const postRoundIntel = (() => {
       return full+((rem>0&&s<=rem)?1:0);
     };
 
-    const arrPars = r => {
-      const x = r && (r.parsPerHole || r.parPerHole || r.parsArr || r.pars || r.parHoles || r.par);
-      return Array.isArray(x) ? x.map(Number) : [];
-    };
-    const arrSI = r => {
-      const x = r && (r.siPerHole || r.strokeIndexPerHole || r.siArr || r.si || r.strokeIndex);
-      return Array.isArray(x) ? x.map(Number) : [];
-    };
-    const arrYards = r => {
-      const x = r && (r.yardsPerHole || r.ydsPerHole || r.yardsArr || r.yards || r.holeYards || r.yardages || r.yardage);
-      return Array.isArray(x) ? x.map(Number) : [];
-    };
-    const arrPts = r => {
-      const x = r && (r.perHole || r.perHolePts || r.pointsPerHole || r.ptsPerHole || r.stablefordPerHole || r.stablefordHoles);
-      return Array.isArray(x) ? x.map(Number) : [];
-    };
-    const arrGross = r => {
-      const x = r && (r.grossPerHole || r.grossHoles || r.holeGross || r.scoresPerHole || r.scores || r.grossArr);
-      return Array.isArray(x) ? x.map(Number) : [];
-    };
-
     const siBand = si => {
       const n = Number(si);
       if (!Number.isFinite(n)) return "SI ?";
@@ -11906,7 +11921,15 @@ const postRoundIntel = (() => {
       // In gross mode, net par translates to par + strokes received.
       if (isSoloRound){
         if (isGrossMode){
-          return {expected:virtualStrokesReceived(virtualCH,si),samples:18,virtual:true};
+          // Internally the report compares strokes-over-par, so the target value
+          // here is the number of handicap strokes received. This is exactly
+          // equivalent to target gross = par + strokes received.
+          return {
+            expected: virtualStrokesReceived(virtualCH,si),
+            expectedGross: Number(par) + virtualStrokesReceived(virtualCH,si),
+            samples:18,
+            virtual:true
+          };
         }
         return {expected:2,samples:18,virtual:true};
       }
@@ -12201,7 +12224,11 @@ const postRoundIntel = (() => {
         No real opponents were found in the ${__selectedRoundsForSolo.length} selected round${__selectedRoundsForSolo.length===1?"":"s"}.
         The ENTIRE report is comparing you with a computer-generated player using your Handicap Index converted to the correct Course Handicap for the tee played (using Slope, Course Rating and Par).
         The virtual benchmark contains <b>${PR_num(__peerAgg?.totalsGross?.holes ?? __peerAgg?.totals?.holes, 0)}</b> holes.
-        The virtual player then makes net par on every hole = 2 Stableford points per hole (36 points over 18 holes).
+        The virtual player makes net par on every hole = 2 Stableford points per hole (36 points over 18 holes).
+        ${String(scoringMode)==="gross" && Number.isFinite(Number(__peerAgg?.__targetGrossAvg))
+          ? `Across these rounds the computer golfer's average gross target is <b>${Number(__peerAgg.__targetGrossAvg).toFixed(1)}</b> strokes, calculated independently for each tee as Par + Course Handicap.`
+          : ""}
+        
       </div>
     </div>
     ` : ""}
@@ -12314,16 +12341,16 @@ const postRoundIntel = (() => {
     <b>Scoring vs Par:</b>
     You average <b>${Number.isFinite(youAvgPH)?youAvgPH.toFixed(2):"—"}</b> strokes over par per hole (≈ <b>${Number.isFinite(youAvgPH)?(youAvgPH*18).toFixed(1):"—"}</b> over par per 18 holes).
   ` : `
-    <b>Net Performance vs Peers:</b>
+    <b>${__usingVirtualSameHcapPeer ? "Performance vs Handicap Target" : "Net Performance vs Peers"}:</b>
     ${Number.isFinite(goodDeltaPH)
         ? (isGross
             ? (goodDeltaPH>=0
-                ? `You average <span class="${netCls}"><b>${goodDeltaPH.toFixed(2)}</b></span> fewer strokes per hole than your peer group (≈ <b>${(goodDeltaPH*18).toFixed(1)}</b> fewer strokes per 18 holes).`
-                : `You average <span class="${netCls}"><b>${Math.abs(goodDeltaPH).toFixed(2)}</b></span> more strokes per hole than your peer group (≈ <b>${(Math.abs(goodDeltaPH)*18).toFixed(1)}</b> more strokes per 18 holes).`
+                ? `You average <span class="${netCls}"><b>${goodDeltaPH.toFixed(2)}</b></span> fewer strokes per hole than your ${__usingVirtualSameHcapPeer ? "playing-to-handicap target" : "peer group"} (≈ <b>${(goodDeltaPH*18).toFixed(1)}</b> fewer strokes per 18 holes).`
+                : `You average <span class="${netCls}"><b>${Math.abs(goodDeltaPH).toFixed(2)}</b></span> more strokes per hole than your ${__usingVirtualSameHcapPeer ? "playing-to-handicap target" : "peer group"} (≈ <b>${(Math.abs(goodDeltaPH)*18).toFixed(1)}</b> more strokes per 18 holes).`
               )
             : (goodDeltaPH>=0
-                ? `You score <span class="${netCls}"><b>${goodDeltaPH.toFixed(2)}</b></span> more Stableford points per hole than your peer group (≈ <b>${(goodDeltaPH*18).toFixed(1)}</b> more points per 18 holes).`
-                : `You score <span class="${netCls}"><b>${Math.abs(goodDeltaPH).toFixed(2)}</b></span> fewer Stableford points per hole than your peer group (≈ <b>${(Math.abs(goodDeltaPH)*18).toFixed(1)}</b> fewer points per 18 holes).`
+                ? `You score <span class="${netCls}"><b>${goodDeltaPH.toFixed(2)}</b></span> more Stableford points per hole than your ${__usingVirtualSameHcapPeer ? "playing-to-handicap target" : "peer group"} (≈ <b>${(goodDeltaPH*18).toFixed(1)}</b> more points per 18 holes).`
+                : `You score <span class="${netCls}"><b>${Math.abs(goodDeltaPH).toFixed(2)}</b></span> fewer Stableford points per hole than your ${__usingVirtualSameHcapPeer ? "playing-to-handicap target" : "peer group"} (≈ <b>${(Math.abs(goodDeltaPH)*18).toFixed(1)}</b> fewer points per 18 holes).`
               )
           )
         : "—"
@@ -12336,8 +12363,8 @@ const postRoundIntel = (() => {
     Your scoring average is <b>${Number.isFinite(youAvgPH)?youAvgPH.toFixed(2):"—"}</b> strokes over par per hole.
   ` : `
     ${isGross
-      ? `Your scoring average is <span class="${avgCls}"><b>${Number.isFinite(youAvgPH)?youAvgPH.toFixed(2):"—"}</b></span> strokes over par per hole, compared to a peer average of <b>${Number.isFinite(peerAvgPH)?peerAvgPH.toFixed(2):"—"}</b> over par.`
-      : `Your scoring average is <span class="${avgCls}"><b>${Number.isFinite(youAvgPH)?youAvgPH.toFixed(2):"—"}</b></span> Stableford points per hole (≈ <b>${Number.isFinite(youAvgPH)?(youAvgPH*18).toFixed(1):"—"}</b> points per 18 holes), compared to a peer average of <b>${Number.isFinite(peerAvgPH)?peerAvgPH.toFixed(2):"—"}</b> points per hole.`
+      ? `Your scoring average is <span class="${avgCls}"><b>${Number.isFinite(youAvgPH)?youAvgPH.toFixed(2):"—"}</b></span> strokes over par per hole, compared to ${__usingVirtualSameHcapPeer ? "a target average of" : "a peer average of"} <b>${Number.isFinite(peerAvgPH)?peerAvgPH.toFixed(2):"—"}</b> over par.`
+      : `Your scoring average is <span class="${avgCls}"><b>${Number.isFinite(youAvgPH)?youAvgPH.toFixed(2):"—"}</b></span> Stableford points per hole (≈ <b>${Number.isFinite(youAvgPH)?(youAvgPH*18).toFixed(1):"—"}</b> points per 18 holes), compared to ${__usingVirtualSameHcapPeer ? "a target average of" : "a peer average of"} <b>${Number.isFinite(peerAvgPH)?peerAvgPH.toFixed(2):"—"}</b> points per hole.`
     }
   `}
 </p>
@@ -12379,7 +12406,7 @@ const postRoundIntel = (() => {
         ${__effComparatorMode==="par" ? `
           Your worst scoring is in <b>${PR_escapeHtml((worstItem?.label||worstItem?.key||"—"))}</b>, where you average <b>${Number.isFinite(_meVal(worstItem))?_meVal(worstItem).toFixed(2):"—"}</b> strokes over par per hole.
         ` : `
-          Your primary area for improvement is <b>${PR_escapeHtml((worstItem?.label||worstItem?.key||"—"))}</b>, costing <span class="${worstDeltaCls}"><b>${Number.isFinite(worstItem?.delta)?worstItem.delta.toFixed(2):"—"}</b></span> ${(String(scoringMode)==="gross" ? "strokes" : "points")} per hole compared to your handicap cohort.
+          Your primary area for improvement is <b>${PR_escapeHtml((worstItem?.label||worstItem?.key||"—"))}</b>, costing <span class="${worstDeltaCls}"><b>${Number.isFinite(worstItem?.delta)?worstItem.delta.toFixed(2):"—"}</b></span> ${(String(scoringMode)==="gross" ? "strokes" : "points")} per hole compared to ${__usingVirtualSameHcapPeer ? "your playing-to-handicap target" : "your handicap cohort"}.
         `}
       </p>
       <p class="PRp">
@@ -12405,7 +12432,9 @@ const postRoundIntel = (() => {
 
     <div class="PRbox PRsec">
       <div class="PRsecTitle">3. The Evidence Locker</div>
-      <div class="PRmuted" style="font-size:13px;margin-bottom:10px;">Raw peer-benchmarked tables used for the insights above.</div>
+      <div class="PRmuted" style="font-size:13px;margin-bottom:10px;">${__usingVirtualSameHcapPeer
+        ? "Raw playing-to-handicap target tables used for the insights above."
+        : "Raw peer-benchmarked tables used for the insights above."}</div>
 
       <div style="margin-top:10px;font-weight:900;">By Stroke Index</div>
       ${PR_renderTableBare(bySI, scoringMode, __effComparatorMode, rounds)}
