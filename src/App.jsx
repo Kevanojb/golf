@@ -11497,6 +11497,183 @@ const isGross = String(scoringMode) === "gross";
   const rounds = PR_num(cur?.rounds, NaN);
   const holes = PR_num(meTotals?.holes, NaN);
 
+  // ============================================================
+  // TEE-SPECIFIC YARDAGE REBUILD
+  //
+  // Never use one course layout for every round. Each round is
+  // re-bucketed from the 18 yardages belonging to the tee played
+  // THAT DAY (e.g. Chart Hills 66 = 6653, 61 = 6121).
+  //
+  // This deliberately bypasses cur.byYards / cur.byYardsGross,
+  // because those are pre-aggregated and can be wrong if a tee
+  // layout was matched incorrectly upstream.
+  // ============================================================
+  function __reportYardBand(y){
+    const n = Number(y);
+    if (!Number.isFinite(n)) return "Unknown";
+    if (n < 150) return "<150";
+    if (n <= 200) return "150–200";
+    if (n <= 350) return "201–350";
+    if (n <= 420) return "351–420";
+    return "420+";
+  }
+
+  function __valid18Yards(arr){
+    return Array.isArray(arr)
+      && arr.length >= 18
+      && arr.slice(0,18).every(v => Number.isFinite(Number(v)) && Number(v) > 0);
+  }
+
+  function __roundYards(r){
+    const candidates = [
+      r?.yardsArr,
+      r?.yardsPerHole,
+      r?.ydsPerHole,
+      r?.yards,
+      r?.holeYards,
+      r?.yardages
+    ];
+    for (const a of candidates){
+      if (__valid18Yards(a)) return a.slice(0,18).map(Number);
+    }
+    return null;
+  }
+
+  function __roundPars(r){
+    const candidates = [r?.parsArr, r?.parsPerHole, r?.parPerHole, r?.pars];
+    for (const a of candidates){
+      if (Array.isArray(a) && a.length >= 18) return a.slice(0,18).map(Number);
+    }
+    return null;
+  }
+
+  // Canonical layout PER COURSE + TEE.
+  // If several rounds were played from the same tee, use the most
+  // frequently occurring complete 18-hole layout for that tee only.
+  // A 61-tee layout can therefore never overwrite a 66-tee layout.
+  function __teeKey(r){
+    const c = String(r?.courseName || r?.course || "").trim().toLowerCase();
+    const t = String(r?.teeName || r?.teeLabel || r?.tee || "").trim().toLowerCase();
+    return `${c}|${t}`;
+  }
+
+  function __yardSignature(a){
+    return Array.isArray(a) ? a.slice(0,18).map(v=>Math.round(Number(v))).join(",") : "";
+  }
+
+  const __yardRounds =
+    (Array.isArray(__selectedRoundsForSolo) && __selectedRoundsForSolo.length)
+      ? __selectedRoundsForSolo
+      : (
+          Array.isArray(__sourcePlayer?.roundSeries) && __sourcePlayer.roundSeries.length
+            ? __sourcePlayer.roundSeries
+            : (Array.isArray(__sourcePlayer?.series) ? __sourcePlayer.series : [])
+        );
+
+  const __layoutsByTee = new Map();
+  for (const r of __yardRounds){
+    const y = __roundYards(r);
+    if (!y) continue;
+    const key = __teeKey(r);
+    if (!__layoutsByTee.has(key)) __layoutsByTee.set(key, new Map());
+    const sig = __yardSignature(y);
+    const m = __layoutsByTee.get(key);
+    const curSig = m.get(sig) || { count:0, yards:y };
+    curSig.count += 1;
+    m.set(sig, curSig);
+  }
+
+  const __canonicalYardsByTee = new Map();
+  for (const [key, variants] of __layoutsByTee.entries()){
+    const best = Array.from(variants.values()).sort((a,b)=>b.count-a.count)[0];
+    if (best?.yards) __canonicalYardsByTee.set(key, best.yards);
+  }
+
+  // Safety check against numeric tee names such as "66" or "61".
+  // It does NOT convert the tee number into yardages; it only prevents
+  // an obviously wrong layout being silently assigned to that tee.
+  function __teeNominalHundreds(r){
+    const s = String(r?.teeName || r?.teeLabel || r?.tee || "");
+    const m = s.match(/(?:^|\D)(\d{2})(?:\D|$)/);
+    if (!m) return NaN;
+    const n = Number(m[1]);
+    return Number.isFinite(n) ? n * 100 : NaN;
+  }
+
+  function __yardsForRound(r){
+    const own = __roundYards(r);
+    const canonical = __canonicalYardsByTee.get(__teeKey(r)) || null;
+
+    // Prefer the canonical layout for this SAME tee where available.
+    // This fixes a single malformed round without ever crossing tee keys.
+    let chosen = canonical || own;
+    if (!chosen) return null;
+
+    const nominal = __teeNominalHundreds(r);
+    const total = chosen.reduce((s,v)=>s+Number(v||0),0);
+
+    // If the chosen layout is implausible for a numeric tee name, try the
+    // round's own array instead. If both are implausible, omit yardage
+    // analysis for that round rather than borrowing another tee.
+    if (Number.isFinite(nominal) && Math.abs(total - nominal) > 450){
+      if (own){
+        const ownTotal = own.reduce((s,v)=>s+Number(v||0),0);
+        if (Math.abs(ownTotal - nominal) <= 450) chosen = own;
+        else return null;
+      } else {
+        return null;
+      }
+    }
+    return chosen;
+  }
+
+  function __buildActualYardAgg(roundSeries){
+    const byYards = {};
+    const byYardsGross = {};
+    const diagnostics = [];
+
+    const ensurePts = k => (byYards[k] ||= _makeAgg());
+    const ensureGross = k => (byYardsGross[k] ||= _makeAggGross());
+
+    for (const r of (Array.isArray(roundSeries) ? roundSeries : [])){
+      const ys = __yardsForRound(r);
+      if (!ys){
+        diagnostics.push({
+          course: String(r?.courseName || r?.course || ""),
+          tee: String(r?.teeName || r?.teeLabel || r?.tee || ""),
+          issue: "No valid tee-specific yardage layout"
+        });
+        continue;
+      }
+
+      const ps = __roundPars(r);
+      const pts = Array.isArray(r?.perHole) ? r.perHole : [];
+      const gross = Array.isArray(r?.grossPerHole) ? r.grossPerHole : [];
+
+      for (let i=0; i<18; i++){
+        const y = Number(ys[i]);
+        if (!Number.isFinite(y) || y <= 0) continue;
+
+        const p = Number(ps?.[i]);
+        const pt = Number(pts?.[i]);
+        const g = Number(gross?.[i]);
+        const played = Number.isFinite(pt) || (Number.isFinite(g) && g > 0);
+        if (!played) continue;
+
+        const k = __reportYardBand(y);
+
+        if (Number.isFinite(pt)) _addAgg(ensurePts(k), pt);
+        if (Number.isFinite(g) && g > 0 && Number.isFinite(p)){
+          _addAggGross(ensureGross(k), g - p);
+        }
+      }
+    }
+
+    return { byYards, byYardsGross, diagnostics };
+  }
+
+  const __actualYardAgg = __buildActualYardAgg(__yardRounds);
+
   // Core KPI buckets (same as the report cards)
   const bySI = PR_buildRawRows({
     scoringMode,
@@ -11521,7 +11698,9 @@ const isGross = String(scoringMode) === "gross";
   const byYd = PR_buildRawRows({
     scoringMode,
     dim:"Yards",
-    mapObj: isGross ? cur?.byYardsGross : cur?.byYards,
+    // IMPORTANT: actual player yardages are rebuilt round-by-round from
+    // the tee played on each round, not from the old season aggregate.
+    mapObj: isGross ? (__actualYardAgg?.byYardsGross || {}) : (__actualYardAgg?.byYards || {}),
     fieldObj: __peerAgg
       ? (isGross ? (__peerAgg?.byYardsGross || {}) : (__peerAgg?.byYards || {}))
       : (isGross ? PR_sumAggMap(peers, "byYardsGross", _makeAggGross) : PR_sumAggMap(peers, "byYards", _makeAgg)),
@@ -12228,6 +12407,26 @@ const postRoundIntel = (() => {
         ${String(scoringMode)==="gross" && Number.isFinite(Number(__peerAgg?.__targetGrossAvg))
           ? `Across these rounds the computer golfer's average gross target is <b>${Number(__peerAgg.__targetGrossAvg).toFixed(1)}</b> strokes, calculated independently for each tee as Par + Course Handicap.`
           : ""}
+        ${(() => {
+          try {
+            const groups = new Map();
+            for (const r of (__yardRounds || [])){
+              const y = __yardsForRound(r);
+              if (!y) continue;
+              const tee = String(r?.teeName || r?.teeLabel || r?.tee || "Unknown tee");
+              const total = y.reduce((s,v)=>s+Number(v||0),0);
+              const key = `${tee}|${Math.round(total)}`;
+              groups.set(key, (groups.get(key)||0)+1);
+            }
+            const bits = Array.from(groups.entries()).map(([k,n]) => {
+              const [tee,total] = k.split("|");
+              return `${PR_escapeHtml(tee)}: <b>${n}</b> round${n===1?"":"s"} · <b>${total} yds</b>`;
+            });
+            return bits.length
+              ? `<br/><span style="font-size:11px;"><b>Tee yardage audit:</b> ${bits.join(" · ")}</span>`
+              : "";
+          } catch(e) { return ""; }
+        })()}
         
       </div>
     </div>
