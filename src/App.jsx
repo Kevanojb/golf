@@ -12375,6 +12375,203 @@ const postRoundIntel = (() => {
   }
 })();
 
+// ============================================================
+// SCORECARD INTELLIGENCE
+// Uses scorecard data only: gross score, par, SI, tee/course,
+// handicap index/course rating/slope and historical rounds.
+// It deliberately does NOT guess whether a loss came from driving,
+// approach play, short game or putting.
+// ============================================================
+const scorecardIntel = (() => {
+  try {
+    const sortRounds = (arr) => (Array.isArray(arr) ? arr.filter(Boolean).slice() : []).sort((a,b) => {
+      const ax = Number.isFinite(Number(a?.dateMs)) ? Number(a.dateMs) : Number(a?.idx || 0);
+      const bx = Number.isFinite(Number(b?.dateMs)) ? Number(b.dateMs) : Number(b?.idx || 0);
+      return ax - bx;
+    });
+
+    const roundsAll = sortRounds(
+      (Array.isArray(__sourcePlayer?.roundSeries) && __sourcePlayer.roundSeries.length)
+        ? __sourcePlayer.roundSeries
+        : __sourcePlayer?.series
+    );
+
+    if (!roundsAll.length) return { ok:false };
+
+    const parsOf = r => {
+      const x = r?.parsArr || r?.parsPerHole || r?.parPerHole || r?.pars;
+      return Array.isArray(x) ? x.slice(0,18).map(Number) : [];
+    };
+    const siOf = r => {
+      const x = r?.siArr || r?.siPerHole || r?.strokeIndexPerHole || r?.si || r?.strokeIndex;
+      return Array.isArray(x) ? x.slice(0,18).map(Number) : [];
+    };
+    const grossOf = r => {
+      const x = r?.grossPerHole || r?.grossHoles || r?.holeGross || r?.scoresPerHole || r?.scores;
+      return Array.isArray(x) ? x.slice(0,18).map(Number) : [];
+    };
+
+    const strokesReceived = (ch, si) => {
+      const h = Math.max(0, Math.round(Number(ch) || 0));
+      const s = Number(si);
+      if (!Number.isFinite(s) || s < 1 || s > 18) return 0;
+      const full = Math.floor(h / 18);
+      const rem = h % 18;
+      return full + ((rem > 0 && s <= rem) ? 1 : 0);
+    };
+
+    const calcCH = r => {
+      const pars = parsOf(r);
+      const parTotal = pars.reduce((s,v)=>s+(Number.isFinite(v)?v:0),0);
+      const hi = Number.isFinite(Number(r?.startExact)) ? Number(r.startExact)
+        : Number.isFinite(Number(r?.handicapIndex)) ? Number(r.handicapIndex)
+        : Number.isFinite(Number(r?.handicap)) ? Number(r.handicap)
+        : NaN;
+      const slope = Number.isFinite(Number(r?.teeSlope)) ? Number(r.teeSlope)
+        : Number.isFinite(Number(r?.slope)) ? Number(r.slope)
+        : Number.isFinite(Number(r?.slopeRating)) ? Number(r.slopeRating)
+        : NaN;
+      const rating = Number.isFinite(Number(r?.teeRating)) ? Number(r.teeRating)
+        : Number.isFinite(Number(r?.rating)) ? Number(r.rating)
+        : Number.isFinite(Number(r?.courseRating)) ? Number(r.courseRating)
+        : NaN;
+
+      if (Number.isFinite(hi) && Number.isFinite(slope) && slope > 0 &&
+          Number.isFinite(rating) && Number.isFinite(parTotal) && parTotal > 0) {
+        return WHS_courseHandicap(hi, slope, rating, parTotal);
+      }
+      return Number.isFinite(Number(r?.courseHandicap)) ? Number(r.courseHandicap)
+        : Number.isFinite(Number(r?.playingHcap)) ? Number(r.playingHcap)
+        : Number.isFinite(Number(r?.hcap)) ? Number(r.hcap)
+        : NaN;
+    };
+
+    const courseNameOf = r => String(r?.courseName || r?.course || r?.clubName || "Course");
+    const teeNameOf = r => String(r?.teeName || r?.teeLabel || r?.tee || "Tee");
+
+    const analysed = roundsAll.map((r, ri) => {
+      const pars = parsOf(r), sis = siOf(r), gross = grossOf(r);
+      const ch = calcCH(r);
+      const holes = [];
+      for (let i=0; i<18; i++) {
+        const p = Number(pars[i]), si = Number(sis[i]), g = Number(gross[i]);
+        if (!Number.isFinite(p) || !Number.isFinite(g) || g <= 0) continue;
+        const recv = strokesReceived(ch, si);
+        const targetGross = p + recv;
+        const delta = targetGross - g; // positive = better than playing-to-handicap target
+        holes.push({
+          hole:i+1, par:p, si, gross:g, recv, targetGross, delta,
+          cost:Math.max(0, -delta), gain:Math.max(0, delta)
+        });
+      }
+      if (!holes.length) return null;
+
+      const actualGross = holes.reduce((s,h)=>s+h.gross,0);
+      const targetGross = holes.reduce((s,h)=>s+h.targetGross,0);
+      const delta = targetGross - actualGross;
+      const losses = holes.filter(h=>h.cost>0).sort((a,b)=>b.cost-a.cost);
+      const totalLoss = losses.reduce((s,h)=>s+h.cost,0);
+      const top3Loss = losses.slice(0,3).reduce((s,h)=>s+h.cost,0);
+      const damageShare = totalLoss ? top3Loss/totalLoss : 0;
+      const top3Set = new Set(losses.slice(0,3).map(h=>h.hole));
+      const restDelta = holes.filter(h=>!top3Set.has(h.hole)).reduce((s,h)=>s+h.delta,0);
+      const whatIfGross = actualGross - top3Loss;
+
+      return {
+        round:r, ri, ch, holes, actualGross, targetGross, delta,
+        losses, totalLoss, top3Loss, damageShare, restDelta, whatIfGross,
+        course:courseNameOf(r), tee:teeNameOf(r)
+      };
+    }).filter(Boolean);
+
+    if (!analysed.length) return {ok:false};
+
+    const latest = analysed[analysed.length-1];
+
+    // Playing-to-handicap rate.
+    const targetOrBetter = analysed.filter(r=>r.delta >= 0).length;
+    const targetRate = targetOrBetter / analysed.length;
+
+    // Recent form: last 3 rounds vs up to 5 immediately before them.
+    const last3 = analysed.slice(-3);
+    const prev5 = analysed.slice(Math.max(0, analysed.length-8), Math.max(0, analysed.length-3));
+    const avg = xs => xs.length ? xs.reduce((s,x)=>s+x.delta,0)/xs.length : NaN;
+    const last3Avg = avg(last3);
+    const prevAvg = avg(prev5);
+    const formChange = Number.isFinite(last3Avg) && Number.isFinite(prevAvg) ? last3Avg-prevAvg : NaN;
+    let formLabel = "Not enough history";
+    if (Number.isFinite(formChange)) {
+      if (formChange >= 2) formLabel = "Strongly improving";
+      else if (formChange >= 0.75) formLabel = "Improving";
+      else if (formChange <= -2) formLabel = "Clearly slipping";
+      else if (formChange <= -0.75) formLabel = "Slightly slipping";
+      else formLabel = "Stable";
+    }
+
+    // Exact recurring danger holes by course + tee + hole.
+    const hm = new Map();
+    for (const rr of analysed) {
+      for (const h of rr.holes) {
+        const key = `${rr.course}|${rr.tee}|${h.hole}`;
+        const rec = hm.get(key) || {
+          course:rr.course, tee:rr.tee, hole:h.hole,
+          appearances:0, totalDelta:0, totalCost:0, badRounds:0, gains:0
+        };
+        rec.appearances += 1;
+        rec.totalDelta += h.delta;
+        rec.totalCost += h.cost;
+        rec.gains += h.gain;
+        if (h.delta < 0) rec.badRounds += 1;
+        hm.set(key, rec);
+      }
+    }
+
+    const dangerHoles = Array.from(hm.values())
+      .filter(x=>x.appearances >= 2)
+      .map(x=>({
+        ...x,
+        avgDelta:x.totalDelta/x.appearances,
+        avgCost:x.totalCost/x.appearances,
+        badRate:x.badRounds/x.appearances,
+        confidence:x.appearances >= 5 ? "HIGH" : (x.appearances >= 3 ? "MEDIUM" : "LOW")
+      }))
+      .filter(x=>x.avgDelta < 0)
+      .sort((a,b)=>(b.avgCost*a.badRate)-(a.avgCost*b.badRate))
+      .slice(0,5);
+
+    // Round classification: scorecard pattern, not technical diagnosis.
+    let classification = "Played close to handicap";
+    let classWhy = `You finished ${Math.abs(latest.delta).toFixed(1)} strokes ${latest.delta>=0?"better":"worse"} than the playing-to-handicap target.`;
+    if (latest.delta >= 3) {
+      classification = "Strong round";
+      classWhy = "You beat the playing-to-handicap target by a clear margin.";
+    } else if (latest.delta <= -3 && latest.damageShare >= 0.65 && latest.restDelta >= -1) {
+      classification = "Good golf, damaged by a few holes";
+      classWhy = `${Math.round(latest.damageShare*100)}% of measured losses came from the three costliest holes, while the rest of the card was close to target.`;
+    } else if (latest.delta <= -3 && latest.damageShare < 0.55) {
+      classification = "Broadly below target";
+      classWhy = "The lost strokes were spread across the card rather than concentrated in only a few holes.";
+    } else if (latest.damageShare >= 0.70 && latest.totalLoss >= 4) {
+      classification = "Volatile round";
+      classWhy = `${Math.round(latest.damageShare*100)}% of the lost strokes were concentrated in only three holes.`;
+    }
+
+    // Confidence for the overall scorecard diagnosis.
+    const totalHoles = analysed.reduce((s,r)=>s+r.holes.length,0);
+    const confidence = analysed.length >= 8 && totalHoles >= 120 ? "HIGH"
+      : (analysed.length >= 4 && totalHoles >= 60 ? "MEDIUM" : "LOW");
+
+    return {
+      ok:true, analysed, latest, targetRate, targetOrBetter,
+      last3Avg, prevAvg, formChange, formLabel,
+      dangerHoles, classification, classWhy, confidence, totalHoles
+    };
+  } catch(e) {
+    try { console.error("Scorecard Intelligence failed:", e); } catch(_e) {}
+    return {ok:false};
+  }
+})();
+
   const htmlFragment = `
   <style>
     .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a}
@@ -12422,7 +12619,11 @@ const postRoundIntel = (() => {
     .PRintelCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
     .PRintelLabel{font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.07em;color:#64748b}
     .PRintelValue{font-size:16px;font-weight:950;margin-top:3px;color:#0f172a}
-    @media(max-width:700px){.PRintelGrid{grid-template-columns:1fr}}
+    .PRscoreGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
+    .PRscoreCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
+    .PRscoreBig{font-size:20px;font-weight:950;margin-top:3px}
+    .PRconf{display:inline-block;border:1px solid #cbd5e1;border-radius:999px;padding:2px 7px;font-size:10px;font-weight:950}
+    @media(max-width:700px){.PRintelGrid,.PRscoreGrid{grid-template-columns:1fr}}
   </style>
 
   <div class="PRr">
@@ -12573,6 +12774,80 @@ const postRoundIntel = (() => {
       <div class="PRmuted">Not enough prior hole-by-hole history yet to build a reliable latest-round expectation.</div>
     </div>
     `}
+
+    ${scorecardIntel?.ok ? `
+    <div class="PRbox PRsec">
+      <div class="PRsecTitle">Scorecard Intelligence</div>
+      <div style="font-size:18px;font-weight:950;">${PR_escapeHtml(scorecardIntel.classification)}</div>
+      <div class="PRmuted" style="font-size:12px;margin-top:4px;">
+        ${PR_escapeHtml(scorecardIntel.classWhy)}
+        · Confidence: <span class="PRconf">${scorecardIntel.confidence}</span>
+      </div>
+
+      <div class="PRscoreGrid">
+        <div class="PRscoreCard">
+          <div class="PRintelLabel">Playing-to-handicap frequency</div>
+          <div class="PRscoreBig">${Math.round(scorecardIntel.targetRate*100)}%</div>
+          <div class="PRmuted" style="font-size:11px;">${scorecardIntel.targetOrBetter} of ${scorecardIntel.analysed.length} rounds at target or better</div>
+        </div>
+
+        <div class="PRscoreCard">
+          <div class="PRintelLabel">Recent form</div>
+          <div class="PRscoreBig">${PR_escapeHtml(scorecardIntel.formLabel)}</div>
+          <div class="PRmuted" style="font-size:11px;">
+            ${Number.isFinite(scorecardIntel.last3Avg) ? `Last 3: ${scorecardIntel.last3Avg>=0?"+":""}${scorecardIntel.last3Avg.toFixed(1)} strokes/round vs target` : "Last 3 unavailable"}
+            ${Number.isFinite(scorecardIntel.prevAvg) ? ` · Previous: ${scorecardIntel.prevAvg>=0?"+":""}${scorecardIntel.prevAvg.toFixed(1)}` : ""}
+          </div>
+        </div>
+
+        <div class="PRscoreCard">
+          <div class="PRintelLabel">What-if latest round</div>
+          <div class="PRscoreBig">${Number.isFinite(scorecardIntel.latest.whatIfGross) ? scorecardIntel.latest.whatIfGross.toFixed(0) : "—"}</div>
+          <div class="PRmuted" style="font-size:11px;">
+            ${Number.isFinite(scorecardIntel.latest.whatIfGross)
+              ? `If the three costliest holes had merely matched handicap target instead of losing ${scorecardIntel.latest.top3Loss.toFixed(0)} strokes.`
+              : "Not enough hole data."}
+          </div>
+        </div>
+      </div>
+
+      <div class="PRscoreCard" style="margin-top:10px;">
+        <div class="PRintelLabel">Damage concentration — latest round</div>
+        <div style="font-size:15px;font-weight:900;margin-top:4px;">
+          ${scorecardIntel.latest.losses.length
+            ? `${Math.round(scorecardIntel.latest.damageShare*100)}% of all measured lost strokes came from the three costliest holes.`
+            : "No holes finished below the playing-to-handicap target."}
+        </div>
+        ${scorecardIntel.latest.losses.length ? `
+          <div class="PRmuted" style="font-size:11px;margin-top:5px;">
+            ${scorecardIntel.latest.losses.slice(0,3).map(h=>`Hole ${h.hole}: ${h.cost.toFixed(0)} stroke${Math.abs(h.cost-1)<0.01?"":"s"} lost`).join(" · ")}
+            · All other holes combined: ${scorecardIntel.latest.restDelta>=0?"+":""}${scorecardIntel.latest.restDelta.toFixed(1)} vs target.
+          </div>
+        ` : ""}
+      </div>
+
+      <div class="PRscoreCard" style="margin-top:10px;">
+        <div class="PRintelLabel">Recurring danger holes — exact course & tee</div>
+        ${scorecardIntel.dangerHoles.length ? `
+          <div style="margin-top:6px;line-height:1.6;">
+            ${scorecardIntel.dangerHoles.map((h,i)=>`
+              <div>
+                <b>${i+1}. ${PR_escapeHtml(h.course)} · ${PR_escapeHtml(h.tee)} · Hole ${h.hole}</b>
+                — ${Math.abs(h.avgDelta).toFixed(2)} strokes/hole below target
+                · below target ${Math.round(h.badRate*100)}% of visits
+                · <span class="PRconf">${h.confidence}</span>
+                · n=${h.appearances}
+              </div>
+            `).join("")}
+          </div>
+        ` : `<div class="PRmuted" style="font-size:11px;margin-top:5px;">No exact course/tee hole has enough repeat evidence to call a recurring danger hole yet.</div>`}
+      </div>
+
+      <div class="PRnote">
+        Scorecard-only diagnosis: this identifies where strokes are being lost and whether the pattern repeats. It deliberately does not claim the cause is driving, irons, short game or putting.
+      </div>
+    </div>
+    ` : ""}
 
     <div class="PRbox PRsec">
       <div class="PRsecTitle">1. The Season Headline</div>
@@ -12825,6 +13100,69 @@ async function PR_downloadSeasonReportPDF(){
   }
 }
 
+
+
+function PR_generateAllGolfersReportHTML({ model, yearLabel, seasonLimit, scoringMode, lensMode, comparatorMode }){
+  try{
+    const players = Array.isArray(model?.players) ? model.players.filter(Boolean) : [];
+    if(!players.length) return { ok:false, error:"No golfers found." };
+
+    const oldSnap = (typeof window !== "undefined") ? window.__dslOverviewReport : null;
+    const reports = [];
+    try{
+      // Prevent the currently selected golfer's Overview snapshot being reused
+      // for everybody else in the combined document.
+      if(typeof window !== "undefined") window.__dslOverviewReport = null;
+
+      for(const p of players){
+        const name = String(p?.name || "").trim();
+        if(!name) continue;
+        const r = PR_generateSeasonReportHTML({
+          model, playerName:name, yearLabel, seasonLimit,
+          scoringMode, lensMode, comparatorMode
+        });
+        if(r?.ok && (r.htmlFragment || r.html)){
+          reports.push({name, html:r.htmlFragment || r.html});
+        }
+      }
+    }finally{
+      if(typeof window !== "undefined") window.__dslOverviewReport = oldSnap;
+    }
+
+    if(!reports.length) return {ok:false,error:"No golfer reports could be generated."};
+
+    const esc=s=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
+
+    const cover=`
+      <style>
+        .PRallCover{font-family:Arial,Helvetica,sans-serif;color:#0f172a;padding:28px 24px;background:#fff;min-height:980px;box-sizing:border-box}
+        .PRallTitle{font-size:34px;font-weight:950;letter-spacing:-.03em}
+        .PRallSub{font-size:13px;color:#475569;margin-top:9px}
+        .PRallNames{margin-top:22px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+        .PRallName{border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:13px;font-weight:850}
+        .PRallNote{margin-top:20px;border:1px solid #cbd5e1;border-radius:12px;padding:13px;font-size:12px;line-height:1.55;background:#f8fafc}
+        .PRallPlayer{page-break-before:always;break-before:page}
+        @media(max-width:700px){.PRallNames{grid-template-columns:1fr}}
+      </style>
+      <div class="PRallCover">
+        <div class="PRallTitle">All Golfers — Performance Intelligence</div>
+        <div class="PRallSub">Season: <b>${esc(yearLabel||"All")}</b> · Window: <b>${esc(seasonLimit||"All")}</b> · Golfers: <b>${reports.length}</b></div>
+        <div class="PRallNames">${reports.map((x,i)=>`<div class="PRallName">${i+1}. ${esc(x.name)}</div>`).join("")}</div>
+        <div class="PRallNote">
+          One shareable report containing every golfer's full Scorecard Intelligence analysis.
+          Each golfer is calculated independently. Solo rounds use that golfer's Handicap Index converted
+          to the correct Course Handicap for the tee played, including tee-specific yardages.
+        </div>
+      </div>`;
+
+    const sections=reports.map(x=>`<section class="PRallPlayer">${x.html}</section>`).join("");
+    return {ok:true,htmlFragment:cover+sections,playerCount:reports.length};
+  }catch(e){
+    try{console.error("All golfers report failed:",e);}catch(_){}
+    return {ok:false,error:"Could not generate the all-golfers report."};
+  }
+}
 
 function PR_downloadHtmlFile(filename, html){
   try{
@@ -13918,6 +14256,53 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
           title="Generate and download the season report as PDF"
         >
           Download PDF Report
+        </button>
+
+        <button
+          className="btn-secondary"
+          onClick={() => {
+            try{
+              const lens = (localStorage.getItem("dsl_lens") || "pointsField");
+              const uiCohort = (window.__dslUiState && window.__dslUiState.cohortMode) ? window.__dslUiState.cohortMode : null;
+              const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
+                : ((window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode)
+                    ? window.__dslSeasonReportParams.comparatorMode
+                    : "band");
+
+              const r = PR_generateAllGolfersReportHTML({
+                model: seasonModel,
+                yearLabel: seasonYear,
+                seasonLimit: seasonLimit,
+                scoringMode,
+                lensMode: lens,
+                comparatorMode: comparator
+              });
+
+              if(!r?.ok){
+                alert(r?.error || "Could not generate all-golfers PDF.");
+                return;
+              }
+
+              window.__dslSeasonReportParams = {
+                model: seasonModel,
+                playerName: "All-Golfers",
+                yearLabel: seasonYear,
+                seasonLimit: seasonLimit,
+                scoringMode,
+                lensMode: lens,
+                comparatorMode: comparator
+              };
+
+              PR_showInlineSeasonReport(r.htmlFragment);
+              setTimeout(() => PR_downloadSeasonReportPDF(), 150);
+            }catch(e){
+              console.error(e);
+              alert("Could not generate all-golfers PDF.");
+            }
+          }}
+          title="Download one shareable PDF containing every golfer's full report"
+        >
+          Download All Golfers PDF
         </button>
         </div>
 
