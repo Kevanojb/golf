@@ -9316,7 +9316,7 @@ const coachLine = (row) => {
                         };
 
                         PR_showInlineSeasonReport(r.htmlFragment || r.html);
-                        setTimeout(() => PR_downloadSeasonReportPDF(), 150);
+                        setTimeout(() => PR_downloadAllGolfersPDFSegmented(), 180);
                       } catch (e) {
                         console.error(e);
                         alert("Could not generate all-golfers PDF.");
@@ -12721,6 +12721,160 @@ const handicapDial = (() => {
   }
 })();
 
+// ============================================================
+// EXECUTIVE PLAYER ACTION DASHBOARD
+// Scorecard-only: never pretends to know whether a loss came
+// from driving, irons, short game or putting.
+// ============================================================
+const playerActionDashboard = (() => {
+  try{
+    if(!scorecardIntel?.ok) return {ok:false};
+
+    const latest = scorecardIntel.latest;
+    const analysed = scorecardIntel.analysed || [];
+    const latestHoles = latest?.holes || [];
+
+    // -------------------------
+    // Where strokes were lost
+    // -------------------------
+    const lostHoles = latestHoles
+      .filter(h => Number(h?.cost) > 0)
+      .slice()
+      .sort((a,b) => Number(b.cost||0) - Number(a.cost||0));
+
+    const gainedHoles = latestHoles
+      .filter(h => Number(h?.gain) > 0)
+      .slice()
+      .sort((a,b) => Number(b.gain||0) - Number(a.gain||0));
+
+    const topLost = lostHoles.slice(0,3);
+    const totalLost = lostHoles.reduce((s,h)=>s+Number(h.cost||0),0);
+    const totalGained = gainedHoles.reduce((s,h)=>s+Number(h.gain||0),0);
+
+    // -------------------------
+    // Exact historical hole map
+    // -------------------------
+    const danger = Array.isArray(scorecardIntel.dangerHoles)
+      ? scorecardIntel.dangerHoles.slice(0,3)
+      : [];
+
+    // -------------------------
+    // Build category evidence
+    // from existing report rows
+    // -------------------------
+    const allRows = [
+      ...(Array.isArray(byPar) ? byPar : []),
+      ...(Array.isArray(bySI) ? bySI : []),
+      ...(Array.isArray(byYd) ? byYd : [])
+    ].filter(r => Number.isFinite(Number(r?.delta)));
+
+    const enrich = (r) => {
+      const n = Number(r?.meHoles ?? r?.holes ?? r?.n ?? 0);
+      const delta = Number(r?.delta);
+      let confidence = "LOW";
+      if(n >= 24) confidence = "HIGH";
+      else if(n >= 12) confidence = "MEDIUM";
+      return {...r, sample:n, delta, confidence};
+    };
+
+    const evidenceRows = allRows.map(enrich);
+
+    const goodRows = evidenceRows
+      .filter(r => r.delta > 0.08)
+      .sort((a,b)=>b.delta-a.delta);
+
+    const badRows = evidenceRows
+      .filter(r => r.delta < -0.08)
+      .sort((a,b)=>a.delta-b.delta);
+
+    const keep = goodRows.slice(0,4);
+    const fix = badRows.filter(r => r.confidence !== "LOW").slice(0,3);
+    const watch = badRows
+      .filter(r => !fix.some(f => String(f?.label) === String(r?.label)))
+      .slice(0,3);
+
+    // Biggest opportunity = worst repeatable category
+    const biggest = fix[0] || badRows[0] || null;
+
+    // -------------------------
+    // What-if:
+    // cap improvement at the
+    // amount actually lost there
+    // -------------------------
+    const recoverable = Math.max(
+      0,
+      Math.min(
+        Number(latest?.totalLoss || 0),
+        Number(latest?.top3Loss || 0)
+      )
+    );
+    const whatIfScore = Number.isFinite(Number(latest?.actualGross))
+      ? Number(latest.actualGross) - recoverable
+      : NaN;
+
+    // -------------------------
+    // Next-round mission
+    // -------------------------
+    let missionTitle = "Protect your score";
+    let missionText = "Keep the number of holes played worse than your handicap target as low as possible.";
+    let missionMetric = "Lose no more than 2 strokes to handicap across your identified danger area.";
+
+    if(biggest?.label){
+      missionTitle = String(biggest.label);
+      missionText = `This is the strongest repeatable scoring leak in the selected window.`;
+      const perHoleLoss = Math.abs(Number(biggest.delta || 0));
+      const sample = Number(biggest.sample || 0);
+      const roughPerRound = Math.max(0.5, Math.min(3, perHoleLoss * Math.min(6, Math.max(3, sample/Math.max(1, analysed.length)))));
+      missionMetric = `Next round: keep the total loss in ${String(biggest.label)} to 2 strokes or fewer. Improving this area toward target is worth roughly ${roughPerRound.toFixed(1)} strokes per round.`;
+    }
+
+    // -------------------------
+    // Verdict wording
+    // -------------------------
+    let verdictTitle = scorecardIntel.classification || "Round reviewed";
+    let verdictText = scorecardIntel.classWhy || "";
+
+    if(Number.isFinite(Number(latest?.delta))){
+      const d = Number(latest.delta);
+      if(d >= 1){
+        verdictTitle = "Better than handicap";
+        verdictText = `You beat the playing-to-handicap target by ${Math.abs(d).toFixed(1)} strokes.`;
+      }else if(d <= -1 && Number(latest?.damageShare || 0) >= 0.65){
+        verdictTitle = "A few holes damaged the score";
+        verdictText = `${Math.round(Number(latest.damageShare||0)*100)}% of the measured lost strokes came from the three costliest holes.`;
+      }else if(d <= -1){
+        verdictTitle = "Below handicap target";
+        verdictText = `You finished ${Math.abs(d).toFixed(1)} strokes worse than the playing-to-handicap target.`;
+      }else{
+        verdictTitle = "Played to handicap";
+        verdictText = "Your gross score was effectively on the playing-to-handicap target.";
+      }
+    }
+
+    return {
+      ok:true,
+      verdictTitle,
+      verdictText,
+      topLost,
+      totalLost,
+      totalGained,
+      danger,
+      keep,
+      watch,
+      fix,
+      biggest,
+      recoverable,
+      whatIfScore,
+      missionTitle,
+      missionText,
+      missionMetric
+    };
+  }catch(e){
+    try{console.error("Player action dashboard failed:",e);}catch(_){}
+    return {ok:false};
+  }
+})();
+
   const htmlFragment = `
   <style>
     .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a}
@@ -12781,7 +12935,38 @@ const handicapDial = (() => {
     .PRdialBad{color:#b91c1c}
     .PRdialNeutral{color:#334155}
     .PRdialMeta{font-size:12px;color:#64748b;line-height:1.5;margin-top:4px}
-    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRdialGrid{grid-template-columns:1fr}}
+
+    .PRexec{border:1px solid #cbd5e1;border-radius:18px;background:#fff;overflow:hidden;margin-top:12px}
+    .PRexecHead{background:#0f2747;color:#fff;padding:16px 18px}
+    .PRexecTitle{font-size:23px;font-weight:950;letter-spacing:-.02em}
+    .PRexecSub{font-size:12px;opacity:.85;margin-top:3px}
+    .PRexecGrid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px}
+    .PRexecGrid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:0 12px 12px}
+    .PRexecCard{border:1px solid #e2e8f0;border-radius:13px;padding:11px;background:#fff}
+    .PRexecCard h4{margin:0 0 7px;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#475569}
+    .PRexecBig{font-size:27px;font-weight:950;letter-spacing:-.03em}
+    .PRexecGood{border-color:#bbf7d0;background:#f0fdf4}
+    .PRexecWatch{border-color:#fed7aa;background:#fff7ed}
+    .PRexecBad{border-color:#fecaca;background:#fff1f2}
+    .PRexecTarget{border-color:#bfdbfe;background:#eff6ff}
+    .PRexecGood h4{color:#166534}
+    .PRexecWatch h4{color:#c2410c}
+    .PRexecBad h4{color:#b91c1c}
+    .PRexecTarget h4{color:#1d4ed8}
+    .PRexecList{margin:0;padding-left:18px;font-size:12px;line-height:1.55}
+    .PRexecMini{font-size:11px;color:#64748b;line-height:1.45}
+    .PRexecBar{display:grid;grid-template-columns:34px 1fr 48px;gap:7px;align-items:center;margin-top:6px;font-size:11px}
+    .PRexecTrack{height:8px;background:#e2e8f0;border-radius:999px;overflow:hidden;position:relative}
+    .PRexecFillBad{height:100%;background:#dc2626}
+    .PRexecFillGood{height:100%;background:#16a34a}
+    .PRexecVerdict{border:1px solid #dbeafe;background:#f8fbff;border-radius:13px;padding:12px;margin-top:10px}
+    .PRexecVerdictTitle{font-size:18px;font-weight:950;color:#0f172a}
+    .PRexecVerdictText{font-size:12px;color:#475569;margin-top:4px;line-height:1.5}
+    .PRexecFoot{font-size:10px;color:#64748b;padding:0 12px 12px;line-height:1.45}
+
+    @media(max-width:700px){
+      .PRintelGrid,.PRscoreGrid,.PRdialGrid,.PRexecGrid2,.PRexecGrid4{grid-template-columns:1fr}
+    }
   </style>
 
   <div class="PRr">
@@ -12990,9 +13175,138 @@ const handicapDial = (() => {
     </div>
     ` : ""}
 
+    ${playerActionDashboard?.ok ? `
+    <div class="PRexec PRsec">
+      <div class="PRexecHead">
+        <div class="PRexecTitle">Player Performance Dashboard</div>
+        <div class="PRexecSub">Your game. The data. The plan.</div>
+      </div>
+
+      <div class="PRexecGrid2">
+        <div class="PRexecCard">
+          <h4>Round verdict</h4>
+          <div class="PRexecVerdict">
+            <div class="PRexecVerdictTitle">${PR_escapeHtml(playerActionDashboard.verdictTitle)}</div>
+            <div class="PRexecVerdictText">${PR_escapeHtml(playerActionDashboard.verdictText)}</div>
+          </div>
+
+          <div style="margin-top:10px;font-size:12px;font-weight:900;">Where you lost strokes</div>
+          ${playerActionDashboard.topLost.length ? `
+            ${playerActionDashboard.topLost.map(h=>`
+              <div class="PRexecBar">
+                <div>H${h.hole}</div>
+                <div class="PRexecTrack">
+                  <div class="PRexecFillBad" style="width:${Math.min(100,Math.max(12,Number(h.cost||0)*28))}%"></div>
+                </div>
+                <div style="text-align:right;color:#b91c1c;font-weight:900;">-${Number(h.cost||0).toFixed(1)}</div>
+              </div>
+            `).join("")}
+          ` : `<div class="PRexecMini" style="margin-top:6px;">No holes finished worse than the playing-to-handicap target.</div>`}
+        </div>
+
+        <div class="PRexecCard">
+          <h4>What if?</h4>
+          <div class="PRexecBig">
+            ${Number.isFinite(Number(playerActionDashboard.whatIfScore))
+              ? Number(playerActionDashboard.whatIfScore).toFixed(0)
+              : "—"}
+          </div>
+          <div class="PRexecMini">
+            ${Number(playerActionDashboard.recoverable||0) > 0
+              ? `Potential gross if the three costliest holes had merely matched handicap target: ${Number(playerActionDashboard.recoverable).toFixed(0)} strokes better.`
+              : "There was no meaningful recoverable loss from the three costliest holes."}
+          </div>
+
+          <div style="margin-top:12px;font-size:12px;font-weight:900;">Biggest opportunity</div>
+          <div style="font-size:18px;font-weight:950;color:#166534;margin-top:3px;">
+            ${playerActionDashboard.biggest?.label ? PR_escapeHtml(playerActionDashboard.biggest.label) : "Protect the card"}
+          </div>
+          <div class="PRexecMini" style="margin-top:4px;">
+            ${playerActionDashboard.biggest?.label
+              ? `This is the strongest repeatable scoring leak in the selected window.`
+              : "No category has enough evidence yet to call it a confirmed repeat weakness."}
+          </div>
+        </div>
+      </div>
+
+      <div class="PRexecGrid4">
+        <div class="PRexecCard PRexecGood">
+          <h4>Keep doing</h4>
+          ${playerActionDashboard.keep.length ? `
+            <ul class="PRexecList">
+              ${playerActionDashboard.keep.map(r=>`<li>${PR_escapeHtml(r.label || "Area")} (${r.delta>=0?"+":""}${Number(r.delta).toFixed(2)}/hole)</li>`).join("")}
+            </ul>
+          ` : `<div class="PRexecMini">No confirmed strength yet.</div>`}
+        </div>
+
+        <div class="PRexecCard PRexecWatch">
+          <h4>Watch</h4>
+          ${playerActionDashboard.watch.length ? `
+            <ul class="PRexecList">
+              ${playerActionDashboard.watch.map(r=>`<li>${PR_escapeHtml(r.label || "Area")} · ${r.confidence} confidence</li>`).join("")}
+            </ul>
+          ` : `<div class="PRexecMini">Nothing currently sits in the watch zone.</div>`}
+        </div>
+
+        <div class="PRexecCard PRexecBad">
+          <h4>Fix first</h4>
+          ${playerActionDashboard.fix.length ? `
+            <ul class="PRexecList">
+              ${playerActionDashboard.fix.map(r=>`<li><b>${PR_escapeHtml(r.label || "Area")}</b> · ${r.confidence} · n=${r.sample}</li>`).join("")}
+            </ul>
+          ` : `<div class="PRexecMini">No high-confidence repeat weakness yet.</div>`}
+        </div>
+
+        <div class="PRexecCard PRexecTarget">
+          <h4>Your next-round target</h4>
+          <div style="font-size:16px;font-weight:950;color:#1d4ed8;">
+            ${PR_escapeHtml(playerActionDashboard.missionTitle)}
+          </div>
+          <div class="PRexecMini" style="margin-top:5px;">${PR_escapeHtml(playerActionDashboard.missionText)}</div>
+          <div style="font-size:12px;font-weight:900;color:#0f172a;margin-top:7px;">
+            ${PR_escapeHtml(playerActionDashboard.missionMetric)}
+          </div>
+        </div>
+      </div>
+
+      <div class="PRexecGrid2" style="padding-top:0;">
+        <div class="PRexecCard">
+          <h4>Next 3 danger holes</h4>
+          ${playerActionDashboard.danger.length ? `
+            <ol class="PRexecList">
+              ${playerActionDashboard.danger.map(h=>`
+                <li>
+                  <b>${PR_escapeHtml(h.course)} · ${PR_escapeHtml(h.tee)} · Hole ${h.hole}</b>
+                  — ${Math.abs(Number(h.avgDelta||0)).toFixed(2)} strokes/hole below target
+                  · ${Math.round(Number(h.badRate||0)*100)}% of visits
+                  · ${h.confidence}
+                </li>
+              `).join("")}
+            </ol>
+          ` : `<div class="PRexecMini">Not enough repeat course/tee evidence yet.</div>`}
+        </div>
+
+        <div class="PRexecCard">
+          <h4>Round pattern</h4>
+          <div class="PRexecMini">
+            Lost strokes measured: <b>${Number(playerActionDashboard.totalLost||0).toFixed(1)}</b><br/>
+            Strokes gained vs target: <b>${Number(playerActionDashboard.totalGained||0).toFixed(1)}</b><br/>
+            Playing-to-handicap frequency: <b>${Math.round(Number(scorecardIntel.targetRate||0)*100)}%</b><br/>
+            Recent form: <b>${PR_escapeHtml(scorecardIntel.formLabel || "—")}</b>
+          </div>
+        </div>
+      </div>
+
+      <div class="PRexecFoot">
+        Scorecard-only intelligence: this report identifies <b>where</b> strokes were lost and what scoring targets to take into the next round.
+        It does not claim whether the cause was driving, approach play, short game or putting unless that data is actually recorded.
+      </div>
+    </div>
+    ` : ""}
+
     ${scorecardIntel?.ok ? `
     <div class="PRbox PRsec">
-      <div class="PRsecTitle">Scorecard Intelligence</div>
+      <div class="PRsecTitle">Detailed Scorecard Intelligence</div>
       <div style="font-size:18px;font-weight:950;">${PR_escapeHtml(scorecardIntel.classification)}</div>
       <div class="PRmuted" style="font-size:12px;margin-top:4px;">
         ${PR_escapeHtml(scorecardIntel.classWhy)}
@@ -13187,7 +13501,13 @@ function PR_loadHtml2Pdf(){
   return new Promise((resolve, reject) => {
     try{
       if(typeof window !== "undefined" && typeof window.html2pdf === "function"){
-        resolve(window.html2pdf);
+        try{
+      if(window.html2pdf && window.html2pdf.Worker){
+        // html2pdf normally exposes html2canvas/jsPDF globally through its bundle.
+        // Leave existing globals intact if already available.
+      }
+    }catch(e){}
+    resolve(window.html2pdf);
         return;
       }
 
@@ -13446,6 +13766,172 @@ function PR_generateAllGolfersReportHTML({ model, yearLabel, seasonLimit, scorin
       ok:false,
       error:`Could not generate the all-golfers report: ${String(e?.message || e || "Unknown error")}`
     };
+  }
+}
+
+
+
+
+async function PR_ensurePdfCanvasLibs(){
+  const loadScript = (src) => new Promise((resolve,reject)=>{
+    const existing = Array.from(document.scripts || []).find(s => String(s.src||"") === src);
+    if(existing){
+      if(existing.dataset.loaded === "1") return resolve();
+      existing.addEventListener("load",()=>resolve(),{once:true});
+      existing.addEventListener("error",()=>reject(new Error("Could not load "+src)),{once:true});
+      return;
+    }
+    const s=document.createElement("script");
+    s.src=src;
+    s.async=true;
+    s.onload=()=>{s.dataset.loaded="1";resolve();};
+    s.onerror=()=>reject(new Error("Could not load "+src));
+    document.head.appendChild(s);
+  });
+
+  if(typeof window.html2canvas !== "function"){
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
+  }
+  if(!(window.jspdf && window.jspdf.jsPDF)){
+    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+  }
+}
+
+async function PR_downloadAllGolfersPDFSegmented(){
+  const btns = Array.from(document.querySelectorAll("button"));
+  let holder = null;
+
+  try{
+    const body = document.getElementById("PR_seasonReportBody");
+    if(!body){
+      alert("Generate the all-golfers report first.");
+      return;
+    }
+
+    await PR_loadHtml2Pdf();
+    await PR_ensurePdfCanvasLibs();
+    const jsPDFCtor = (window.jspdf && window.jspdf.jsPDF)
+      ? window.jspdf.jsPDF
+      : null;
+
+    // html2pdf bundles jsPDF internally, but in some builds it is not exposed.
+    // If unavailable, use html2pdf per segment and fall back to the normal exporter.
+    if(!jsPDFCtor){
+      console.warn("jsPDF not exposed; falling back to standard PDF exporter.");
+      return PR_downloadSeasonReportPDF();
+    }
+
+    const cover = body.querySelector(".PRallCover");
+    const sections = Array.from(body.querySelectorAll(".PRallPlayer"));
+
+    if(!sections.length){
+      return PR_downloadSeasonReportPDF();
+    }
+
+    const params = (window.__dslSeasonReportParams || {});
+    const safe = (v) => String(v || "report")
+      .trim().replace(/[^a-z0-9_-]+/gi,"_").replace(/^_+|_+$/g,"");
+
+    const filename = `SeasonReport_all-golfers_${safe(params.yearLabel || "season")}.pdf`;
+
+    const pdf = new jsPDFCtor({
+      unit:"mm",
+      format:"a4",
+      orientation:"portrait"
+    });
+
+    // remove the automatic first blank page only after first image is added
+    let hasContent = false;
+    const pageW = 210;
+    const pageH = 297;
+    const margin = 8;
+    const usableW = pageW - margin*2;
+    const usableH = pageH - margin*2;
+
+    holder = document.createElement("div");
+    holder.style.position = "fixed";
+    holder.style.left = "-100000px";
+    holder.style.top = "0";
+    holder.style.width = "760px";
+    holder.style.background = "#fff";
+    document.body.appendChild(holder);
+
+    async function renderNodeToPdf(node){
+      const clone = node.cloneNode(true);
+      clone.style.width = "760px";
+      clone.style.maxWidth = "760px";
+      clone.style.background = "#fff";
+      clone.style.boxSizing = "border-box";
+      clone.style.pageBreakBefore = "auto";
+      clone.style.breakBefore = "auto";
+
+      holder.innerHTML = "";
+      holder.appendChild(clone);
+
+      // Let browser fully lay out fonts/SVG before capture
+      await new Promise(r => setTimeout(r, 40));
+
+      const canvas = await window.html2canvas(clone, {
+        scale: 1.65,
+        useCORS: true,
+        backgroundColor:"#ffffff",
+        logging:false,
+        scrollX:0,
+        scrollY:0,
+        windowWidth:760
+      });
+
+      if(!canvas || !canvas.width || !canvas.height) return;
+
+      const imgWmm = usableW;
+      const pxPerMm = canvas.width / imgWmm;
+      const slicePxH = Math.floor(usableH * pxPerMm);
+
+      let yPx = 0;
+      while(yPx < canvas.height){
+        const thisH = Math.min(slicePxH, canvas.height - yPx);
+
+        const slice = document.createElement("canvas");
+        slice.width = canvas.width;
+        slice.height = thisH;
+        const ctx = slice.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0,0,slice.width,slice.height);
+        ctx.drawImage(
+          canvas,
+          0,yPx,canvas.width,thisH,
+          0,0,canvas.width,thisH
+        );
+
+        const img = slice.toDataURL("image/jpeg",0.94);
+        const imgHmm = thisH / pxPerMm;
+
+        if(hasContent) pdf.addPage();
+        pdf.addImage(img,"JPEG",margin,margin,imgWmm,imgHmm,undefined,"FAST");
+        hasContent = true;
+
+        yPx += thisH;
+      }
+    }
+
+    if(cover) await renderNodeToPdf(cover);
+    for(const sec of sections){
+      await renderNodeToPdf(sec);
+    }
+
+    if(!hasContent){
+      throw new Error("No PDF pages were rendered.");
+    }
+
+    pdf.save(filename);
+
+  }catch(e){
+    try{console.error("Segmented all-golfers PDF export failed:",e);}catch(_){}
+    alert(`Could not create the All Golfers PDF: ${String(e?.message || e || "Unknown error")}`);
+  }finally{
+    if(holder && holder.parentNode){
+      try{holder.parentNode.removeChild(holder);}catch(_){}
+    }
   }
 }
 
