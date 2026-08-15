@@ -9257,6 +9257,76 @@ const coachLine = (row) => {
                   >
                     Generate Report
                   </button>
+
+                  <button
+                    className="btn-primary"
+                    onClick={() => {
+                      try {
+                        const snap = (typeof window !== "undefined" && window.__dslOverviewReport)
+                          ? window.__dslOverviewReport
+                          : null;
+
+                        const lens = String(
+                          snap?.lensMode ||
+                          (typeof localStorage !== "undefined"
+                            ? (localStorage.getItem("dsl_lens") || "pointsField")
+                            : "pointsField")
+                        );
+
+                        const uiCohort = (
+                          typeof window !== "undefined" &&
+                          window.__dslUiState &&
+                          window.__dslUiState.cohortMode
+                        ) ? window.__dslUiState.cohortMode : null;
+
+                        let comparator = String(
+                          snap?.comparatorMode ||
+                          (uiCohort ? (uiCohort === "field" ? "field" : "band") : "") ||
+                          (window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode) ||
+                          "band"
+                        );
+
+                        if (lens === "strokesPar") comparator = "par";
+                        if (comparator !== "par" && comparator !== "field" && comparator !== "band") {
+                          comparator = "band";
+                        }
+
+                        const r = PR_generateAllGolfersReportHTML({
+                          model: seasonModel,
+                          yearLabel: seasonYear,
+                          seasonLimit: seasonLimit,
+                          scoringMode,
+                          lensMode: lens,
+                          comparatorMode: comparator
+                        });
+
+                        if (!r || !r.ok) {
+                          alert(r?.error || "Could not generate all-golfers PDF.");
+                          return;
+                        }
+
+                        window.__dslSeasonReportParams = {
+                          model: seasonModel,
+                          playerName: "All-Golfers",
+                          yearLabel: seasonYear,
+                          seasonLimit: seasonLimit,
+                          scoringMode,
+                          lensMode: lens,
+                          comparatorMode: comparator
+                        };
+
+                        PR_showInlineSeasonReport(r.htmlFragment || r.html);
+                        setTimeout(() => PR_downloadSeasonReportPDF(), 150);
+                      } catch (e) {
+                        console.error(e);
+                        alert("Could not generate all-golfers PDF.");
+                      }
+                    }}
+                    title="Download one PDF containing every golfer's full report"
+                  >
+                    Download All Golfers PDF
+                  </button>
+
                   <button
                     className="btn-secondary"
                     onClick={() => {
@@ -9272,6 +9342,9 @@ const coachLine = (row) => {
                     Problem Holes
                   </button>
                 </div>
+              </div>
+              <div className="mt-2 text-xs font-bold text-emerald-700">
+                All Golfers PDF is available from the button above.
               </div>
             <div className="mt-1 break-words leading-tight">
               <span className="text-4xl md:text-5xl font-black tracking-tight text-neutral-900">{firstName}</span>
