@@ -12572,6 +12572,201 @@ const scorecardIntel = (() => {
   }
 })();
 
+// ============================================================
+// EXACT HANDICAP-TARGET INTELLIGENCE
+// Used ONLY for the gauge / action boxes / costly-hole stroke figures.
+// Hole cost = actual gross - (par + handicap strokes received).
+// No peer average and no weighted historical expectation is used here.
+// ============================================================
+const handicapTargetIntel = (() => {
+  try {
+    const sortRounds = arr => (Array.isArray(arr) ? arr.filter(Boolean).slice() : [])
+      .sort((a,b)=>{
+        const ax=Number.isFinite(Number(a?.dateMs))?Number(a.dateMs):Number(a?.idx||0);
+        const bx=Number.isFinite(Number(b?.dateMs))?Number(b.dateMs):Number(b?.idx||0);
+        return ax-bx;
+      });
+
+    const selectedSeries = sortRounds(
+      Array.isArray(windowSeries) && windowSeries.length
+        ? windowSeries
+        : (Array.isArray(cur?.series) ? __filterSeries(cur.series) : [])
+    );
+    if(!selectedSeries.length) return {ok:false};
+
+    const parsOf=r=>{
+      const x=r&&(r.parsPerHole||r.parPerHole||r.parsArr||r.pars||r.parHoles||r.par);
+      return Array.isArray(x)?x.slice(0,18).map(Number):[];
+    };
+    const siOf=r=>{
+      const x=r&&(r.siPerHole||r.strokeIndexPerHole||r.siArr||r.si||r.strokeIndex);
+      return Array.isArray(x)?x.slice(0,18).map(Number):[];
+    };
+    const yardsOf=r=>{
+      const x=r&&(r.yardsPerHole||r.ydsPerHole||r.yardsArr||r.yards||r.holeYards||r.yardages||r.yardage);
+      return Array.isArray(x)?x.slice(0,18).map(Number):[];
+    };
+    const grossOf=r=>{
+      const x=r&&(r.grossPerHole||r.grossHoles||r.holeGross||r.scoresPerHole||r.scores||r.grossArr);
+      return Array.isArray(x)?x.slice(0,18).map(Number):[];
+    };
+
+    const courseHandicapFor=r=>{
+      const pars=parsOf(r);
+      const parTotal=pars.reduce((s,v)=>s+(Number.isFinite(v)?v:0),0);
+
+      const hi=Number.isFinite(Number(r?.startExact))?Number(r.startExact)
+        : Number.isFinite(Number(r?.handicapIndex))?Number(r.handicapIndex)
+        : Number.isFinite(Number(r?.handicap))?Number(r.handicap)
+        : NaN;
+      const slope=Number.isFinite(Number(r?.teeSlope))?Number(r.teeSlope)
+        : Number.isFinite(Number(r?.slope))?Number(r.slope)
+        : Number.isFinite(Number(r?.slopeRating))?Number(r.slopeRating)
+        : NaN;
+      const rating=Number.isFinite(Number(r?.teeRating))?Number(r.teeRating)
+        : Number.isFinite(Number(r?.rating))?Number(r.rating)
+        : Number.isFinite(Number(r?.courseRating))?Number(r.courseRating)
+        : NaN;
+
+      if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0){
+        return WHS_courseHandicap(hi,slope,rating,parTotal);
+      }
+
+      return Number.isFinite(Number(r?.courseHandicap))?Number(r.courseHandicap)
+        : Number.isFinite(Number(r?.playingHcap))?Number(r.playingHcap)
+        : Number.isFinite(Number(r?.hcap))?Number(r.hcap)
+        : NaN;
+    };
+
+    const strokesReceived=(ch,si)=>{
+      const h=Math.max(0,Math.round(Number(ch)||0));
+      const s=Number(si);
+      if(!Number.isFinite(s)||s<1||s>18)return 0;
+      const full=Math.floor(h/18),rem=h%18;
+      return full+((rem>0&&s<=rem)?1:0);
+    };
+
+    const siBand=si=>{
+      const n=Number(si);
+      if(!Number.isFinite(n))return null;
+      if(n<=6)return "SI 1–6";
+      if(n<=12)return "SI 7–12";
+      return "SI 13–18";
+    };
+    const yardBand=y=>{
+      const n=Number(y);
+      if(!Number.isFinite(n))return null;
+      if(n<150)return "<150";
+      if(n<=200)return "150–200";
+      if(n<=350)return "201–350";
+      if(n<=420)return "351–420";
+      return "420+";
+    };
+
+    const analysed=selectedSeries.map((r,roundIndex)=>{
+      const pars=parsOf(r),sis=siOf(r),yards=yardsOf(r),gross=grossOf(r);
+      const ch=courseHandicapFor(r);
+      const holes=[];
+
+      for(let i=0;i<18;i++){
+        const par=Number(pars[i]),si=Number(sis[i]),y=Number(yards[i]),g=Number(gross[i]);
+        if(!Number.isFinite(par)||!Number.isFinite(g)||g<=0)continue;
+
+        const recv=strokesReceived(ch,si);
+        const targetGross=par+recv;
+        const delta=targetGross-g;             // + good, - bad
+        const cost=Math.max(0,g-targetGross);  // EXACT strokes lost
+        const gain=Math.max(0,targetGross-g);
+
+        holes.push({
+          roundIndex,hole:i+1,par,si,
+          yards:Number.isFinite(y)?y:NaN,
+          gross:g,strokesReceived:recv,targetGross,
+          delta,cost,gain
+        });
+      }
+
+      if(!holes.length)return null;
+      const actualGross=holes.reduce((s,h)=>s+h.gross,0);
+      const targetGross=holes.reduce((s,h)=>s+h.targetGross,0);
+
+      return {round:r,ch,holes,actualGross,targetGross,delta:targetGross-actualGross};
+    }).filter(Boolean);
+
+    if(!analysed.length)return {ok:false};
+
+    const latest=analysed[analysed.length-1];
+    const costly=latest.holes.filter(h=>h.cost>0).slice()
+      .sort((a,b)=>(b.cost-a.cost)||(a.hole-b.hole));
+    const totalCost=costly.reduce((s,h)=>s+h.cost,0);
+    const top3Cost=costly.slice(0,3).reduce((s,h)=>s+h.cost,0);
+    const damageShare=totalCost>0?top3Cost/totalCost:NaN;
+
+    const categoryMap=new Map();
+    const add=(type,label,h)=>{
+      if(!label)return;
+      const key=`${type}|${label}`;
+      const x=categoryMap.get(key)||{
+        type,label,displayLabel:`${type}: ${label}`,
+        holes:0,roundIds:new Set(),sum:0,bad:0,good:0
+      };
+      x.holes+=1;
+      x.roundIds.add(h.roundIndex);
+      x.sum+=h.delta;
+      if(h.delta<0)x.bad+=1;
+      if(h.delta>0)x.good+=1;
+      categoryMap.set(key,x);
+    };
+
+    analysed.forEach((rr,ri)=>{
+      rr.holes.forEach(h0=>{
+        const h={...h0,roundIndex:ri};
+        add("Par",`Par ${h.par}`,h);
+        add("Stroke Index",siBand(h.si),h);
+        add("Yardage",yardBand(h.yards),h);
+      });
+    });
+
+    const cats=Array.from(categoryMap.values()).map(x=>{
+      const rounds=x.roundIds.size;
+      const avg=x.holes?x.sum/x.holes:NaN;
+      let confidence="LOW EVIDENCE";
+      if(x.holes>=24&&rounds>=4)confidence="CONFIRMED";
+      else if(x.holes>=12&&rounds>=3)confidence="EMERGING";
+      return {...x,rounds,avg,confidence,badRate:x.holes?x.bad/x.holes:0};
+    }).filter(x=>Number.isFinite(x.avg));
+
+    // One useful strength per dimension to avoid duplicated "insight".
+    const keep=[];
+    ["Par","Stroke Index","Yardage"].forEach(type=>{
+      const rows=cats.filter(x=>x.type===type&&x.avg>0.05)
+        .sort((a,b)=>(b.avg*Math.sqrt(b.holes))-(a.avg*Math.sqrt(a.holes)));
+      if(rows[0])keep.push(rows[0]);
+    });
+
+    const badRows=cats.filter(x=>x.avg<-0.05)
+      .sort((a,b)=>(a.avg*Math.sqrt(a.holes))-(b.avg*Math.sqrt(b.holes)));
+
+    const fixFirst=badRows[0]||null;
+    const watch=(fixFirst
+      ? (badRows.find(x=>x.type!==fixFirst.type)||badRows[1])
+      : badRows[0])||null;
+
+    let nextTarget="Keep the card at or better than your handicap target.";
+    if(fixFirst){
+      nextTarget=`Keep total loss in ${fixFirst.displayLabel} to 2 strokes or fewer next round.`;
+    }else if(costly.length){
+      nextTarget="Keep total damage from the three costliest holes to 2 strokes or fewer next round.";
+    }
+
+    return {ok:true,analysed,latest,costly,totalCost,top3Cost,damageShare,keep,fixFirst,watch,nextTarget};
+
+  }catch(e){
+    try{console.error("Exact handicap target intelligence failed:",e);}catch(_e){}
+    return {ok:false};
+  }
+})();
+
   const htmlFragment = `
   <style>
     .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a}
@@ -12619,11 +12814,25 @@ const scorecardIntel = (() => {
     .PRintelCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
     .PRintelLabel{font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.07em;color:#64748b}
     .PRintelValue{font-size:16px;font-weight:950;margin-top:3px;color:#0f172a}
+    .PRhgWrap{border:1px solid #dbe4ee;border-radius:16px;padding:12px 14px;background:#fff;margin-top:14px}
+    .PRhgGrid{display:grid;grid-template-columns:minmax(260px,1fr) minmax(200px,.9fr);gap:14px;align-items:center}
+    .PRhgSvg{width:100%;max-width:390px;height:auto;display:block;margin:0 auto}
+    .PRhgBig{font-size:30px;font-weight:950;letter-spacing:-.03em}
+    .PRhgGood{color:#15803d}.PRhgBad{color:#b91c1c}.PRhgNeutral{color:#334155}
+    .PRcoachGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin-top:10px}
+    .PRcoach{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
+    .PRcoach.good{border-color:#bbf7d0;background:#f0fdf4}
+    .PRcoach.watch{border-color:#fed7aa;background:#fff7ed}
+    .PRcoach.bad{border-color:#fecaca;background:#fff1f2}
+    .PRcoach.target{border-color:#bfdbfe;background:#eff6ff}
+    .PRcoachTitle{font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px}
+    .PRcoachText{font-size:11px;line-height:1.5;color:#334155}
+    .PRaudit{font-size:10px;color:#64748b;margin-top:2px}
     .PRscoreGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
     .PRscoreCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
     .PRscoreBig{font-size:20px;font-weight:950;margin-top:3px}
     .PRconf{display:inline-block;border:1px solid #cbd5e1;border-radius:999px;padding:2px 7px;font-size:10px;font-weight:950}
-    @media(max-width:700px){.PRintelGrid,.PRscoreGrid{grid-template-columns:1fr}}
+    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRhgGrid,.PRcoachGrid{grid-template-columns:1fr}}
   </style>
 
   <div class="PRr">
@@ -12670,6 +12879,104 @@ const scorecardIntel = (() => {
           } catch(e) { return ""; }
         })()}
         
+      </div>
+    </div>
+    ` : ""}
+
+    ${handicapTargetIntel?.ok ? `
+    <div class="PRhgWrap PRsec">
+      <div class="PRsecTitle">Round vs Handicap Target</div>
+
+      <div class="PRhgGrid">
+        <div>
+          ${(() => {
+            const d=Number(handicapTargetIntel.latest.delta||0);
+            const capped=Math.max(-8,Math.min(8,d));
+            const angle=-90+((capped+8)/16)*180;
+            return `
+              <svg class="PRhgSvg" viewBox="0 0 420 235">
+                <path d="M55 195 A155 155 0 0 1 210 40" fill="none" stroke="#dc2626" stroke-width="28"/>
+                <path d="M210 40 A155 155 0 0 1 365 195" fill="none" stroke="#16a34a" stroke-width="28"/>
+                <line x1="210" y1="24" x2="210" y2="58" stroke="#0f172a" stroke-width="5"/>
+                <text x="210" y="18" text-anchor="middle" font-size="12" font-weight="800" fill="#0f172a">HANDICAP</text>
+                <text x="48" y="224" text-anchor="middle" font-size="11" font-weight="800" fill="#b91c1c">WORSE</text>
+                <text x="210" y="224" text-anchor="middle" font-size="11" font-weight="800" fill="#334155">0</text>
+                <text x="372" y="224" text-anchor="middle" font-size="11" font-weight="800" fill="#15803d">BETTER</text>
+                <g transform="rotate(${angle.toFixed(1)} 210 195)">
+                  <line x1="210" y1="195" x2="210" y2="68" stroke="#0f172a" stroke-width="7" stroke-linecap="round"/>
+                  <polygon points="210,55 201,78 219,78" fill="#0f172a"/>
+                </g>
+                <circle cx="210" cy="195" r="13" fill="#0f172a"/>
+                <circle cx="210" cy="195" r="5" fill="#fff"/>
+              </svg>`;
+          })()}
+        </div>
+
+        <div>
+          <div class="PRk">Latest round</div>
+          <div class="PRhgBig ${handicapTargetIntel.latest.delta>0?"PRhgGood":(handicapTargetIntel.latest.delta<0?"PRhgBad":"PRhgNeutral")}">
+            ${handicapTargetIntel.latest.delta>=0?"+":""}${Number(handicapTargetIntel.latest.delta).toFixed(0)} strokes
+          </div>
+          <div class="PRmuted" style="font-size:12px;margin-top:4px;">
+            Actual gross <b>${Number(handicapTargetIntel.latest.actualGross).toFixed(0)}</b>
+            · handicap target <b>${Number(handicapTargetIntel.latest.targetGross).toFixed(0)}</b>
+            · Course Handicap <b>${Number.isFinite(Number(handicapTargetIntel.latest.ch))?Math.round(Number(handicapTargetIntel.latest.ch)):"—"}</b>
+          </div>
+
+          ${handicapTargetIntel.costly.length ? `
+            <div style="font-size:12px;font-weight:900;margin-top:10px;">Exact costly holes</div>
+            <div style="font-size:11px;line-height:1.55;margin-top:3px;">
+              ${handicapTargetIntel.costly.slice(0,3).map(h=>`
+                <div>
+                  <b>Hole ${h.hole}</b>:
+                  <span class="PRbad">-${Number(h.cost).toFixed(0)} stroke${Number(h.cost)===1?"":"s"}</span>
+                  <span class="PRaudit"> · Gross ${h.gross} vs target ${h.targetGross} · Par ${h.par} · SI ${Number.isFinite(h.si)?h.si:"—"} · receives ${h.strokesReceived}</span>
+                </div>
+              `).join("")}
+            </div>
+          ` : ""}
+        </div>
+      </div>
+
+      <div class="PRcoachGrid">
+        <div class="PRcoach good">
+          <div class="PRcoachTitle">Keep doing</div>
+          <div class="PRcoachText">
+            ${handicapTargetIntel.keep.length
+              ? handicapTargetIntel.keep.map(x=>`
+                  <div><b>${PR_escapeHtml(x.displayLabel)}</b> · ${x.avg>=0?"+":""}${x.avg.toFixed(2)}/hole vs handicap target · n=${x.holes}</div>
+                `).join("")
+              : "No area is clearly outperforming handicap target yet."}
+          </div>
+        </div>
+
+        <div class="PRcoach watch">
+          <div class="PRcoachTitle">Watch</div>
+          <div class="PRcoachText">
+            ${handicapTargetIntel.watch
+              ? `<b>${PR_escapeHtml(handicapTargetIntel.watch.displayLabel)}</b><br/>${handicapTargetIntel.watch.avg.toFixed(2)}/hole vs target · ${handicapTargetIntel.watch.confidence} · n=${handicapTargetIntel.watch.holes}`
+              : "No separate below-target category needs watching."}
+          </div>
+        </div>
+
+        <div class="PRcoach bad">
+          <div class="PRcoachTitle">Fix first</div>
+          <div class="PRcoachText">
+            ${handicapTargetIntel.fixFirst
+              ? `<b>${PR_escapeHtml(handicapTargetIntel.fixFirst.displayLabel)}</b><br/>${handicapTargetIntel.fixFirst.avg.toFixed(2)}/hole vs target · ${handicapTargetIntel.fixFirst.confidence} · n=${handicapTargetIntel.fixFirst.holes}`
+              : "No recurring category is currently below handicap target."}
+          </div>
+        </div>
+
+        <div class="PRcoach target">
+          <div class="PRcoachTitle">Next-round target</div>
+          <div class="PRcoachText"><b>${PR_escapeHtml(handicapTargetIntel.nextTarget)}</b></div>
+        </div>
+      </div>
+
+      <div class="PRnote">
+        Gauge and box figures use one rule only: <b>gross target = par + handicap strokes received on that hole</b>.
+        Individual-hole costs are exact gross strokes, not historical averages.
       </div>
     </div>
     ` : ""}
@@ -12722,12 +13029,18 @@ const scorecardIntel = (() => {
 
       <div class="PRintelCard" style="margin-top:10px;">
         <div class="PRintelLabel">Where the round was lost</div>
-        ${postRoundIntel.costly.length ? `
+        ${(handicapTargetIntel?.ok && handicapTargetIntel.costly.length) ? `
           <div style="font-weight:900;margin-top:4px;">
-            ${Number.isFinite(postRoundIntel.damageShare)?`The three costliest holes produced ${(postRoundIntel.damageShare*100).toFixed(0)}% of measured under-performance.`:""}
+            ${Number.isFinite(handicapTargetIntel.damageShare)?`The three costliest holes produced ${(handicapTargetIntel.damageShare*100).toFixed(0)}% of all strokes lost to handicap target.`:""}
           </div>
           <div style="margin-top:5px;line-height:1.6;">
-            ${postRoundIntel.costly.slice(0,3).map(h=>`<div><b>Hole ${h.hole}</b>${Number.isFinite(h.par)?` (Par ${h.par}`:""}${Number.isFinite(h.si)?`, SI ${h.si}`:""}): cost ≈ <span class="PRbad">${h.cost.toFixed(1)}</span> ${postRoundIntel.isGrossMode?"strokes":"pts"}</div>`).join("")}
+            ${handicapTargetIntel.costly.slice(0,3).map(h=>`
+              <div>
+                <b>Hole ${h.hole}</b> (Par ${h.par}${Number.isFinite(h.si)?`, SI ${h.si}`:""}):
+                cost <span class="PRbad"><b>${Number(h.cost).toFixed(0)}</b></span> stroke${Number(h.cost)===1?"":"s"}
+                <span class="PRmuted" style="font-size:10px;"> · gross ${h.gross}, target ${h.targetGross}, receives ${h.strokesReceived}</span>
+              </div>
+            `).join("")}
           </div>
         ` : `<div class="PRmuted" style="margin-top:4px;">No meaningful damage holes identified.</div>`}
       </div>
@@ -14171,6 +14484,68 @@ const planKPIs = React.useMemo(() => {
         setScoringMode={setScoringMode}
       />
 
+      <div className="mt-3">
+        <button
+          className="btn-primary w-full"
+          style={{
+            width: "100%",
+            padding: "14px 16px",
+            fontSize: "16px",
+            fontWeight: 900,
+            borderRadius: "14px"
+          }}
+          onClick={() => {
+            try{
+              const lens = (localStorage.getItem("dsl_lens") || "pointsField");
+              const uiCohort = (window.__dslUiState && window.__dslUiState.cohortMode)
+                ? window.__dslUiState.cohortMode
+                : null;
+              const comparator = uiCohort
+                ? (uiCohort === "field" ? "field" : "band")
+                : ((window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode)
+                    ? window.__dslSeasonReportParams.comparatorMode
+                    : "band");
+
+              const r = PR_generateAllGolfersReportHTML({
+                model: seasonModel,
+                yearLabel: seasonYear,
+                seasonLimit: seasonLimit,
+                scoringMode,
+                lensMode: lens,
+                comparatorMode: comparator
+              });
+
+              if(!r?.ok){
+                alert(r?.error || "Could not generate all-golfers PDF.");
+                return;
+              }
+
+              window.__dslSeasonReportParams = {
+                model: seasonModel,
+                playerName: "All-Golfers",
+                yearLabel: seasonYear,
+                seasonLimit: seasonLimit,
+                scoringMode,
+                lensMode: lens,
+                comparatorMode: comparator
+              };
+
+              PR_showInlineSeasonReport(r.htmlFragment);
+              setTimeout(() => PR_downloadSeasonReportPDF(), 150);
+            }catch(e){
+              console.error(e);
+              alert("Could not generate all-golfers PDF.");
+            }
+          }}
+          title="Download one shareable PDF containing every golfer's full report"
+        >
+          Download All Golfers PDF
+        </button>
+        <div style={{fontSize:"11px", color:"#64748b", marginTop:"5px"}}>
+          One PDF containing every golfer's full performance report.
+        </div>
+      </div>
+
       <div className="mt-3 flex gap-2 flex-wrap">
         <button
           className="btn-primary"
@@ -14258,52 +14633,7 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
           Download PDF Report
         </button>
 
-        <button
-          className="btn-secondary"
-          onClick={() => {
-            try{
-              const lens = (localStorage.getItem("dsl_lens") || "pointsField");
-              const uiCohort = (window.__dslUiState && window.__dslUiState.cohortMode) ? window.__dslUiState.cohortMode : null;
-              const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
-                : ((window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode)
-                    ? window.__dslSeasonReportParams.comparatorMode
-                    : "band");
 
-              const r = PR_generateAllGolfersReportHTML({
-                model: seasonModel,
-                yearLabel: seasonYear,
-                seasonLimit: seasonLimit,
-                scoringMode,
-                lensMode: lens,
-                comparatorMode: comparator
-              });
-
-              if(!r?.ok){
-                alert(r?.error || "Could not generate all-golfers PDF.");
-                return;
-              }
-
-              window.__dslSeasonReportParams = {
-                model: seasonModel,
-                playerName: "All-Golfers",
-                yearLabel: seasonYear,
-                seasonLimit: seasonLimit,
-                scoringMode,
-                lensMode: lens,
-                comparatorMode: comparator
-              };
-
-              PR_showInlineSeasonReport(r.htmlFragment);
-              setTimeout(() => PR_downloadSeasonReportPDF(), 150);
-            }catch(e){
-              console.error(e);
-              alert("Could not generate all-golfers PDF.");
-            }
-          }}
-          title="Download one shareable PDF containing every golfer's full report"
-        >
-          Download All Golfers PDF
-        </button>
         </div>
 
 
