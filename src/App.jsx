@@ -11632,8 +11632,49 @@ const isGross = String(scoringMode) === "gross";
     const byYardsGross = {};
     const diagnostics = [];
 
-    const ensurePts = k => (byYards[k] ||= _makeAgg());
-    const ensureGross = k => (byYardsGross[k] ||= _makeAggGross());
+    // Local report-safe aggregators. Do NOT use the App-scope _makeAgg/_addAgg
+    // helpers here: PR_generateSeasonReportHTML is a standalone function and
+    // cannot access helpers declared inside React App().
+    const makePtsAgg = () => ({
+      holes:0, pts:0, wipes:0,
+      p0:0, p1:0, p2:0, p3:0, p4:0, p5:0
+    });
+    const addPtsAgg = (a, pts) => {
+      const v = Number(pts);
+      if (!a || !Number.isFinite(v)) return;
+      a.holes += 1;
+      a.pts += v;
+      if (v === 0) a.wipes += 1;
+      const p = Math.max(0, Math.min(5, Math.round(v)));
+      a[`p${p}`] = (Number(a[`p${p}`]) || 0) + 1;
+    };
+
+    const makeGrossAgg = () => ({
+      holes:0, val:0, sumSq:0,
+      bogeyPlus:0, parOrBetter:0, birdieOrBetter:0,
+      doublePlus:0, eaglePlus:0,
+      birdies:0, pars:0, bogeys:0, doubles:0, triplesPlus:0
+    });
+    const addGrossAgg = (a, strokesOverPar) => {
+      const v = Number(strokesOverPar);
+      if (!a || !Number.isFinite(v)) return;
+      a.holes += 1;
+      a.val += v;
+      a.sumSq += v*v;
+      if (v >= 1) a.bogeyPlus += 1;
+      if (v <= 0) a.parOrBetter += 1;
+      if (v <= -1) a.birdieOrBetter += 1;
+      if (v >= 2) a.doublePlus += 1;
+      if (v <= -2) a.eaglePlus += 1;
+      if (v === -1) a.birdies += 1;
+      if (v === 0) a.pars += 1;
+      if (v === 1) a.bogeys += 1;
+      if (v === 2) a.doubles += 1;
+      if (v >= 3) a.triplesPlus += 1;
+    };
+
+    const ensurePts = k => (byYards[k] ||= makePtsAgg());
+    const ensureGross = k => (byYardsGross[k] ||= makeGrossAgg());
 
     for (const r of (Array.isArray(roundSeries) ? roundSeries : [])){
       const ys = __yardsForRound(r);
@@ -11662,9 +11703,9 @@ const isGross = String(scoringMode) === "gross";
 
         const k = __reportYardBand(y);
 
-        if (Number.isFinite(pt)) _addAgg(ensurePts(k), pt);
+        if (Number.isFinite(pt)) addPtsAgg(ensurePts(k), pt);
         if (Number.isFinite(g) && g > 0 && Number.isFinite(p)){
-          _addAggGross(ensureGross(k), g - p);
+          addGrossAgg(ensureGross(k), g - p);
         }
       }
     }
