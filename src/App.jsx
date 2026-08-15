@@ -13180,62 +13180,133 @@ function PR_generateAllGolfersReportHTML({ model, yearLabel, seasonLimit, scorin
     const players = Array.isArray(model?.players) ? model.players.filter(Boolean) : [];
     if(!players.length) return { ok:false, error:"No golfers found." };
 
-    const oldSnap = (typeof window !== "undefined") ? window.__dslOverviewReport : null;
     const reports = [];
-    try{
-      // Prevent the currently selected golfer's Overview snapshot being reused
-      // for everybody else in the combined document.
-      if(typeof window !== "undefined") window.__dslOverviewReport = null;
+    const skipped = [];
+    const oldSnap = (typeof window !== "undefined") ? window.__dslOverviewReport : null;
+    const oldParams = (typeof window !== "undefined") ? window.__dslSeasonReportParams : null;
 
-      for(const p of players){
-        const name = String(p?.name || "").trim();
-        if(!name) continue;
-        const r = PR_generateSeasonReportHTML({
-          model, playerName:name, yearLabel, seasonLimit,
-          scoringMode, lensMode, comparatorMode
-        });
-        if(r?.ok && (r.htmlFragment || r.html)){
-          reports.push({name, html:r.htmlFragment || r.html});
+    for(const p of players){
+      const name = String(p?.name || "").trim();
+      if(!name) continue;
+
+      try{
+        if(typeof window !== "undefined"){
+          window.__dslOverviewReport = null;
+          window.__dslSeasonReportParams = {
+            model,
+            playerName: name,
+            yearLabel,
+            seasonLimit,
+            scoringMode,
+            lensMode,
+            comparatorMode
+          };
         }
+
+        const r = PR_generateSeasonReportHTML({
+          model,
+          playerName: name,
+          yearLabel,
+          seasonLimit,
+          scoringMode,
+          lensMode,
+          comparatorMode
+        });
+
+        if(r && r.ok && (r.htmlFragment || r.html)){
+          reports.push({ name, html: r.htmlFragment || r.html });
+        }else{
+          skipped.push({ name, reason: String(r?.error || "No report data") });
+        }
+      }catch(playerErr){
+        try{ console.error("All-golfers player failed:", name, playerErr); }catch(_){}
+        skipped.push({
+          name,
+          reason: String(playerErr?.message || playerErr || "Player report failed")
+        });
       }
-    }finally{
-      if(typeof window !== "undefined") window.__dslOverviewReport = oldSnap;
     }
 
-    if(!reports.length) return {ok:false,error:"No golfer reports could be generated."};
+    try{
+      if(typeof window !== "undefined"){
+        window.__dslOverviewReport = oldSnap;
+        window.__dslSeasonReportParams = oldParams;
+      }
+    }catch(_){}
 
-    const esc=s=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;")
-      .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
+    if(!reports.length){
+      const detail = skipped.length
+        ? skipped.slice(0,5).map(x => `${x.name}: ${x.reason}`).join(" | ")
+        : "No report sections were created.";
+      return { ok:false, error:`Could not generate any golfer reports. ${detail}` };
+    }
 
-    const cover=`
+    const esc = (s) => String(s ?? "")
+      .replace(/&/g,"&amp;")
+      .replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;")
+      .replace(/"/g,"&quot;")
+      .replace(/'/g,"&#039;");
+
+    const cover = `
       <style>
         .PRallCover{font-family:Arial,Helvetica,sans-serif;color:#0f172a;padding:28px 24px;background:#fff;min-height:980px;box-sizing:border-box}
         .PRallTitle{font-size:34px;font-weight:950;letter-spacing:-.03em}
         .PRallSub{font-size:13px;color:#475569;margin-top:9px}
         .PRallNames{margin-top:22px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
         .PRallName{border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:13px;font-weight:850}
+        .PRallSkipped{margin-top:16px;border:1px solid #fecaca;background:#fff7f7;border-radius:10px;padding:10px 12px;font-size:11px;line-height:1.5}
         .PRallNote{margin-top:20px;border:1px solid #cbd5e1;border-radius:12px;padding:13px;font-size:12px;line-height:1.55;background:#f8fafc}
         .PRallPlayer{page-break-before:always;break-before:page}
         @media(max-width:700px){.PRallNames{grid-template-columns:1fr}}
       </style>
       <div class="PRallCover">
         <div class="PRallTitle">All Golfers — Performance Intelligence</div>
-        <div class="PRallSub">Season: <b>${esc(yearLabel||"All")}</b> · Window: <b>${esc(seasonLimit||"All")}</b> · Golfers: <b>${reports.length}</b></div>
-        <div class="PRallNames">${reports.map((x,i)=>`<div class="PRallName">${i+1}. ${esc(x.name)}</div>`).join("")}</div>
+        <div class="PRallSub">
+          Season: <b>${esc(yearLabel || "All")}</b>
+          · Window: <b>${esc(seasonLimit || "All")}</b>
+          · Reports generated: <b>${reports.length}</b>
+          ${skipped.length ? ` · Skipped: <b>${skipped.length}</b>` : ""}
+        </div>
+        <div class="PRallNames">
+          ${reports.map((x,i)=>`<div class="PRallName">${i+1}. ${esc(x.name)}</div>`).join("")}
+        </div>
+        ${skipped.length ? `
+          <div class="PRallSkipped">
+            <b>Golfers skipped:</b><br/>
+            ${skipped.map(x=>`${esc(x.name)} — ${esc(x.reason)}`).join("<br/>")}
+          </div>
+        ` : ""}
         <div class="PRallNote">
           One shareable report containing every golfer's full Scorecard Intelligence analysis.
-          Each golfer is calculated independently. Solo rounds use that golfer's Handicap Index converted
-          to the correct Course Handicap for the tee played, including tee-specific yardages.
+          Each golfer is calculated independently. Solo rounds use that golfer's Handicap Index
+          converted to the correct Course Handicap for the tee played, with tee-specific yardages.
         </div>
-      </div>`;
+      </div>
+    `;
 
-    const sections=reports.map(x=>`<section class="PRallPlayer">${x.html}</section>`).join("");
-    return {ok:true,htmlFragment:cover+sections,playerCount:reports.length};
+    const sections = reports.map(x => `
+      <section class="PRallPlayer" data-player="${esc(x.name)}">
+        ${x.html}
+      </section>
+    `).join("");
+
+    return {
+      ok:true,
+      htmlFragment:cover + sections,
+      playerCount:reports.length,
+      skippedCount:skipped.length,
+      skipped
+    };
   }catch(e){
-    try{console.error("All golfers report failed:",e);}catch(_){}
-    return {ok:false,error:"Could not generate the all-golfers report."};
+    try{ console.error("All golfers report failed:",e); }catch(_){}
+    return {
+      ok:false,
+      error:`Could not generate the all-golfers report: ${String(e?.message || e || "Unknown error")}`
+    };
   }
 }
+
 
 function PR_downloadHtmlFile(filename, html){
   try{
