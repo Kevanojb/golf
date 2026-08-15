@@ -11051,6 +11051,41 @@ function PR_regenSeasonReport(mode){
 
 
 function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit, scoringMode, lensMode, comparatorMode }){
+  // Report-local aggregate helpers; do not depend on App() scope.
+  const PR_makeAgg = () => ({
+    holes: 0, pts: 0, wipes: 0,
+    p0: 0, p1: 0, p2: 0, p3: 0, p4: 0, p5: 0
+  });
+  const PR_makeAggGross = () => ({
+    holes: 0, val: 0, sumSq: 0,
+    bogeyPlus: 0, parOrBetter: 0, birdieOrBetter: 0,
+    doublePlus: 0, eaglePlus: 0,
+    birdies: 0, pars: 0, bogeys: 0, doubles: 0, triplesPlus: 0
+  });
+  const PR_addAgg = (a, pts) => {
+    const v = Number(pts);
+    if (!a || !Number.isFinite(v)) return;
+    a.holes += 1; a.pts += v;
+    if (v === 0) a.wipes += 1;
+    const p = Math.max(0, Math.min(5, Math.round(v)));
+    a["p"+p] = (a["p"+p] || 0) + 1;
+  };
+  const PR_addAggGross = (a, overPar) => {
+    const v = Number(overPar);
+    if (!a || !Number.isFinite(v)) return;
+    a.holes += 1; a.val += v; a.sumSq += v*v;
+    if (v >= 1) a.bogeyPlus += 1;
+    if (v <= 0) a.parOrBetter += 1;
+    if (v <= -1) a.birdieOrBetter += 1;
+    if (v >= 2) a.doublePlus += 1;
+    if (v <= -2) a.eaglePlus += 1;
+    if (v === -1) a.birdies += 1;
+    else if (v === 0) a.pars += 1;
+    else if (v === 1) a.bogeys += 1;
+    else if (v === 2) a.doubles += 1;
+    else if (v >= 3) a.triplesPlus += 1;
+  };
+
   var peerBand = "—"; // ensure defined for template safety
   var peerMin = NaN, peerMax = NaN, peerPlayersN = 0;
   var __usingVirtualSameHcapPeer = false;
@@ -11556,10 +11591,10 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
   }
 
 const isGross = String(scoringMode) === "gross";
-  const meTotals = isGross ? (cur?.totalsGross || _makeAggGross()) : (cur?.totals || _makeAgg());
+  const meTotals = isGross ? (cur?.totalsGross || PR_makeAggGross()) : (cur?.totals || PR_makeAgg());
   const peerTotals = __peerAgg
-    ? (isGross ? (__peerAgg?.totalsGross || _makeAggGross()) : (__peerAgg?.totals || _makeAgg()))
-    : (isGross ? PR_sumAggObjects(peers, "totalsGross", _makeAggGross) : PR_sumAggObjects(peers, "totals", _makeAgg));
+    ? (isGross ? (__peerAgg?.totalsGross || PR_makeAggGross()) : (__peerAgg?.totals || PR_makeAgg()))
+    : (isGross ? PR_sumAggObjects(peers, "totalsGross", PR_makeAggGross) : PR_sumAggObjects(peers, "totals", PR_makeAgg));
 
   const mePH = isGross ? PR_avgGross(meTotals) : PR_avgPts(meTotals);
   const peerPH = isGross ? PR_avgGross(peerTotals) : PR_avgPts(peerTotals);
@@ -11705,7 +11740,7 @@ const isGross = String(scoringMode) === "gross";
     const byYardsGross = {};
     const diagnostics = [];
 
-    // Local report-safe aggregators. Do NOT use the App-scope _makeAgg/_addAgg
+    // Local report-safe aggregators. Do NOT use the App-scope PR_makeAgg/PR_addAgg
     // helpers here: PR_generateSeasonReportHTML is a standalone function and
     // cannot access helpers declared inside React App().
     const makePtsAgg = () => ({
@@ -11795,7 +11830,7 @@ const isGross = String(scoringMode) === "gross";
     mapObj: isGross ? cur?.bySIGross : cur?.bySI,
     fieldObj: __peerAgg
       ? (isGross ? (__peerAgg?.bySIGross || {}) : (__peerAgg?.bySI || {}))
-      : (isGross ? PR_sumAggMap(peers, "bySIGross", _makeAggGross) : PR_sumAggMap(peers, "bySI", _makeAgg)),
+      : (isGross ? PR_sumAggMap(peers, "bySIGross", PR_makeAggGross) : PR_sumAggMap(peers, "bySI", PR_makeAgg)),
     limit: 6,
   });
 
@@ -11805,7 +11840,7 @@ const isGross = String(scoringMode) === "gross";
     mapObj: isGross ? cur?.byParGross : cur?.byPar,
     fieldObj: __peerAgg
       ? (isGross ? (__peerAgg?.byParGross || {}) : (__peerAgg?.byPar || {}))
-      : (isGross ? PR_sumAggMap(peers, "byParGross", _makeAggGross) : PR_sumAggMap(peers, "byPar", _makeAgg)),
+      : (isGross ? PR_sumAggMap(peers, "byParGross", PR_makeAggGross) : PR_sumAggMap(peers, "byPar", PR_makeAgg)),
     limit: 6,
   });
 
@@ -11817,7 +11852,7 @@ const isGross = String(scoringMode) === "gross";
     mapObj: isGross ? (__actualYardAgg?.byYardsGross || {}) : (__actualYardAgg?.byYards || {}),
     fieldObj: __peerAgg
       ? (isGross ? (__peerAgg?.byYardsGross || {}) : (__peerAgg?.byYards || {}))
-      : (isGross ? PR_sumAggMap(peers, "byYardsGross", _makeAggGross) : PR_sumAggMap(peers, "byYards", _makeAgg)),
+      : (isGross ? PR_sumAggMap(peers, "byYardsGross", PR_makeAggGross) : PR_sumAggMap(peers, "byYards", PR_makeAgg)),
     limit: 10,
   });
 
