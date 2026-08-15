@@ -9257,76 +9257,6 @@ const coachLine = (row) => {
                   >
                     Generate Report
                   </button>
-
-                  <button
-                    className="btn-primary"
-                    onClick={() => {
-                      try {
-                        const snap = (typeof window !== "undefined" && window.__dslOverviewReport)
-                          ? window.__dslOverviewReport
-                          : null;
-
-                        const lens = String(
-                          snap?.lensMode ||
-                          (typeof localStorage !== "undefined"
-                            ? (localStorage.getItem("dsl_lens") || "pointsField")
-                            : "pointsField")
-                        );
-
-                        const uiCohort = (
-                          typeof window !== "undefined" &&
-                          window.__dslUiState &&
-                          window.__dslUiState.cohortMode
-                        ) ? window.__dslUiState.cohortMode : null;
-
-                        let comparator = String(
-                          snap?.comparatorMode ||
-                          (uiCohort ? (uiCohort === "field" ? "field" : "band") : "") ||
-                          (window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode) ||
-                          "band"
-                        );
-
-                        if (lens === "strokesPar") comparator = "par";
-                        if (comparator !== "par" && comparator !== "field" && comparator !== "band") {
-                          comparator = "band";
-                        }
-
-                        const r = PR_generateAllGolfersReportHTML({
-                          model: seasonModel,
-                          yearLabel: seasonYear,
-                          seasonLimit: seasonLimit,
-                          scoringMode,
-                          lensMode: lens,
-                          comparatorMode: comparator
-                        });
-
-                        if (!r || !r.ok) {
-                          alert(r?.error || "Could not generate all-golfers PDF.");
-                          return;
-                        }
-
-                        window.__dslSeasonReportParams = {
-                          model: seasonModel,
-                          playerName: "All-Golfers",
-                          yearLabel: seasonYear,
-                          seasonLimit: seasonLimit,
-                          scoringMode,
-                          lensMode: lens,
-                          comparatorMode: comparator
-                        };
-
-                        PR_showInlineSeasonReport(r.htmlFragment || r.html);
-                        setTimeout(() => PR_downloadAllGolfersPDFSegmented(), 180);
-                      } catch (e) {
-                        console.error(e);
-                        alert("Could not generate all-golfers PDF.");
-                      }
-                    }}
-                    title="Download one PDF containing every golfer's full report"
-                  >
-                    Download All Golfers PDF
-                  </button>
-
                   <button
                     className="btn-secondary"
                     onClick={() => {
@@ -9342,9 +9272,6 @@ const coachLine = (row) => {
                     Problem Holes
                   </button>
                 </div>
-              </div>
-              <div className="mt-2 text-xs font-bold text-emerald-700">
-                All Golfers PDF is available from the button above.
               </div>
             <div className="mt-1 break-words leading-tight">
               <span className="text-4xl md:text-5xl font-black tracking-tight text-neutral-900">{firstName}</span>
@@ -11051,41 +10978,6 @@ function PR_regenSeasonReport(mode){
 
 
 function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit, scoringMode, lensMode, comparatorMode }){
-  // Report-local aggregate helpers; do not depend on App() scope.
-  const PR_makeAgg = () => ({
-    holes: 0, pts: 0, wipes: 0,
-    p0: 0, p1: 0, p2: 0, p3: 0, p4: 0, p5: 0
-  });
-  const PR_makeAggGross = () => ({
-    holes: 0, val: 0, sumSq: 0,
-    bogeyPlus: 0, parOrBetter: 0, birdieOrBetter: 0,
-    doublePlus: 0, eaglePlus: 0,
-    birdies: 0, pars: 0, bogeys: 0, doubles: 0, triplesPlus: 0
-  });
-  const PR_addAgg = (a, pts) => {
-    const v = Number(pts);
-    if (!a || !Number.isFinite(v)) return;
-    a.holes += 1; a.pts += v;
-    if (v === 0) a.wipes += 1;
-    const p = Math.max(0, Math.min(5, Math.round(v)));
-    a["p"+p] = (a["p"+p] || 0) + 1;
-  };
-  const PR_addAggGross = (a, overPar) => {
-    const v = Number(overPar);
-    if (!a || !Number.isFinite(v)) return;
-    a.holes += 1; a.val += v; a.sumSq += v*v;
-    if (v >= 1) a.bogeyPlus += 1;
-    if (v <= 0) a.parOrBetter += 1;
-    if (v <= -1) a.birdieOrBetter += 1;
-    if (v >= 2) a.doublePlus += 1;
-    if (v <= -2) a.eaglePlus += 1;
-    if (v === -1) a.birdies += 1;
-    else if (v === 0) a.pars += 1;
-    else if (v === 1) a.bogeys += 1;
-    else if (v === 2) a.doubles += 1;
-    else if (v >= 3) a.triplesPlus += 1;
-  };
-
   var peerBand = "—"; // ensure defined for template safety
   var peerMin = NaN, peerMax = NaN, peerPlayersN = 0;
   var __usingVirtualSameHcapPeer = false;
@@ -11591,10 +11483,10 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
   }
 
 const isGross = String(scoringMode) === "gross";
-  const meTotals = isGross ? (cur?.totalsGross || PR_makeAggGross()) : (cur?.totals || PR_makeAgg());
+  const meTotals = isGross ? (cur?.totalsGross || _makeAggGross()) : (cur?.totals || _makeAgg());
   const peerTotals = __peerAgg
-    ? (isGross ? (__peerAgg?.totalsGross || PR_makeAggGross()) : (__peerAgg?.totals || PR_makeAgg()))
-    : (isGross ? PR_sumAggObjects(peers, "totalsGross", PR_makeAggGross) : PR_sumAggObjects(peers, "totals", PR_makeAgg));
+    ? (isGross ? (__peerAgg?.totalsGross || _makeAggGross()) : (__peerAgg?.totals || _makeAgg()))
+    : (isGross ? PR_sumAggObjects(peers, "totalsGross", _makeAggGross) : PR_sumAggObjects(peers, "totals", _makeAgg));
 
   const mePH = isGross ? PR_avgGross(meTotals) : PR_avgPts(meTotals);
   const peerPH = isGross ? PR_avgGross(peerTotals) : PR_avgPts(peerTotals);
@@ -11740,7 +11632,7 @@ const isGross = String(scoringMode) === "gross";
     const byYardsGross = {};
     const diagnostics = [];
 
-    // Local report-safe aggregators. Do NOT use the App-scope PR_makeAgg/PR_addAgg
+    // Local report-safe aggregators. Do NOT use the App-scope _makeAgg/_addAgg
     // helpers here: PR_generateSeasonReportHTML is a standalone function and
     // cannot access helpers declared inside React App().
     const makePtsAgg = () => ({
@@ -11830,7 +11722,7 @@ const isGross = String(scoringMode) === "gross";
     mapObj: isGross ? cur?.bySIGross : cur?.bySI,
     fieldObj: __peerAgg
       ? (isGross ? (__peerAgg?.bySIGross || {}) : (__peerAgg?.bySI || {}))
-      : (isGross ? PR_sumAggMap(peers, "bySIGross", PR_makeAggGross) : PR_sumAggMap(peers, "bySI", PR_makeAgg)),
+      : (isGross ? PR_sumAggMap(peers, "bySIGross", _makeAggGross) : PR_sumAggMap(peers, "bySI", _makeAgg)),
     limit: 6,
   });
 
@@ -11840,7 +11732,7 @@ const isGross = String(scoringMode) === "gross";
     mapObj: isGross ? cur?.byParGross : cur?.byPar,
     fieldObj: __peerAgg
       ? (isGross ? (__peerAgg?.byParGross || {}) : (__peerAgg?.byPar || {}))
-      : (isGross ? PR_sumAggMap(peers, "byParGross", PR_makeAggGross) : PR_sumAggMap(peers, "byPar", PR_makeAgg)),
+      : (isGross ? PR_sumAggMap(peers, "byParGross", _makeAggGross) : PR_sumAggMap(peers, "byPar", _makeAgg)),
     limit: 6,
   });
 
@@ -11852,7 +11744,7 @@ const isGross = String(scoringMode) === "gross";
     mapObj: isGross ? (__actualYardAgg?.byYardsGross || {}) : (__actualYardAgg?.byYards || {}),
     fieldObj: __peerAgg
       ? (isGross ? (__peerAgg?.byYardsGross || {}) : (__peerAgg?.byYards || {}))
-      : (isGross ? PR_sumAggMap(peers, "byYardsGross", PR_makeAggGross) : PR_sumAggMap(peers, "byYards", PR_makeAgg)),
+      : (isGross ? PR_sumAggMap(peers, "byYardsGross", _makeAggGross) : PR_sumAggMap(peers, "byYards", _makeAgg)),
     limit: 10,
   });
 
@@ -12680,201 +12572,6 @@ const scorecardIntel = (() => {
   }
 })();
 
-// ============================================================
-// HANDICAP PERFORMANCE DIAL
-// Centre = played exactly to Course Handicap target.
-// Positive = better than handicap target (green/right).
-// Negative = worse than handicap target (red/left).
-// The visual scale is capped at +/-8 strokes for readability,
-// while the actual numeric difference is always shown.
-// ============================================================
-const handicapDial = (() => {
-  try {
-    const rr = scorecardIntel?.ok ? scorecardIntel.latest : null;
-    if (!rr || !Number.isFinite(Number(rr.delta))) return { ok:false };
-
-    const delta = Number(rr.delta); // targetGross - actualGross: + is better
-    const capped = Math.max(-8, Math.min(8, delta));
-    const angle = -90 + ((capped + 8) / 16) * 180;
-
-    let status = "Played to handicap";
-    let statusClass = "neutral";
-    if (delta >= 0.5) { status = "Better than handicap"; statusClass = "good"; }
-    else if (delta <= -0.5) { status = "Worse than handicap"; statusClass = "bad"; }
-
-    const target = Number(rr.targetGross);
-    const actual = Number(rr.actualGross);
-
-    return {
-      ok:true,
-      delta,
-      capped,
-      angle,
-      status,
-      statusClass,
-      target,
-      actual,
-      ch:Number(rr.ch)
-    };
-  } catch(e) {
-    return {ok:false};
-  }
-})();
-
-// ============================================================
-// EXECUTIVE PLAYER ACTION DASHBOARD
-// Scorecard-only: never pretends to know whether a loss came
-// from driving, irons, short game or putting.
-// ============================================================
-const playerActionDashboard = (() => {
-  try{
-    if(!scorecardIntel?.ok) return {ok:false};
-
-    const latest = scorecardIntel.latest;
-    const analysed = scorecardIntel.analysed || [];
-    const latestHoles = latest?.holes || [];
-
-    // -------------------------
-    // Where strokes were lost
-    // -------------------------
-    const lostHoles = latestHoles
-      .filter(h => Number(h?.cost) > 0)
-      .slice()
-      .sort((a,b) => Number(b.cost||0) - Number(a.cost||0));
-
-    const gainedHoles = latestHoles
-      .filter(h => Number(h?.gain) > 0)
-      .slice()
-      .sort((a,b) => Number(b.gain||0) - Number(a.gain||0));
-
-    const topLost = lostHoles.slice(0,3);
-    const totalLost = lostHoles.reduce((s,h)=>s+Number(h.cost||0),0);
-    const totalGained = gainedHoles.reduce((s,h)=>s+Number(h.gain||0),0);
-
-    // -------------------------
-    // Exact historical hole map
-    // -------------------------
-    const danger = Array.isArray(scorecardIntel.dangerHoles)
-      ? scorecardIntel.dangerHoles.slice(0,3)
-      : [];
-
-    // -------------------------
-    // Build category evidence
-    // from existing report rows
-    // -------------------------
-    const allRows = [
-      ...(Array.isArray(byPar) ? byPar : []),
-      ...(Array.isArray(bySI) ? bySI : []),
-      ...(Array.isArray(byYd) ? byYd : [])
-    ].filter(r => Number.isFinite(Number(r?.delta)));
-
-    const enrich = (r) => {
-      const n = Number(r?.meHoles ?? r?.holes ?? r?.n ?? 0);
-      const delta = Number(r?.delta);
-      let confidence = "LOW";
-      if(n >= 24) confidence = "HIGH";
-      else if(n >= 12) confidence = "MEDIUM";
-      return {...r, sample:n, delta, confidence};
-    };
-
-    const evidenceRows = allRows.map(enrich);
-
-    const goodRows = evidenceRows
-      .filter(r => r.delta > 0.08)
-      .sort((a,b)=>b.delta-a.delta);
-
-    const badRows = evidenceRows
-      .filter(r => r.delta < -0.08)
-      .sort((a,b)=>a.delta-b.delta);
-
-    const keep = goodRows.slice(0,4);
-    const fix = badRows.filter(r => r.confidence !== "LOW").slice(0,3);
-    const watch = badRows
-      .filter(r => !fix.some(f => String(f?.label) === String(r?.label)))
-      .slice(0,3);
-
-    // Biggest opportunity = worst repeatable category
-    const biggest = fix[0] || badRows[0] || null;
-
-    // -------------------------
-    // What-if:
-    // cap improvement at the
-    // amount actually lost there
-    // -------------------------
-    const recoverable = Math.max(
-      0,
-      Math.min(
-        Number(latest?.totalLoss || 0),
-        Number(latest?.top3Loss || 0)
-      )
-    );
-    const whatIfScore = Number.isFinite(Number(latest?.actualGross))
-      ? Number(latest.actualGross) - recoverable
-      : NaN;
-
-    // -------------------------
-    // Next-round mission
-    // -------------------------
-    let missionTitle = "Protect your score";
-    let missionText = "Keep the number of holes played worse than your handicap target as low as possible.";
-    let missionMetric = "Lose no more than 2 strokes to handicap across your identified danger area.";
-
-    if(biggest?.label){
-      missionTitle = String(biggest.label);
-      missionText = `This is the strongest repeatable scoring leak in the selected window.`;
-      const perHoleLoss = Math.abs(Number(biggest.delta || 0));
-      const sample = Number(biggest.sample || 0);
-      const roughPerRound = Math.max(0.5, Math.min(3, perHoleLoss * Math.min(6, Math.max(3, sample/Math.max(1, analysed.length)))));
-      missionMetric = `Next round: keep the total loss in ${String(biggest.label)} to 2 strokes or fewer. Improving this area toward target is worth roughly ${roughPerRound.toFixed(1)} strokes per round.`;
-    }
-
-    // -------------------------
-    // Verdict wording
-    // -------------------------
-    let verdictTitle = scorecardIntel.classification || "Round reviewed";
-    let verdictText = scorecardIntel.classWhy || "";
-
-    if(Number.isFinite(Number(latest?.delta))){
-      const d = Number(latest.delta);
-      if(d >= 1){
-        verdictTitle = "Better than handicap";
-        verdictText = `You beat the playing-to-handicap target by ${Math.abs(d).toFixed(1)} strokes.`;
-      }else if(d <= -1 && Number(latest?.damageShare || 0) >= 0.65){
-        verdictTitle = "A few holes damaged the score";
-        verdictText = `${Math.round(Number(latest.damageShare||0)*100)}% of the measured lost strokes came from the three costliest holes.`;
-      }else if(d <= -1){
-        verdictTitle = "Below handicap target";
-        verdictText = `You finished ${Math.abs(d).toFixed(1)} strokes worse than the playing-to-handicap target.`;
-      }else{
-        verdictTitle = "Played to handicap";
-        verdictText = "Your gross score was effectively on the playing-to-handicap target.";
-      }
-    }
-
-    return {
-      ok:true,
-      verdictTitle,
-      verdictText,
-      topLost,
-      totalLost,
-      totalGained,
-      danger,
-      keep,
-      watch,
-      fix,
-      biggest,
-      recoverable,
-      whatIfScore,
-      missionTitle,
-      missionText,
-      missionMetric
-    };
-  }catch(e){
-    try{console.error("Player action dashboard failed:",e);}catch(_){}
-    return {ok:false};
-  }
-})();
-
   const htmlFragment = `
   <style>
     .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a}
@@ -12926,47 +12623,7 @@ const playerActionDashboard = (() => {
     .PRscoreCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
     .PRscoreBig{font-size:20px;font-weight:950;margin-top:3px}
     .PRconf{display:inline-block;border:1px solid #cbd5e1;border-radius:999px;padding:2px 7px;font-size:10px;font-weight:950}
-    .PRdialWrap{border:1px solid #e2e8f0;border-radius:16px;padding:12px 14px;background:#fff;margin-top:10px}
-    .PRdialGrid{display:grid;grid-template-columns:minmax(260px,1.1fr) minmax(180px,.9fr);gap:14px;align-items:center}
-    .PRdialSvg{display:block;width:100%;max-width:420px;height:auto;margin:0 auto}
-    .PRdialStatus{font-size:19px;font-weight:950;color:#0f172a}
-    .PRdialDiff{font-size:31px;font-weight:950;letter-spacing:-.03em;margin-top:2px}
-    .PRdialGood{color:#15803d}
-    .PRdialBad{color:#b91c1c}
-    .PRdialNeutral{color:#334155}
-    .PRdialMeta{font-size:12px;color:#64748b;line-height:1.5;margin-top:4px}
-
-    .PRexec{border:1px solid #cbd5e1;border-radius:18px;background:#fff;overflow:hidden;margin-top:12px}
-    .PRexecHead{background:#0f2747;color:#fff;padding:16px 18px}
-    .PRexecTitle{font-size:23px;font-weight:950;letter-spacing:-.02em}
-    .PRexecSub{font-size:12px;opacity:.85;margin-top:3px}
-    .PRexecGrid2{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:12px}
-    .PRexecGrid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:0 12px 12px}
-    .PRexecCard{border:1px solid #e2e8f0;border-radius:13px;padding:11px;background:#fff}
-    .PRexecCard h4{margin:0 0 7px;font-size:12px;letter-spacing:.04em;text-transform:uppercase;color:#475569}
-    .PRexecBig{font-size:27px;font-weight:950;letter-spacing:-.03em}
-    .PRexecGood{border-color:#bbf7d0;background:#f0fdf4}
-    .PRexecWatch{border-color:#fed7aa;background:#fff7ed}
-    .PRexecBad{border-color:#fecaca;background:#fff1f2}
-    .PRexecTarget{border-color:#bfdbfe;background:#eff6ff}
-    .PRexecGood h4{color:#166534}
-    .PRexecWatch h4{color:#c2410c}
-    .PRexecBad h4{color:#b91c1c}
-    .PRexecTarget h4{color:#1d4ed8}
-    .PRexecList{margin:0;padding-left:18px;font-size:12px;line-height:1.55}
-    .PRexecMini{font-size:11px;color:#64748b;line-height:1.45}
-    .PRexecBar{display:grid;grid-template-columns:34px 1fr 48px;gap:7px;align-items:center;margin-top:6px;font-size:11px}
-    .PRexecTrack{height:8px;background:#e2e8f0;border-radius:999px;overflow:hidden;position:relative}
-    .PRexecFillBad{height:100%;background:#dc2626}
-    .PRexecFillGood{height:100%;background:#16a34a}
-    .PRexecVerdict{border:1px solid #dbeafe;background:#f8fbff;border-radius:13px;padding:12px;margin-top:10px}
-    .PRexecVerdictTitle{font-size:18px;font-weight:950;color:#0f172a}
-    .PRexecVerdictText{font-size:12px;color:#475569;margin-top:4px;line-height:1.5}
-    .PRexecFoot{font-size:10px;color:#64748b;padding:0 12px 12px;line-height:1.45}
-
-    @media(max-width:700px){
-      .PRintelGrid,.PRscoreGrid,.PRdialGrid,.PRexecGrid2,.PRexecGrid4{grid-template-columns:1fr}
-    }
+    @media(max-width:700px){.PRintelGrid,.PRscoreGrid{grid-template-columns:1fr}}
   </style>
 
   <div class="PRr">
@@ -13118,195 +12775,9 @@ const playerActionDashboard = (() => {
     </div>
     `}
 
-    ${handicapDial?.ok ? `
-    <div class="PRdialWrap PRsec">
-      <div class="PRsecTitle">Round vs Handicap</div>
-      <div class="PRdialGrid">
-        <div>
-          <svg class="PRdialSvg" viewBox="0 0 420 235" role="img" aria-label="Handicap performance dial. Red is worse than handicap, centre is playing to handicap, green is better than handicap.">
-            <!-- semicircle track -->
-            <path d="M55 195 A155 155 0 0 1 210 40"
-                  fill="none" stroke="#dc2626" stroke-width="28" stroke-linecap="butt"/>
-            <path d="M210 40 A155 155 0 0 1 365 195"
-                  fill="none" stroke="#16a34a" stroke-width="28" stroke-linecap="butt"/>
-
-            <!-- centre handicap marker -->
-            <line x1="210" y1="24" x2="210" y2="58" stroke="#0f172a" stroke-width="5"/>
-            <text x="210" y="18" text-anchor="middle" font-size="12" font-weight="800" fill="#0f172a">HANDICAP</text>
-
-            <!-- scale labels -->
-            <text x="43" y="224" text-anchor="middle" font-size="12" font-weight="800" fill="#b91c1c">WORSE</text>
-            <text x="210" y="224" text-anchor="middle" font-size="12" font-weight="800" fill="#334155">0</text>
-            <text x="377" y="224" text-anchor="middle" font-size="12" font-weight="800" fill="#15803d">BETTER</text>
-
-            <!-- tick labels -->
-            <text x="70" y="166" text-anchor="middle" font-size="10" fill="#64748b">-8</text>
-            <text x="113" y="94" text-anchor="middle" font-size="10" fill="#64748b">-4</text>
-            <text x="307" y="94" text-anchor="middle" font-size="10" fill="#64748b">+4</text>
-            <text x="350" y="166" text-anchor="middle" font-size="10" fill="#64748b">+8</text>
-
-            <!-- needle -->
-            <g transform="rotate(${handicapDial.angle.toFixed(1)} 210 195)">
-              <line x1="210" y1="195" x2="210" y2="68" stroke="#0f172a" stroke-width="7" stroke-linecap="round"/>
-              <polygon points="210,55 201,78 219,78" fill="#0f172a"/>
-            </g>
-            <circle cx="210" cy="195" r="13" fill="#0f172a"/>
-            <circle cx="210" cy="195" r="5" fill="#fff"/>
-          </svg>
-        </div>
-
-        <div>
-          <div class="PRintelLabel">Latest round</div>
-          <div class="PRdialStatus">${PR_escapeHtml(handicapDial.status)}</div>
-          <div class="PRdialDiff ${handicapDial.statusClass==="good"?"PRdialGood":(handicapDial.statusClass==="bad"?"PRdialBad":"PRdialNeutral")}">
-            ${handicapDial.delta>=0?"+":""}${handicapDial.delta.toFixed(1)}
-            <span style="font-size:15px;font-weight:800;">strokes</span>
-          </div>
-          <div class="PRdialMeta">
-            Actual gross: <b>${Number.isFinite(handicapDial.actual)?handicapDial.actual.toFixed(0):"—"}</b><br/>
-            Handicap target: <b>${Number.isFinite(handicapDial.target)?handicapDial.target.toFixed(0):"—"}</b>
-            ${Number.isFinite(handicapDial.ch)?` · Course Handicap: <b>${Math.round(handicapDial.ch)}</b>`:""}
-          </div>
-          <div class="PRnote" style="margin-top:8px;">
-            The centre marker is playing exactly to handicap. The needle moves right into green when you beat the target and left into red when you finish above it.
-          </div>
-        </div>
-      </div>
-    </div>
-    ` : ""}
-
-    ${playerActionDashboard?.ok ? `
-    <div class="PRexec PRsec">
-      <div class="PRexecHead">
-        <div class="PRexecTitle">Player Performance Dashboard</div>
-        <div class="PRexecSub">Your game. The data. The plan.</div>
-      </div>
-
-      <div class="PRexecGrid2">
-        <div class="PRexecCard">
-          <h4>Round verdict</h4>
-          <div class="PRexecVerdict">
-            <div class="PRexecVerdictTitle">${PR_escapeHtml(playerActionDashboard.verdictTitle)}</div>
-            <div class="PRexecVerdictText">${PR_escapeHtml(playerActionDashboard.verdictText)}</div>
-          </div>
-
-          <div style="margin-top:10px;font-size:12px;font-weight:900;">Where you lost strokes</div>
-          ${playerActionDashboard.topLost.length ? `
-            ${playerActionDashboard.topLost.map(h=>`
-              <div class="PRexecBar">
-                <div>H${h.hole}</div>
-                <div class="PRexecTrack">
-                  <div class="PRexecFillBad" style="width:${Math.min(100,Math.max(12,Number(h.cost||0)*28))}%"></div>
-                </div>
-                <div style="text-align:right;color:#b91c1c;font-weight:900;">-${Number(h.cost||0).toFixed(1)}</div>
-              </div>
-            `).join("")}
-          ` : `<div class="PRexecMini" style="margin-top:6px;">No holes finished worse than the playing-to-handicap target.</div>`}
-        </div>
-
-        <div class="PRexecCard">
-          <h4>What if?</h4>
-          <div class="PRexecBig">
-            ${Number.isFinite(Number(playerActionDashboard.whatIfScore))
-              ? Number(playerActionDashboard.whatIfScore).toFixed(0)
-              : "—"}
-          </div>
-          <div class="PRexecMini">
-            ${Number(playerActionDashboard.recoverable||0) > 0
-              ? `Potential gross if the three costliest holes had merely matched handicap target: ${Number(playerActionDashboard.recoverable).toFixed(0)} strokes better.`
-              : "There was no meaningful recoverable loss from the three costliest holes."}
-          </div>
-
-          <div style="margin-top:12px;font-size:12px;font-weight:900;">Biggest opportunity</div>
-          <div style="font-size:18px;font-weight:950;color:#166534;margin-top:3px;">
-            ${playerActionDashboard.biggest?.label ? PR_escapeHtml(playerActionDashboard.biggest.label) : "Protect the card"}
-          </div>
-          <div class="PRexecMini" style="margin-top:4px;">
-            ${playerActionDashboard.biggest?.label
-              ? `This is the strongest repeatable scoring leak in the selected window.`
-              : "No category has enough evidence yet to call it a confirmed repeat weakness."}
-          </div>
-        </div>
-      </div>
-
-      <div class="PRexecGrid4">
-        <div class="PRexecCard PRexecGood">
-          <h4>Keep doing</h4>
-          ${playerActionDashboard.keep.length ? `
-            <ul class="PRexecList">
-              ${playerActionDashboard.keep.map(r=>`<li>${PR_escapeHtml(r.label || "Area")} (${r.delta>=0?"+":""}${Number(r.delta).toFixed(2)}/hole)</li>`).join("")}
-            </ul>
-          ` : `<div class="PRexecMini">No confirmed strength yet.</div>`}
-        </div>
-
-        <div class="PRexecCard PRexecWatch">
-          <h4>Watch</h4>
-          ${playerActionDashboard.watch.length ? `
-            <ul class="PRexecList">
-              ${playerActionDashboard.watch.map(r=>`<li>${PR_escapeHtml(r.label || "Area")} · ${r.confidence} confidence</li>`).join("")}
-            </ul>
-          ` : `<div class="PRexecMini">Nothing currently sits in the watch zone.</div>`}
-        </div>
-
-        <div class="PRexecCard PRexecBad">
-          <h4>Fix first</h4>
-          ${playerActionDashboard.fix.length ? `
-            <ul class="PRexecList">
-              ${playerActionDashboard.fix.map(r=>`<li><b>${PR_escapeHtml(r.label || "Area")}</b> · ${r.confidence} · n=${r.sample}</li>`).join("")}
-            </ul>
-          ` : `<div class="PRexecMini">No high-confidence repeat weakness yet.</div>`}
-        </div>
-
-        <div class="PRexecCard PRexecTarget">
-          <h4>Your next-round target</h4>
-          <div style="font-size:16px;font-weight:950;color:#1d4ed8;">
-            ${PR_escapeHtml(playerActionDashboard.missionTitle)}
-          </div>
-          <div class="PRexecMini" style="margin-top:5px;">${PR_escapeHtml(playerActionDashboard.missionText)}</div>
-          <div style="font-size:12px;font-weight:900;color:#0f172a;margin-top:7px;">
-            ${PR_escapeHtml(playerActionDashboard.missionMetric)}
-          </div>
-        </div>
-      </div>
-
-      <div class="PRexecGrid2" style="padding-top:0;">
-        <div class="PRexecCard">
-          <h4>Next 3 danger holes</h4>
-          ${playerActionDashboard.danger.length ? `
-            <ol class="PRexecList">
-              ${playerActionDashboard.danger.map(h=>`
-                <li>
-                  <b>${PR_escapeHtml(h.course)} · ${PR_escapeHtml(h.tee)} · Hole ${h.hole}</b>
-                  — ${Math.abs(Number(h.avgDelta||0)).toFixed(2)} strokes/hole below target
-                  · ${Math.round(Number(h.badRate||0)*100)}% of visits
-                  · ${h.confidence}
-                </li>
-              `).join("")}
-            </ol>
-          ` : `<div class="PRexecMini">Not enough repeat course/tee evidence yet.</div>`}
-        </div>
-
-        <div class="PRexecCard">
-          <h4>Round pattern</h4>
-          <div class="PRexecMini">
-            Lost strokes measured: <b>${Number(playerActionDashboard.totalLost||0).toFixed(1)}</b><br/>
-            Strokes gained vs target: <b>${Number(playerActionDashboard.totalGained||0).toFixed(1)}</b><br/>
-            Playing-to-handicap frequency: <b>${Math.round(Number(scorecardIntel.targetRate||0)*100)}%</b><br/>
-            Recent form: <b>${PR_escapeHtml(scorecardIntel.formLabel || "—")}</b>
-          </div>
-        </div>
-      </div>
-
-      <div class="PRexecFoot">
-        Scorecard-only intelligence: this report identifies <b>where</b> strokes were lost and what scoring targets to take into the next round.
-        It does not claim whether the cause was driving, approach play, short game or putting unless that data is actually recorded.
-      </div>
-    </div>
-    ` : ""}
-
     ${scorecardIntel?.ok ? `
     <div class="PRbox PRsec">
-      <div class="PRsecTitle">Detailed Scorecard Intelligence</div>
+      <div class="PRsecTitle">Scorecard Intelligence</div>
       <div style="font-size:18px;font-weight:950;">${PR_escapeHtml(scorecardIntel.classification)}</div>
       <div class="PRmuted" style="font-size:12px;margin-top:4px;">
         ${PR_escapeHtml(scorecardIntel.classWhy)}
@@ -13501,13 +12972,7 @@ function PR_loadHtml2Pdf(){
   return new Promise((resolve, reject) => {
     try{
       if(typeof window !== "undefined" && typeof window.html2pdf === "function"){
-        try{
-      if(window.html2pdf && window.html2pdf.Worker){
-        // html2pdf normally exposes html2canvas/jsPDF globally through its bundle.
-        // Leave existing globals intact if already available.
-      }
-    }catch(e){}
-    resolve(window.html2pdf);
+        resolve(window.html2pdf);
         return;
       }
 
@@ -13642,299 +13107,62 @@ function PR_generateAllGolfersReportHTML({ model, yearLabel, seasonLimit, scorin
     const players = Array.isArray(model?.players) ? model.players.filter(Boolean) : [];
     if(!players.length) return { ok:false, error:"No golfers found." };
 
-    const reports = [];
-    const skipped = [];
     const oldSnap = (typeof window !== "undefined") ? window.__dslOverviewReport : null;
-    const oldParams = (typeof window !== "undefined") ? window.__dslSeasonReportParams : null;
-
-    for(const p of players){
-      const name = String(p?.name || "").trim();
-      if(!name) continue;
-
-      try{
-        if(typeof window !== "undefined"){
-          window.__dslOverviewReport = null;
-          window.__dslSeasonReportParams = {
-            model,
-            playerName: name,
-            yearLabel,
-            seasonLimit,
-            scoringMode,
-            lensMode,
-            comparatorMode
-          };
-        }
-
-        const r = PR_generateSeasonReportHTML({
-          model,
-          playerName: name,
-          yearLabel,
-          seasonLimit,
-          scoringMode,
-          lensMode,
-          comparatorMode
-        });
-
-        if(r && r.ok && (r.htmlFragment || r.html)){
-          reports.push({ name, html: r.htmlFragment || r.html });
-        }else{
-          skipped.push({ name, reason: String(r?.error || "No report data") });
-        }
-      }catch(playerErr){
-        try{ console.error("All-golfers player failed:", name, playerErr); }catch(_){}
-        skipped.push({
-          name,
-          reason: String(playerErr?.message || playerErr || "Player report failed")
-        });
-      }
-    }
-
+    const reports = [];
     try{
-      if(typeof window !== "undefined"){
-        window.__dslOverviewReport = oldSnap;
-        window.__dslSeasonReportParams = oldParams;
-      }
-    }catch(_){}
+      // Prevent the currently selected golfer's Overview snapshot being reused
+      // for everybody else in the combined document.
+      if(typeof window !== "undefined") window.__dslOverviewReport = null;
 
-    if(!reports.length){
-      const detail = skipped.length
-        ? skipped.slice(0,5).map(x => `${x.name}: ${x.reason}`).join(" | ")
-        : "No report sections were created.";
-      return { ok:false, error:`Could not generate any golfer reports. ${detail}` };
+      for(const p of players){
+        const name = String(p?.name || "").trim();
+        if(!name) continue;
+        const r = PR_generateSeasonReportHTML({
+          model, playerName:name, yearLabel, seasonLimit,
+          scoringMode, lensMode, comparatorMode
+        });
+        if(r?.ok && (r.htmlFragment || r.html)){
+          reports.push({name, html:r.htmlFragment || r.html});
+        }
+      }
+    }finally{
+      if(typeof window !== "undefined") window.__dslOverviewReport = oldSnap;
     }
 
-    const esc = (s) => String(s ?? "")
-      .replace(/&/g,"&amp;")
-      .replace(/</g,"&lt;")
-      .replace(/>/g,"&gt;")
-      .replace(/"/g,"&quot;")
-      .replace(/'/g,"&#039;");
+    if(!reports.length) return {ok:false,error:"No golfer reports could be generated."};
 
-    const cover = `
+    const esc=s=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;")
+      .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
+
+    const cover=`
       <style>
         .PRallCover{font-family:Arial,Helvetica,sans-serif;color:#0f172a;padding:28px 24px;background:#fff;min-height:980px;box-sizing:border-box}
         .PRallTitle{font-size:34px;font-weight:950;letter-spacing:-.03em}
         .PRallSub{font-size:13px;color:#475569;margin-top:9px}
         .PRallNames{margin-top:22px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
         .PRallName{border:1px solid #e2e8f0;border-radius:10px;padding:10px 12px;font-size:13px;font-weight:850}
-        .PRallSkipped{margin-top:16px;border:1px solid #fecaca;background:#fff7f7;border-radius:10px;padding:10px 12px;font-size:11px;line-height:1.5}
         .PRallNote{margin-top:20px;border:1px solid #cbd5e1;border-radius:12px;padding:13px;font-size:12px;line-height:1.55;background:#f8fafc}
         .PRallPlayer{page-break-before:always;break-before:page}
         @media(max-width:700px){.PRallNames{grid-template-columns:1fr}}
       </style>
       <div class="PRallCover">
         <div class="PRallTitle">All Golfers — Performance Intelligence</div>
-        <div class="PRallSub">
-          Season: <b>${esc(yearLabel || "All")}</b>
-          · Window: <b>${esc(seasonLimit || "All")}</b>
-          · Reports generated: <b>${reports.length}</b>
-          ${skipped.length ? ` · Skipped: <b>${skipped.length}</b>` : ""}
-        </div>
-        <div class="PRallNames">
-          ${reports.map((x,i)=>`<div class="PRallName">${i+1}. ${esc(x.name)}</div>`).join("")}
-        </div>
-        ${skipped.length ? `
-          <div class="PRallSkipped">
-            <b>Golfers skipped:</b><br/>
-            ${skipped.map(x=>`${esc(x.name)} — ${esc(x.reason)}`).join("<br/>")}
-          </div>
-        ` : ""}
+        <div class="PRallSub">Season: <b>${esc(yearLabel||"All")}</b> · Window: <b>${esc(seasonLimit||"All")}</b> · Golfers: <b>${reports.length}</b></div>
+        <div class="PRallNames">${reports.map((x,i)=>`<div class="PRallName">${i+1}. ${esc(x.name)}</div>`).join("")}</div>
         <div class="PRallNote">
           One shareable report containing every golfer's full Scorecard Intelligence analysis.
-          Each golfer is calculated independently. Solo rounds use that golfer's Handicap Index
-          converted to the correct Course Handicap for the tee played, with tee-specific yardages.
+          Each golfer is calculated independently. Solo rounds use that golfer's Handicap Index converted
+          to the correct Course Handicap for the tee played, including tee-specific yardages.
         </div>
-      </div>
-    `;
+      </div>`;
 
-    const sections = reports.map(x => `
-      <section class="PRallPlayer" data-player="${esc(x.name)}">
-        ${x.html}
-      </section>
-    `).join("");
-
-    return {
-      ok:true,
-      htmlFragment:cover + sections,
-      playerCount:reports.length,
-      skippedCount:skipped.length,
-      skipped
-    };
+    const sections=reports.map(x=>`<section class="PRallPlayer">${x.html}</section>`).join("");
+    return {ok:true,htmlFragment:cover+sections,playerCount:reports.length};
   }catch(e){
-    try{ console.error("All golfers report failed:",e); }catch(_){}
-    return {
-      ok:false,
-      error:`Could not generate the all-golfers report: ${String(e?.message || e || "Unknown error")}`
-    };
+    try{console.error("All golfers report failed:",e);}catch(_){}
+    return {ok:false,error:"Could not generate the all-golfers report."};
   }
 }
-
-
-
-
-async function PR_ensurePdfCanvasLibs(){
-  const loadScript = (src) => new Promise((resolve,reject)=>{
-    const existing = Array.from(document.scripts || []).find(s => String(s.src||"") === src);
-    if(existing){
-      if(existing.dataset.loaded === "1") return resolve();
-      existing.addEventListener("load",()=>resolve(),{once:true});
-      existing.addEventListener("error",()=>reject(new Error("Could not load "+src)),{once:true});
-      return;
-    }
-    const s=document.createElement("script");
-    s.src=src;
-    s.async=true;
-    s.onload=()=>{s.dataset.loaded="1";resolve();};
-    s.onerror=()=>reject(new Error("Could not load "+src));
-    document.head.appendChild(s);
-  });
-
-  if(typeof window.html2canvas !== "function"){
-    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
-  }
-  if(!(window.jspdf && window.jspdf.jsPDF)){
-    await loadScript("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
-  }
-}
-
-async function PR_downloadAllGolfersPDFSegmented(){
-  const btns = Array.from(document.querySelectorAll("button"));
-  let holder = null;
-
-  try{
-    const body = document.getElementById("PR_seasonReportBody");
-    if(!body){
-      alert("Generate the all-golfers report first.");
-      return;
-    }
-
-    await PR_loadHtml2Pdf();
-    await PR_ensurePdfCanvasLibs();
-    const jsPDFCtor = (window.jspdf && window.jspdf.jsPDF)
-      ? window.jspdf.jsPDF
-      : null;
-
-    // html2pdf bundles jsPDF internally, but in some builds it is not exposed.
-    // If unavailable, use html2pdf per segment and fall back to the normal exporter.
-    if(!jsPDFCtor){
-      console.warn("jsPDF not exposed; falling back to standard PDF exporter.");
-      return PR_downloadSeasonReportPDF();
-    }
-
-    const cover = body.querySelector(".PRallCover");
-    const sections = Array.from(body.querySelectorAll(".PRallPlayer"));
-
-    if(!sections.length){
-      return PR_downloadSeasonReportPDF();
-    }
-
-    const params = (window.__dslSeasonReportParams || {});
-    const safe = (v) => String(v || "report")
-      .trim().replace(/[^a-z0-9_-]+/gi,"_").replace(/^_+|_+$/g,"");
-
-    const filename = `SeasonReport_all-golfers_${safe(params.yearLabel || "season")}.pdf`;
-
-    const pdf = new jsPDFCtor({
-      unit:"mm",
-      format:"a4",
-      orientation:"portrait"
-    });
-
-    // remove the automatic first blank page only after first image is added
-    let hasContent = false;
-    const pageW = 210;
-    const pageH = 297;
-    const margin = 8;
-    const usableW = pageW - margin*2;
-    const usableH = pageH - margin*2;
-
-    holder = document.createElement("div");
-    holder.style.position = "fixed";
-    holder.style.left = "-100000px";
-    holder.style.top = "0";
-    holder.style.width = "760px";
-    holder.style.background = "#fff";
-    document.body.appendChild(holder);
-
-    async function renderNodeToPdf(node){
-      const clone = node.cloneNode(true);
-      clone.style.width = "760px";
-      clone.style.maxWidth = "760px";
-      clone.style.background = "#fff";
-      clone.style.boxSizing = "border-box";
-      clone.style.pageBreakBefore = "auto";
-      clone.style.breakBefore = "auto";
-
-      holder.innerHTML = "";
-      holder.appendChild(clone);
-
-      // Let browser fully lay out fonts/SVG before capture
-      await new Promise(r => setTimeout(r, 40));
-
-      const canvas = await window.html2canvas(clone, {
-        scale: 1.65,
-        useCORS: true,
-        backgroundColor:"#ffffff",
-        logging:false,
-        scrollX:0,
-        scrollY:0,
-        windowWidth:760
-      });
-
-      if(!canvas || !canvas.width || !canvas.height) return;
-
-      const imgWmm = usableW;
-      const pxPerMm = canvas.width / imgWmm;
-      const slicePxH = Math.floor(usableH * pxPerMm);
-
-      let yPx = 0;
-      while(yPx < canvas.height){
-        const thisH = Math.min(slicePxH, canvas.height - yPx);
-
-        const slice = document.createElement("canvas");
-        slice.width = canvas.width;
-        slice.height = thisH;
-        const ctx = slice.getContext("2d");
-        ctx.fillStyle = "#ffffff";
-        ctx.fillRect(0,0,slice.width,slice.height);
-        ctx.drawImage(
-          canvas,
-          0,yPx,canvas.width,thisH,
-          0,0,canvas.width,thisH
-        );
-
-        const img = slice.toDataURL("image/jpeg",0.94);
-        const imgHmm = thisH / pxPerMm;
-
-        if(hasContent) pdf.addPage();
-        pdf.addImage(img,"JPEG",margin,margin,imgWmm,imgHmm,undefined,"FAST");
-        hasContent = true;
-
-        yPx += thisH;
-      }
-    }
-
-    if(cover) await renderNodeToPdf(cover);
-    for(const sec of sections){
-      await renderNodeToPdf(sec);
-    }
-
-    if(!hasContent){
-      throw new Error("No PDF pages were rendered.");
-    }
-
-    pdf.save(filename);
-
-  }catch(e){
-    try{console.error("Segmented all-golfers PDF export failed:",e);}catch(_){}
-    alert(`Could not create the All Golfers PDF: ${String(e?.message || e || "Unknown error")}`);
-  }finally{
-    if(holder && holder.parentNode){
-      try{holder.parentNode.removeChild(holder);}catch(_){}
-    }
-  }
-}
-
 
 function PR_downloadHtmlFile(filename, html){
   try{
@@ -14943,68 +14171,6 @@ const planKPIs = React.useMemo(() => {
         setScoringMode={setScoringMode}
       />
 
-      <div className="mt-3">
-        <button
-          className="btn-primary w-full"
-          style={{
-            width: "100%",
-            padding: "14px 16px",
-            fontSize: "16px",
-            fontWeight: 900,
-            borderRadius: "14px"
-          }}
-          onClick={() => {
-            try{
-              const lens = (localStorage.getItem("dsl_lens") || "pointsField");
-              const uiCohort = (window.__dslUiState && window.__dslUiState.cohortMode)
-                ? window.__dslUiState.cohortMode
-                : null;
-              const comparator = uiCohort
-                ? (uiCohort === "field" ? "field" : "band")
-                : ((window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode)
-                    ? window.__dslSeasonReportParams.comparatorMode
-                    : "band");
-
-              const r = PR_generateAllGolfersReportHTML({
-                model: seasonModel,
-                yearLabel: seasonYear,
-                seasonLimit: seasonLimit,
-                scoringMode,
-                lensMode: lens,
-                comparatorMode: comparator
-              });
-
-              if(!r?.ok){
-                alert(r?.error || "Could not generate all-golfers PDF.");
-                return;
-              }
-
-              window.__dslSeasonReportParams = {
-                model: seasonModel,
-                playerName: "All-Golfers",
-                yearLabel: seasonYear,
-                seasonLimit: seasonLimit,
-                scoringMode,
-                lensMode: lens,
-                comparatorMode: comparator
-              };
-
-              PR_showInlineSeasonReport(r.htmlFragment);
-              setTimeout(() => PR_downloadSeasonReportPDF(), 150);
-            }catch(e){
-              console.error(e);
-              alert("Could not generate all-golfers PDF.");
-            }
-          }}
-          title="Download one shareable PDF containing every golfer's full report"
-        >
-          Download All Golfers PDF
-        </button>
-        <div style={{fontSize:"11px", color:"#64748b", marginTop:"5px"}}>
-          One PDF containing every golfer's full performance report.
-        </div>
-      </div>
-
       <div className="mt-3 flex gap-2 flex-wrap">
         <button
           className="btn-primary"
@@ -15092,7 +14258,52 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
           Download PDF Report
         </button>
 
+        <button
+          className="btn-secondary"
+          onClick={() => {
+            try{
+              const lens = (localStorage.getItem("dsl_lens") || "pointsField");
+              const uiCohort = (window.__dslUiState && window.__dslUiState.cohortMode) ? window.__dslUiState.cohortMode : null;
+              const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
+                : ((window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode)
+                    ? window.__dslSeasonReportParams.comparatorMode
+                    : "band");
 
+              const r = PR_generateAllGolfersReportHTML({
+                model: seasonModel,
+                yearLabel: seasonYear,
+                seasonLimit: seasonLimit,
+                scoringMode,
+                lensMode: lens,
+                comparatorMode: comparator
+              });
+
+              if(!r?.ok){
+                alert(r?.error || "Could not generate all-golfers PDF.");
+                return;
+              }
+
+              window.__dslSeasonReportParams = {
+                model: seasonModel,
+                playerName: "All-Golfers",
+                yearLabel: seasonYear,
+                seasonLimit: seasonLimit,
+                scoringMode,
+                lensMode: lens,
+                comparatorMode: comparator
+              };
+
+              PR_showInlineSeasonReport(r.htmlFragment);
+              setTimeout(() => PR_downloadSeasonReportPDF(), 150);
+            }catch(e){
+              console.error(e);
+              alert("Could not generate all-golfers PDF.");
+            }
+          }}
+          title="Download one shareable PDF containing every golfer's full report"
+        >
+          Download All Golfers PDF
+        </button>
         </div>
 
 
