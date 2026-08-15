@@ -12814,25 +12814,69 @@ const playerActionDashboard = (() => {
       .filter(r => r.delta <= -0.10)
       .sort((a,b)=>(a.delta * Math.sqrt(Math.max(1,a.sample))) - (b.delta * Math.sqrt(Math.max(1,b.sample))));
 
-    // Always show useful evidence when it exists.
-    // KEEP: strongest positive areas.
-    // FIX FIRST: strongest negative areas with >=12 holes where possible.
-    // WATCH: remaining negatives / lower-confidence negatives.
+    // Always give the golfer a useful priority without overstating certainty.
+    // Classification:
+    //   CONFIRMED = >=24 holes
+    //   EMERGING  = >=12 holes
+    //   TODAY ONLY / LOW EVIDENCE = <12 holes
+    const classifyWeakness = (r) => {
+      const n = Number(r?.sample || 0);
+      if(n >= 24) return "CONFIRMED";
+      if(n >= 12) return "EMERGING";
+      return "LOW EVIDENCE";
+    };
+
     const keep = goodRows.slice(0,4);
 
-    const confirmedBad = badRows.filter(r => r.sample >= 12);
-    const fix = (confirmedBad.length ? confirmedBad : badRows).slice(0,3);
+    // FIX FIRST is ALWAYS the strongest below-target category if one exists.
+    // One priority is clearer than filling the box with overlapping categories.
+    const fix = badRows.length
+      ? [{...badRows[0], weaknessClass:classifyWeakness(badRows[0])}]
+      : [];
 
-    const watch = badRows
-      .filter(r => !fix.some(f =>
-        String(f?.key) === String(r?.key) &&
-        String(f?.displayLabel || f?.label) === String(r?.displayLabel || r?.label) &&
-        Number(f?.sample) === Number(r?.sample)
-      ))
-      .slice(0,3);
+    // WATCH uses the next negative category. If every historical category is
+    // above target, use the latest round's next-costliest hole as a watch item.
+    const watch = badRows.length > 1
+      ? badRows.slice(1,3).map(r => ({...r, weaknessClass:classifyWeakness(r)}))
+      : [];
 
-    // Biggest opportunity = worst repeatable category
-    const biggest = fix[0] || badRows[0] || null;
+    // Biggest opportunity drives the next-round mission.
+    const biggest = fix[0] || null;
+
+    // If category history has no negative row, today's costly holes still
+    // provide an honest action point. This is explicitly labelled TODAY ONLY.
+    const todayFix = (!fix.length && topLost.length)
+      ? {
+          displayLabel:`Hole ${topLost[0].hole}`,
+          label:`Hole ${topLost[0].hole}`,
+          delta:-Math.abs(Number(topLost[0].cost || 0)),
+          sample:1,
+          confidence:"LOW",
+          weaknessClass:"TODAY ONLY",
+          todayOnly:true,
+          cost:Number(topLost[0].cost || 0)
+        }
+      : null;
+
+    if(todayFix){
+      fix.push(todayFix);
+    }
+
+    if(!watch.length && topLost.length > 1){
+      watch.push({
+        displayLabel:`Hole ${topLost[1].hole}`,
+        label:`Hole ${topLost[1].hole}`,
+        delta:-Math.abs(Number(topLost[1].cost || 0)),
+        sample:1,
+        confidence:"LOW",
+        weaknessClass:"TODAY ONLY",
+        todayOnly:true,
+        cost:Number(topLost[1].cost || 0)
+      });
+    }
+
+    // Re-evaluate biggest after today's fallback has been added.
+    const actionPriority = fix[0] || null;
 
     // -------------------------
     // What-if:
@@ -12857,13 +12901,31 @@ const playerActionDashboard = (() => {
     let missionText = "Keep the number of holes played worse than your handicap target as low as possible.";
     let missionMetric = "Lose no more than 2 strokes to handicap across your identified danger area.";
 
-    if(biggest?.displayLabel || biggest?.label){
-      missionTitle = String(biggest.displayLabel || biggest.label);
-      missionText = `This is the strongest repeatable scoring leak in the selected window.`;
-      const perHoleLoss = Math.abs(Number(biggest.delta || 0));
-      const sample = Number(biggest.sample || 0);
-      const roughPerRound = Math.max(0.5, Math.min(3, perHoleLoss * Math.min(6, Math.max(3, sample/Math.max(1, analysed.length)))));
-      missionMetric = `Next round: keep the total loss in ${String(biggest.displayLabel || biggest.label)} to 2 strokes or fewer. Improving this area toward target is worth roughly ${roughPerRound.toFixed(1)} strokes per round.`;
+    if(actionPriority?.displayLabel || actionPriority?.label){
+      missionTitle = String(actionPriority.displayLabel || actionPriority.label);
+
+      if(actionPriority.weaknessClass === "CONFIRMED"){
+        missionText = "This is your strongest confirmed scoring weakness in the selected window.";
+      }else if(actionPriority.weaknessClass === "EMERGING"){
+        missionText = "This is your strongest emerging scoring weakness. The pattern is worth acting on, but keep gathering evidence.";
+      }else if(actionPriority.weaknessClass === "TODAY ONLY"){
+        missionText = "This was the clearest scoring leak in this round. Treat it as today's priority rather than a proven long-term weakness.";
+      }else{
+        missionText = "This is currently your weakest below-target area, but the sample is still small.";
+      }
+
+      const perHoleLoss = Math.abs(Number(actionPriority.delta || actionPriority.cost || 0));
+      const sample = Number(actionPriority.sample || 1);
+      const roughPerRound = Math.max(
+        0.5,
+        Math.min(3, perHoleLoss * Math.min(6, Math.max(1, sample/Math.max(1, analysed.length))))
+      );
+
+      if(actionPriority.todayOnly){
+        missionMetric = `Next round: avoid losing more than 1 stroke to handicap on ${String(actionPriority.displayLabel || actionPriority.label)} if you play it again, and keep total damage from your three danger holes to 2 strokes or fewer.`;
+      }else{
+        missionMetric = `Next round: keep the total loss in ${String(actionPriority.displayLabel || actionPriority.label)} to 2 strokes or fewer. Moving this area toward target is worth roughly ${roughPerRound.toFixed(1)} strokes per round.`;
+      }
     }
 
     // -------------------------
@@ -12900,7 +12962,7 @@ const playerActionDashboard = (() => {
       keep,
       watch,
       fix,
-      biggest,
+      biggest:actionPriority,
       recoverable,
       whatIfScore,
       missionTitle,
@@ -13261,8 +13323,16 @@ const playerActionDashboard = (() => {
           </div>
           <div class="PRexecMini" style="margin-top:4px;">
             ${playerActionDashboard.biggest?.displayLabel
-              ? `This is the strongest repeatable scoring leak in the selected window.`
-              : "No category has enough evidence yet to call it a confirmed repeat weakness."}
+              ? (
+                  playerActionDashboard.biggest.weaknessClass === "CONFIRMED"
+                    ? "Confirmed repeat weakness — enough evidence to make this a priority."
+                    : playerActionDashboard.biggest.weaknessClass === "EMERGING"
+                      ? "Emerging weakness — enough evidence to act, but keep monitoring it."
+                      : playerActionDashboard.biggest.weaknessClass === "TODAY ONLY"
+                        ? "Today's biggest scoring leak — important for the next round, but not yet a proven long-term pattern."
+                        : "Currently the weakest area, but the evidence is still limited."
+                )
+              : "No below-target area was identified."}
           </div>
         </div>
       </div>
@@ -13281,18 +13351,34 @@ const playerActionDashboard = (() => {
           <h4>Watch</h4>
           ${playerActionDashboard.watch.length ? `
             <ul class="PRexecList">
-              ${playerActionDashboard.watch.map(r=>`<li>${PR_escapeHtml(r.displayLabel || r.label || "Area")} · ${r.confidence} confidence</li>`).join("")}
+              ${playerActionDashboard.watch.map(r=>`
+                <li>
+                  <b>${PR_escapeHtml(r.displayLabel || r.label || "Area")}</b>
+                  · ${PR_escapeHtml(r.weaknessClass || r.confidence || "LOW EVIDENCE")}
+                  ${r.todayOnly
+                    ? ` · lost ${Math.abs(Number(r.cost || r.delta || 0)).toFixed(1)} today`
+                    : ` · ${Number(r.delta).toFixed(2)}/hole · n=${r.sample}`}
+                </li>
+              `).join("")}
             </ul>
-          ` : `<div class="PRexecMini">No secondary weakness is separate from the Fix First priorities.</div>`}
+          ` : `<div class="PRexecMini">No second below-target category or costly hole needs attention from this round.</div>`}
         </div>
 
         <div class="PRexecCard PRexecBad">
           <h4>Fix first</h4>
           ${playerActionDashboard.fix.length ? `
             <ul class="PRexecList">
-              ${playerActionDashboard.fix.map(r=>`<li><b>${PR_escapeHtml(r.displayLabel || r.label || "Area")}</b> · ${r.confidence} · n=${r.sample}</li>`).join("")}
+              ${playerActionDashboard.fix.map(r=>`
+                <li>
+                  <b>${PR_escapeHtml(r.displayLabel || r.label || "Area")}</b>
+                  · <b>${PR_escapeHtml(r.weaknessClass || r.confidence || "LOW EVIDENCE")}</b>
+                  ${r.todayOnly
+                    ? ` · lost ${Math.abs(Number(r.cost || r.delta || 0)).toFixed(1)} stroke${Math.abs(Number(r.cost || r.delta || 0))===1?"":"s"} today`
+                    : ` · ${Number(r.delta).toFixed(2)}/hole vs target · n=${r.sample}`}
+                </li>
+              `).join("")}
             </ul>
-          ` : `<div class="PRexecMini">No repeat weakness has enough evidence yet to be labelled Fix First.</div>`}
+          ` : `<div class="PRexecMini">No category or hole finished below the playing-to-handicap target.</div>`}
         </div>
 
         <div class="PRexecCard PRexecTarget">
