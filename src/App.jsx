@@ -1526,7 +1526,7 @@ function PR_buildRawRows({ scoringMode, dim, mapObj, fieldObj, limit }){
     if (dim === "Par") label = String(k);
     // Yardage keys are typically already bands ("0–120", "121–150") so keep as-is.
 
-    rows.push({ key: String(k), label, holes, playerAvg, fieldAvg });
+    rows.push({ key: String(k), label, holes, playerAvg, fieldAvg, dim });
   }
 
   // Sort: Par in natural order, SI in natural order, Yardage by numeric start if possible
@@ -12766,31 +12766,69 @@ const playerActionDashboard = (() => {
       ...(Array.isArray(byPar) ? byPar : []),
       ...(Array.isArray(bySI) ? bySI : []),
       ...(Array.isArray(byYd) ? byYd : [])
-    ].filter(r => Number.isFinite(Number(r?.delta)));
+    ];
 
     const enrich = (r) => {
       const n = Number(r?.meHoles ?? r?.holes ?? r?.n ?? 0);
-      const delta = Number(r?.delta);
+      const playerAvg = Number(r?.playerAvg);
+      const targetAvg = Number(r?.fieldAvg);
+
+      // Same sign convention used everywhere else in the report:
+      // positive = player is doing BETTER than the comparator/target.
+      const delta = PR_goodDelta(scoringMode, playerAvg, targetAvg);
+
       let confidence = "LOW";
       if(n >= 24) confidence = "HIGH";
       else if(n >= 12) confidence = "MEDIUM";
-      return {...r, sample:n, delta, confidence};
+
+      const dimName = r?.dim === "Yards" ? "Yardage"
+        : (r?.dim === "SI" ? "Stroke Index" : (r?.dim === "Par" ? "Par" : ""));
+      const displayLabel = dimName ? `${dimName}: ${String(r?.label || r?.key || "Area")}` : String(r?.label || r?.key || "Area");
+
+      return {
+        ...r,
+        sample:n,
+        playerAvg,
+        targetAvg,
+        delta,
+        confidence,
+        displayLabel
+      };
     };
 
-    const evidenceRows = allRows.map(enrich);
+    const evidenceRows = allRows
+      .map(enrich)
+      .filter(r =>
+        Number.isFinite(r.delta) &&
+        Number.isFinite(r.playerAvg) &&
+        Number.isFinite(r.targetAvg) &&
+        r.sample > 0
+      );
 
+    // Small threshold avoids describing statistical noise as a strength/weakness.
     const goodRows = evidenceRows
-      .filter(r => r.delta > 0.08)
-      .sort((a,b)=>b.delta-a.delta);
+      .filter(r => r.delta >= 0.10)
+      .sort((a,b)=>(b.delta * Math.sqrt(Math.max(1,b.sample))) - (a.delta * Math.sqrt(Math.max(1,a.sample))));
 
     const badRows = evidenceRows
-      .filter(r => r.delta < -0.08)
-      .sort((a,b)=>a.delta-b.delta);
+      .filter(r => r.delta <= -0.10)
+      .sort((a,b)=>(a.delta * Math.sqrt(Math.max(1,a.sample))) - (b.delta * Math.sqrt(Math.max(1,b.sample))));
 
+    // Always show useful evidence when it exists.
+    // KEEP: strongest positive areas.
+    // FIX FIRST: strongest negative areas with >=12 holes where possible.
+    // WATCH: remaining negatives / lower-confidence negatives.
     const keep = goodRows.slice(0,4);
-    const fix = badRows.filter(r => r.confidence !== "LOW").slice(0,3);
+
+    const confirmedBad = badRows.filter(r => r.sample >= 12);
+    const fix = (confirmedBad.length ? confirmedBad : badRows).slice(0,3);
+
     const watch = badRows
-      .filter(r => !fix.some(f => String(f?.label) === String(r?.label)))
+      .filter(r => !fix.some(f =>
+        String(f?.key) === String(r?.key) &&
+        String(f?.displayLabel || f?.label) === String(r?.displayLabel || r?.label) &&
+        Number(f?.sample) === Number(r?.sample)
+      ))
       .slice(0,3);
 
     // Biggest opportunity = worst repeatable category
@@ -12819,13 +12857,13 @@ const playerActionDashboard = (() => {
     let missionText = "Keep the number of holes played worse than your handicap target as low as possible.";
     let missionMetric = "Lose no more than 2 strokes to handicap across your identified danger area.";
 
-    if(biggest?.label){
-      missionTitle = String(biggest.label);
+    if(biggest?.displayLabel || biggest?.label){
+      missionTitle = String(biggest.displayLabel || biggest.label);
       missionText = `This is the strongest repeatable scoring leak in the selected window.`;
       const perHoleLoss = Math.abs(Number(biggest.delta || 0));
       const sample = Number(biggest.sample || 0);
       const roughPerRound = Math.max(0.5, Math.min(3, perHoleLoss * Math.min(6, Math.max(3, sample/Math.max(1, analysed.length)))));
-      missionMetric = `Next round: keep the total loss in ${String(biggest.label)} to 2 strokes or fewer. Improving this area toward target is worth roughly ${roughPerRound.toFixed(1)} strokes per round.`;
+      missionMetric = `Next round: keep the total loss in ${String(biggest.displayLabel || biggest.label)} to 2 strokes or fewer. Improving this area toward target is worth roughly ${roughPerRound.toFixed(1)} strokes per round.`;
     }
 
     // -------------------------
@@ -13219,10 +13257,10 @@ const playerActionDashboard = (() => {
 
           <div style="margin-top:12px;font-size:12px;font-weight:900;">Biggest opportunity</div>
           <div style="font-size:18px;font-weight:950;color:#166534;margin-top:3px;">
-            ${playerActionDashboard.biggest?.label ? PR_escapeHtml(playerActionDashboard.biggest.label) : "Protect the card"}
+            ${playerActionDashboard.biggest?.displayLabel ? PR_escapeHtml(playerActionDashboard.biggest.displayLabel) : "Protect the card"}
           </div>
           <div class="PRexecMini" style="margin-top:4px;">
-            ${playerActionDashboard.biggest?.label
+            ${playerActionDashboard.biggest?.displayLabel
               ? `This is the strongest repeatable scoring leak in the selected window.`
               : "No category has enough evidence yet to call it a confirmed repeat weakness."}
           </div>
@@ -13234,27 +13272,27 @@ const playerActionDashboard = (() => {
           <h4>Keep doing</h4>
           ${playerActionDashboard.keep.length ? `
             <ul class="PRexecList">
-              ${playerActionDashboard.keep.map(r=>`<li>${PR_escapeHtml(r.label || "Area")} (${r.delta>=0?"+":""}${Number(r.delta).toFixed(2)}/hole)</li>`).join("")}
+              ${playerActionDashboard.keep.map(r=>`<li>${PR_escapeHtml(r.displayLabel || r.label || "Area")} (${r.delta>=0?"+":""}${Number(r.delta).toFixed(2)}/hole)</li>`).join("")}
             </ul>
-          ` : `<div class="PRexecMini">No confirmed strength yet.</div>`}
+          ` : `<div class="PRexecMini">No area is clearly above target in this selected sample.</div>`}
         </div>
 
         <div class="PRexecCard PRexecWatch">
           <h4>Watch</h4>
           ${playerActionDashboard.watch.length ? `
             <ul class="PRexecList">
-              ${playerActionDashboard.watch.map(r=>`<li>${PR_escapeHtml(r.label || "Area")} · ${r.confidence} confidence</li>`).join("")}
+              ${playerActionDashboard.watch.map(r=>`<li>${PR_escapeHtml(r.displayLabel || r.label || "Area")} · ${r.confidence} confidence</li>`).join("")}
             </ul>
-          ` : `<div class="PRexecMini">Nothing currently sits in the watch zone.</div>`}
+          ` : `<div class="PRexecMini">No secondary weakness is separate from the Fix First priorities.</div>`}
         </div>
 
         <div class="PRexecCard PRexecBad">
           <h4>Fix first</h4>
           ${playerActionDashboard.fix.length ? `
             <ul class="PRexecList">
-              ${playerActionDashboard.fix.map(r=>`<li><b>${PR_escapeHtml(r.label || "Area")}</b> · ${r.confidence} · n=${r.sample}</li>`).join("")}
+              ${playerActionDashboard.fix.map(r=>`<li><b>${PR_escapeHtml(r.displayLabel || r.label || "Area")}</b> · ${r.confidence} · n=${r.sample}</li>`).join("")}
             </ul>
-          ` : `<div class="PRexecMini">No high-confidence repeat weakness yet.</div>`}
+          ` : `<div class="PRexecMini">No repeat weakness has enough evidence yet to be labelled Fix First.</div>`}
         </div>
 
         <div class="PRexecCard PRexecTarget">
@@ -13849,39 +13887,90 @@ async function PR_downloadAllGolfersPDFSegmented(){
     const usableH = pageH - margin*2;
 
     holder = document.createElement("div");
+    holder.id = "PR_pdfCaptureStage";
     holder.style.position = "fixed";
-    holder.style.left = "-100000px";
+    holder.style.left = "0";
     holder.style.top = "0";
     holder.style.width = "760px";
+    holder.style.maxHeight = "100vh";
+    holder.style.overflow = "hidden";
     holder.style.background = "#fff";
+    holder.style.zIndex = "2147483647";
+    holder.style.pointerEvents = "none";
+    holder.style.opacity = "1";
+    holder.style.visibility = "visible";
+    holder.style.boxSizing = "border-box";
     document.body.appendChild(holder);
 
     async function renderNodeToPdf(node){
       const clone = node.cloneNode(true);
+
+      // Make sure page-break rules from the combined document don't affect capture.
+      clone.classList.remove("PRallPlayer");
       clone.style.width = "760px";
       clone.style.maxWidth = "760px";
+      clone.style.minWidth = "760px";
       clone.style.background = "#fff";
+      clone.style.color = "#0f172a";
       clone.style.boxSizing = "border-box";
       clone.style.pageBreakBefore = "auto";
       clone.style.breakBefore = "auto";
+      clone.style.transform = "none";
+      clone.style.opacity = "1";
+      clone.style.visibility = "visible";
 
       holder.innerHTML = "";
       holder.appendChild(clone);
 
-      // Let browser fully lay out fonts/SVG before capture
-      await new Promise(r => setTimeout(r, 40));
+      // Give Safari time to lay out nested style tags, SVG and fonts.
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      await new Promise(r => setTimeout(r, 120));
+
+      // Temporarily allow the capture stage to expand to the report's full height.
+      const fullHeight = Math.max(
+        clone.scrollHeight || 0,
+        clone.offsetHeight || 0,
+        500
+      );
+      holder.style.height = `${fullHeight}px`;
+      holder.style.maxHeight = "none";
+      holder.style.overflow = "visible";
 
       const canvas = await window.html2canvas(clone, {
-        scale: 1.65,
+        scale: 1.45,
         useCORS: true,
+        allowTaint: false,
         backgroundColor:"#ffffff",
         logging:false,
         scrollX:0,
         scrollY:0,
-        windowWidth:760
+        windowWidth:760,
+        windowHeight:Math.min(Math.max(fullHeight, 900), 12000),
+        foreignObjectRendering:false,
+        removeContainer:true
       });
 
-      if(!canvas || !canvas.width || !canvas.height) return;
+      if(!canvas || !canvas.width || !canvas.height){
+        throw new Error("A report section produced no canvas.");
+      }
+
+      // Detect the exact failure seen in Safari: a correctly-sized but all-white canvas.
+      const probe = document.createElement("canvas");
+      probe.width = Math.min(120, canvas.width);
+      probe.height = Math.min(160, canvas.height);
+      const pctx = probe.getContext("2d", {willReadFrequently:true});
+      pctx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, probe.width, probe.height);
+      const px = pctx.getImageData(0,0,probe.width,probe.height).data;
+      let nonWhite = 0;
+      for(let i=0;i<px.length;i+=4){
+        if(px[i] < 245 || px[i+1] < 245 || px[i+2] < 245){
+          nonWhite++;
+          if(nonWhite > 30) break;
+        }
+      }
+      if(nonWhite <= 30){
+        throw new Error("Browser produced a blank PDF canvas. Please use the new text-safe fallback.");
+      }
 
       const imgWmm = usableW;
       const pxPerMm = canvas.width / imgWmm;
@@ -13903,7 +13992,7 @@ async function PR_downloadAllGolfersPDFSegmented(){
           0,0,canvas.width,thisH
         );
 
-        const img = slice.toDataURL("image/jpeg",0.94);
+        const img = slice.toDataURL("image/jpeg",0.92);
         const imgHmm = thisH / pxPerMm;
 
         if(hasContent) pdf.addPage();
@@ -13912,6 +14001,10 @@ async function PR_downloadAllGolfersPDFSegmented(){
 
         yPx += thisH;
       }
+
+      holder.style.height = "auto";
+      holder.style.maxHeight = "100vh";
+      holder.style.overflow = "hidden";
     }
 
     if(cover) await renderNodeToPdf(cover);
@@ -13927,6 +14020,43 @@ async function PR_downloadAllGolfersPDFSegmented(){
 
   }catch(e){
     try{console.error("Segmented all-golfers PDF export failed:",e);}catch(_){}
+
+    // Text-safe Safari fallback: never create another blank downloadable PDF.
+    // Open the already-generated report in a clean print document instead.
+    // Safari's native "Save as PDF" preserves text/vector content reliably.
+    try{
+      const body = document.getElementById("PR_seasonReportBody");
+      if(body){
+        const w = window.open("", "_blank");
+        if(w){
+          w.document.open();
+          w.document.write(`<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>All Golfers Performance Report</title>
+<style>
+  @page{size:A4;margin:10mm}
+  html,body{background:#fff!important;color:#0f172a!important}
+  body{font-family:Arial,Helvetica,sans-serif;margin:0}
+  .PRallPlayer{break-before:page;page-break-before:always}
+  button{display:none!important}
+</style>
+</head>
+<body>${body.innerHTML}</body>
+</html>`);
+          w.document.close();
+          setTimeout(()=>{
+            try{w.focus();w.print();}catch(_){}
+          },500);
+          alert("Safari blocked the direct canvas PDF, so the report has opened in a print-safe window. Choose Save as PDF in the print dialog.");
+          return;
+        }
+      }
+    }catch(printErr){
+      try{console.error(printErr);}catch(_){}
+    }
+
     alert(`Could not create the All Golfers PDF: ${String(e?.message || e || "Unknown error")}`);
   }finally{
     if(holder && holder.parentNode){
