@@ -6881,67 +6881,6 @@ function UX_KeyMoments({ pts, holes }) {
   );
 }
 
-
-// ============================================================
-// SHAREABLE ONLINE PLAYER REPORT — GitHub Pages friendly.
-// The report snapshot lives in the URL hash; no PDF/canvas work.
-// ============================================================
-function PR_utf8ToB64Url(str){
-  const bytes=new TextEncoder().encode(String(str||""));
-  let bin=""; for(let i=0;i<bytes.length;i++) bin+=String.fromCharCode(bytes[i]);
-  return btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
-}
-function PR_b64UrlToUtf8(s){
-  let b64=String(s||"").replace(/-/g,"+").replace(/_/g,"/");
-  while(b64.length%4)b64+="=";
-  const bin=atob(b64), bytes=new Uint8Array(bin.length);
-  for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
-  return new TextDecoder().decode(bytes);
-}
-function PR_readSharePayload(){
-  try{
-    const h=String(window.location.hash||""), p="#player-report=";
-    if(!h.startsWith(p))return null;
-    const obj=JSON.parse(PR_b64UrlToUtf8(h.slice(p.length)));
-    return obj?.v===1 && obj?.html ? obj : null;
-  }catch(e){console.error(e);return null;}
-}
-function PR_SharedPlayerReport(){
-  const p=PR_readSharePayload();
-  if(!p)return null;
-  return <div style={{minHeight:"100vh",background:"#f1f5f9",padding:"18px 10px"}}>
-    <div style={{maxWidth:"920px",margin:"0 auto"}}>
-      <div style={{background:"#0f2747",color:"#fff",borderRadius:"18px",padding:"18px 20px",marginBottom:"12px"}}>
-        <div style={{fontSize:"12px",fontWeight:900,letterSpacing:".08em",opacity:.8}}>DEN GOLF PERFORMANCE</div>
-        <div style={{fontSize:"28px",fontWeight:950,marginTop:"3px"}}>{p.player}</div>
-        <div style={{fontSize:"13px",opacity:.85,marginTop:"3px"}}>{p.season} · Shared performance report</div>
-      </div>
-      <div style={{background:"#fff",borderRadius:"18px",padding:"4px 12px 18px",overflow:"hidden"}}
-           dangerouslySetInnerHTML={{__html:p.html}} />
-      <div style={{textAlign:"center",fontSize:"11px",color:"#64748b",padding:"16px"}}>
-        Scorecard-based analysis: where scoring changed, not an invented diagnosis of the shot that caused it.
-      </div>
-    </div>
-  </div>;
-}
-async function PR_sharePlayerReport(args){
-  const r=PR_generateSeasonReportHTML(args);
-  if(!r?.ok || !(r.htmlFragment||r.html)) throw new Error(r?.error||"Could not generate report.");
-  const payload={v:1,player:String(args.playerName||"Golfer"),season:String(args.yearLabel||"Season"),
-    created:new Date().toISOString(),html:String(r.htmlFragment||r.html)};
-  const encoded=PR_utf8ToB64Url(JSON.stringify(payload));
-  const base=`${window.location.origin}${window.location.pathname}${window.location.search||""}`;
-  const url=`${base}#player-report=${encoded}`;
-  try{
-    if(navigator.share){
-      await navigator.share({title:`${args.playerName} — Golf Performance Report`,url});
-      return {ok:true,url,shared:true};
-    }
-  }catch(e){if(e?.name==="AbortError")return {ok:true,url,cancelled:true};}
-  try{await navigator.clipboard.writeText(url);return {ok:true,url,copied:true};}
-  catch(e){window.prompt("Copy this report link:",url);return {ok:true,url,prompted:true};}
-}
-
 function PlayerProgressView({
   seasonModel,
   scoringMode,
@@ -9321,25 +9260,71 @@ const coachLine = (row) => {
 
                   <button
                     className="btn-primary"
-                    onClick={async()=>{
-                      try{
-                        const playerName=String(seasonPlayer||"").trim();
-                        if(!playerName){alert("Choose a golfer first.");return;}
-                        const lens=(localStorage.getItem("dsl_lens")||"pointsField");
-                        const uiCohort=window.__dslUiState?.cohortMode||null;
-                        let comparator=uiCohort?(uiCohort==="field"?"field":"band"):
-                          (window.__dslSeasonReportParams?.comparatorMode||"band");
-                        if(lens==="strokesPar")comparator="par";
-                        const result=await PR_sharePlayerReport({
-                          model:seasonModel,playerName,yearLabel:seasonYear,seasonLimit,
-                          scoringMode,lensMode:lens,comparatorMode:comparator
+                    onClick={() => {
+                      try {
+                        const snap = (typeof window !== "undefined" && window.__dslOverviewReport)
+                          ? window.__dslOverviewReport
+                          : null;
+
+                        const lens = String(
+                          snap?.lensMode ||
+                          (typeof localStorage !== "undefined"
+                            ? (localStorage.getItem("dsl_lens") || "pointsField")
+                            : "pointsField")
+                        );
+
+                        const uiCohort = (
+                          typeof window !== "undefined" &&
+                          window.__dslUiState &&
+                          window.__dslUiState.cohortMode
+                        ) ? window.__dslUiState.cohortMode : null;
+
+                        let comparator = String(
+                          snap?.comparatorMode ||
+                          (uiCohort ? (uiCohort === "field" ? "field" : "band") : "") ||
+                          (window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode) ||
+                          "band"
+                        );
+
+                        if (lens === "strokesPar") comparator = "par";
+                        if (comparator !== "par" && comparator !== "field" && comparator !== "band") {
+                          comparator = "band";
+                        }
+
+                        const r = PR_generateAllGolfersReportHTML({
+                          model: seasonModel,
+                          yearLabel: seasonYear,
+                          seasonLimit: seasonLimit,
+                          scoringMode,
+                          lensMode: lens,
+                          comparatorMode: comparator
                         });
-                        if(result?.copied)alert("Report link copied — paste it into WhatsApp, Messages or email.");
-                      }catch(e){console.error(e);alert(`Could not create share link: ${String(e?.message||e||"Unknown error")}`);}
+
+                        if (!r || !r.ok) {
+                          alert(r?.error || "Could not generate all-golfers PDF.");
+                          return;
+                        }
+
+                        window.__dslSeasonReportParams = {
+                          model: seasonModel,
+                          playerName: "All-Golfers",
+                          yearLabel: seasonYear,
+                          seasonLimit: seasonLimit,
+                          scoringMode,
+                          lensMode: lens,
+                          comparatorMode: comparator
+                        };
+
+                        PR_showInlineSeasonReport(r.htmlFragment || r.html);
+                        setTimeout(() => PR_downloadAllGolfersPDFSegmented(), 180);
+                      } catch (e) {
+                        console.error(e);
+                        alert("Could not generate all-golfers PDF.");
+                      }
                     }}
-                    title="Create a read-only online report link for the selected golfer"
+                    title="Download one PDF containing every golfer's full report"
                   >
-                    Share Player Report
+                    Download All Golfers PDF
                   </button>
 
                   <button
@@ -9357,6 +9342,9 @@ const coachLine = (row) => {
                     Problem Holes
                   </button>
                 </div>
+              </div>
+              <div className="mt-2 text-xs font-bold text-emerald-700">
+                All Golfers PDF is available from the button above.
               </div>
             <div className="mt-1 break-words leading-tight">
               <span className="text-4xl md:text-5xl font-black tracking-tight text-neutral-900">{firstName}</span>
@@ -12510,16 +12498,11 @@ const scorecardIntel = (() => {
       return ax - bx;
     });
 
-    // SINGLE SOURCE OF TRUTH:
-    // use the exact year / recent-games window already selected for this report.
-    // Never silently analyse the player's full history when the report is showing
-    // only (for example) 2026 / Last 3.
-    const __rawScorecardSeries =
+    const roundsAll = sortRounds(
       (Array.isArray(__sourcePlayer?.roundSeries) && __sourcePlayer.roundSeries.length)
         ? __sourcePlayer.roundSeries
-        : (Array.isArray(__sourcePlayer?.series) ? __sourcePlayer.series : []);
-
-    const roundsAll = sortRounds(__filterSeries(__rawScorecardSeries));
+        : __sourcePlayer?.series
+    );
 
     if (!roundsAll.length) return { ok:false };
 
@@ -12533,10 +12516,6 @@ const scorecardIntel = (() => {
     };
     const grossOf = r => {
       const x = r?.grossPerHole || r?.grossHoles || r?.holeGross || r?.scoresPerHole || r?.scores;
-      return Array.isArray(x) ? x.slice(0,18).map(Number) : [];
-    };
-    const yardsOf = r => {
-      const x = r?.yardsArr || r?.yardsPerHole || r?.ydsPerHole || r?.yards || r?.holeYards || r?.yardages;
       return Array.isArray(x) ? x.slice(0,18).map(Number) : [];
     };
 
@@ -12579,30 +12558,18 @@ const scorecardIntel = (() => {
     const teeNameOf = r => String(r?.teeName || r?.teeLabel || r?.tee || "Tee");
 
     const analysed = roundsAll.map((r, ri) => {
-      const pars = parsOf(r), sis = siOf(r), gross = grossOf(r), yards = yardsOf(r);
+      const pars = parsOf(r), sis = siOf(r), gross = grossOf(r);
       const ch = calcCH(r);
       const holes = [];
       for (let i=0; i<18; i++) {
-        const p = Number(pars[i]), si = Number(sis[i]), g = Number(gross[i]), yard = Number(yards[i]);
+        const p = Number(pars[i]), si = Number(sis[i]), g = Number(gross[i]);
         if (!Number.isFinite(p) || !Number.isFinite(g) || g <= 0) continue;
         const recv = strokesReceived(ch, si);
         const targetGross = p + recv;
-
-        // ONLY definition used by the coaching dashboard:
-        // target - actual. Positive = beat handicap target; negative = lost strokes.
-        const delta = targetGross - g;
-
+        const delta = targetGross - g; // positive = better than playing-to-handicap target
         holes.push({
-          hole:i+1,
-          par:p,
-          si,
-          yard:Number.isFinite(yard) ? yard : NaN,
-          gross:g,
-          recv,
-          targetGross,
-          delta,
-          cost:Math.max(0, g - targetGross),
-          gain:Math.max(0, targetGross - g)
+          hole:i+1, par:p, si, gross:g, recv, targetGross, delta,
+          cost:Math.max(0, -delta), gain:Math.max(0, delta)
         });
       }
       if (!holes.length) return null;
@@ -12792,114 +12759,123 @@ const playerActionDashboard = (() => {
       : [];
 
     // -------------------------
-    // HANDICAP-TARGET CATEGORY EVIDENCE
-    // Rebuilt directly from the SAME holes used by Round vs Handicap.
-    // No Field / Peer / Handicap-band numbers are allowed into coaching advice.
+    // Build category evidence
+    // from existing report rows
     // -------------------------
-    const yardBand = y => {
-      const n = Number(y);
-      if(!Number.isFinite(n)) return null;
-      if(n < 150) return "<150";
-      if(n <= 200) return "150–200";
-      if(n <= 350) return "201–350";
-      if(n <= 420) return "351–420";
-      return "420+";
-    };
-    const siBand = si => {
-      const n = Number(si);
-      if(!Number.isFinite(n)) return null;
-      if(n <= 6) return "SI 1–6";
-      if(n <= 12) return "SI 7–12";
-      return "SI 13–18";
-    };
+    const allRows = [
+      ...(Array.isArray(byPar) ? byPar : []),
+      ...(Array.isArray(bySI) ? bySI : []),
+      ...(Array.isArray(byYd) ? byYd : [])
+    ];
 
-    const categoryMap = new Map();
+    const enrich = (r) => {
+      const n = Number(r?.meHoles ?? r?.holes ?? r?.n ?? 0);
+      const playerAvg = Number(r?.playerAvg);
+      const targetAvg = Number(r?.fieldAvg);
 
-    const addCategory = (type, label, h) => {
-      if(!label || !Number.isFinite(Number(h?.delta))) return;
-      const key = `${type}|${label}`;
-      const rec = categoryMap.get(key) || {
-        type, label, displayLabel:`${type}: ${label}`,
-        sample:0, totalDelta:0, badHoles:0, goodHoles:0,
-        rounds:new Set()
-      };
-      rec.sample += 1;
-      rec.totalDelta += Number(h.delta);
-      if(Number(h.delta) < 0) rec.badHoles += 1;
-      if(Number(h.delta) > 0) rec.goodHoles += 1;
-      rec.rounds.add(Number(h.__roundIndex));
-      categoryMap.set(key, rec);
-    };
+      // Same sign convention used everywhere else in the report:
+      // positive = player is doing BETTER than the comparator/target.
+      const delta = PR_goodDelta(scoringMode, playerAvg, targetAvg);
 
-    analysed.forEach((rr, roundIndex) => {
-      (rr.holes || []).forEach(h0 => {
-        const h = {...h0, __roundIndex:roundIndex};
-        addCategory("Par", `Par ${h.par}`, h);
-        addCategory("Stroke Index", siBand(h.si), h);
-        const yb = yardBand(h.yard);
-        if(yb) addCategory("Yardage", yb, h);
-      });
-    });
-
-    const evidenceRows = Array.from(categoryMap.values()).map(r => {
-      const delta = r.sample ? r.totalDelta / r.sample : NaN;
-      const roundCount = r.rounds.size;
-      const badRate = r.sample ? r.badHoles / r.sample : 0;
       let confidence = "LOW";
-      if(r.sample >= 24 && roundCount >= 4) confidence = "HIGH";
-      else if(r.sample >= 12 && roundCount >= 3) confidence = "MEDIUM";
+      if(n >= 24) confidence = "HIGH";
+      else if(n >= 12) confidence = "MEDIUM";
+
+      const dimName = r?.dim === "Yards" ? "Yardage"
+        : (r?.dim === "SI" ? "Stroke Index" : (r?.dim === "Par" ? "Par" : ""));
+      const displayLabel = dimName ? `${dimName}: ${String(r?.label || r?.key || "Area")}` : String(r?.label || r?.key || "Area");
+
       return {
         ...r,
-        rounds:roundCount,
+        sample:n,
+        playerAvg,
+        targetAvg,
         delta,
-        badRate,
-        confidence
+        confidence,
+        displayLabel
       };
-    }).filter(r => Number.isFinite(r.delta));
+    };
 
-    // Rank by effect AND evidence, but retain honest per-hole values.
-    const evidenceWeight = r => Math.sqrt(Math.max(1, r.sample)) * Math.max(1, r.rounds);
+    const evidenceRows = allRows
+      .map(enrich)
+      .filter(r =>
+        Number.isFinite(r.delta) &&
+        Number.isFinite(r.playerAvg) &&
+        Number.isFinite(r.targetAvg) &&
+        r.sample > 0
+      );
 
+    // Small threshold avoids describing statistical noise as a strength/weakness.
     const goodRows = evidenceRows
       .filter(r => r.delta >= 0.10)
-      .sort((a,b)=>(b.delta*evidenceWeight(b))-(a.delta*evidenceWeight(a)));
+      .sort((a,b)=>(b.delta * Math.sqrt(Math.max(1,b.sample))) - (a.delta * Math.sqrt(Math.max(1,a.sample))));
 
     const badRows = evidenceRows
       .filter(r => r.delta <= -0.10)
-      .sort((a,b)=>(a.delta*evidenceWeight(a))-(b.delta*evidenceWeight(b)));
+      .sort((a,b)=>(a.delta * Math.sqrt(Math.max(1,a.sample))) - (b.delta * Math.sqrt(Math.max(1,b.sample))));
 
-    const classifyWeakness = r => {
-      if(r.sample >= 24 && r.rounds >= 4) return "CONFIRMED";
-      if(r.sample >= 12 && r.rounds >= 3) return "EMERGING";
+    // Always give the golfer a useful priority without overstating certainty.
+    // Classification:
+    //   CONFIRMED = >=24 holes
+    //   EMERGING  = >=12 holes
+    //   TODAY ONLY / LOW EVIDENCE = <12 holes
+    const classifyWeakness = (r) => {
+      const n = Number(r?.sample || 0);
+      if(n >= 24) return "CONFIRMED";
+      if(n >= 12) return "EMERGING";
       return "LOW EVIDENCE";
     };
 
-    // Avoid four overlapping "strengths" that tell the golfer the same thing.
-    // Prefer one best item from each dimension.
-    const keep = [];
-    ["Par","Stroke Index","Yardage"].forEach(type => {
-      const best = goodRows.find(r => r.type === type);
-      if(best) keep.push(best);
-    });
+    const keep = goodRows.slice(0,4);
 
-    // Fix first = strongest genuine below-handicap category.
+    // FIX FIRST is ALWAYS the strongest below-target category if one exists.
+    // One priority is clearer than filling the box with overlapping categories.
     const fix = badRows.length
       ? [{...badRows[0], weaknessClass:classifyWeakness(badRows[0])}]
       : [];
 
-    // Watch = next genuinely different category, preferably another dimension.
-    const watch = [];
-    if(badRows.length > 1){
-      const first = fix[0];
-      const diffDim = badRows.find(r => r !== first && r.type !== first?.type);
-      const second = diffDim || badRows.find(r => r !== first);
-      if(second) watch.push({...second, weaknessClass:classifyWeakness(second)});
-    }
+    // WATCH uses the next negative category. If every historical category is
+    // above target, use the latest round's next-costliest hole as a watch item.
+    const watch = badRows.length > 1
+      ? badRows.slice(1,3).map(r => ({...r, weaknessClass:classifyWeakness(r)}))
+      : [];
 
+    // Biggest opportunity drives the next-round mission.
     const biggest = fix[0] || null;
 
-    // Never promote one bad hole into a long-term "Fix First" diagnosis.
-    // Today's hole damage is already shown separately above.
+    // If category history has no negative row, today's costly holes still
+    // provide an honest action point. This is explicitly labelled TODAY ONLY.
+    const todayFix = (!fix.length && topLost.length)
+      ? {
+          displayLabel:`Hole ${topLost[0].hole}`,
+          label:`Hole ${topLost[0].hole}`,
+          delta:-Math.abs(Number(topLost[0].cost || 0)),
+          sample:1,
+          confidence:"LOW",
+          weaknessClass:"TODAY ONLY",
+          todayOnly:true,
+          cost:Number(topLost[0].cost || 0)
+        }
+      : null;
+
+    if(todayFix){
+      fix.push(todayFix);
+    }
+
+    if(!watch.length && topLost.length > 1){
+      watch.push({
+        displayLabel:`Hole ${topLost[1].hole}`,
+        label:`Hole ${topLost[1].hole}`,
+        delta:-Math.abs(Number(topLost[1].cost || 0)),
+        sample:1,
+        confidence:"LOW",
+        weaknessClass:"TODAY ONLY",
+        todayOnly:true,
+        cost:Number(topLost[1].cost || 0)
+      });
+    }
+
+    // Re-evaluate biggest after today's fallback has been added.
     const actionPriority = fix[0] || null;
 
     // -------------------------
@@ -12932,6 +12908,8 @@ const playerActionDashboard = (() => {
         missionText = "This is your strongest confirmed scoring weakness in the selected window.";
       }else if(actionPriority.weaknessClass === "EMERGING"){
         missionText = "This is your strongest emerging scoring weakness. The pattern is worth acting on, but keep gathering evidence.";
+      }else if(actionPriority.weaknessClass === "TODAY ONLY"){
+        missionText = "This was the clearest scoring leak in this round. Treat it as today's priority rather than a proven long-term weakness.";
       }else{
         missionText = "This is currently your weakest below-target area, but the sample is still small.";
       }
@@ -12943,7 +12921,11 @@ const playerActionDashboard = (() => {
         Math.min(3, perHoleLoss * Math.min(6, Math.max(1, sample/Math.max(1, analysed.length))))
       );
 
-      missionMetric = `Next round: keep the total loss in ${String(actionPriority.displayLabel || actionPriority.label)} to 2 strokes or fewer. Moving this area toward target is worth roughly ${roughPerRound.toFixed(1)} strokes per round.`;
+      if(actionPriority.todayOnly){
+        missionMetric = `Next round: avoid losing more than 1 stroke to handicap on ${String(actionPriority.displayLabel || actionPriority.label)} if you play it again, and keep total damage from your three danger holes to 2 strokes or fewer.`;
+      }else{
+        missionMetric = `Next round: keep the total loss in ${String(actionPriority.displayLabel || actionPriority.label)} to 2 strokes or fewer. Moving this area toward target is worth roughly ${roughPerRound.toFixed(1)} strokes per round.`;
+      }
     }
 
     // -------------------------
@@ -12969,49 +12951,8 @@ const playerActionDashboard = (() => {
       }
     }
 
-    // What genuinely separates this golfer's better and poorer rounds?
-    const roundRows=analysed
-      .filter(r=>Number.isFinite(Number(r?.actualGross))&&Number.isFinite(Number(r?.targetGross)))
-      .map(r=>{
-        const hs=Array.isArray(r.holes)?r.holes:[];
-        return {...r,
-          performance:Number(r.targetGross)-Number(r.actualGross),
-          doublesPlus:hs.filter(h=>Number(h?.gross)-Number(h?.par)>=2).length,
-          bogeyPlus:hs.filter(h=>Number(h?.gross)-Number(h?.par)>=1).length,
-          parsOrBetter:hs.filter(h=>Number(h?.gross)-Number(h?.par)<=0).length,
-          birdiesPlus:hs.filter(h=>Number(h?.gross)-Number(h?.par)<=-1).length,
-          top3:hs.map(h=>Math.max(0,Number(h?.cost||0))).sort((a,b)=>b-a).slice(0,3).reduce((s,v)=>s+v,0)
-        };
-      }).sort((a,b)=>b.performance-a.performance);
-
-    let goodBad=null;
-    if(roundRows.length>=4){
-      const n=Math.max(2,Math.ceil(roundRows.length*.3)), good=roundRows.slice(0,n), bad=roundRows.slice(-n);
-      const avg=(a,k)=>a.reduce((s,r)=>s+Number(r[k]||0),0)/Math.max(1,a.length);
-      const metrics=[
-        {key:"doublesPlus",label:"doubles-or-worse",good:avg(good,"doublesPlus"),bad:avg(bad,"doublesPlus"),hb:true},
-        {key:"bogeyPlus",label:"bogeys-or-worse",good:avg(good,"bogeyPlus"),bad:avg(bad,"bogeyPlus"),hb:true},
-        {key:"parsOrBetter",label:"pars-or-better",good:avg(good,"parsOrBetter"),bad:avg(bad,"parsOrBetter"),hb:false},
-        {key:"birdiesPlus",label:"birdies-or-better",good:avg(good,"birdiesPlus"),bad:avg(bad,"birdiesPlus"),hb:false},
-        {key:"top3",label:"damage from 3 costliest holes",good:avg(good,"top3"),bad:avg(bad,"top3"),hb:true}
-      ].map(m=>({...m,separation:m.hb?m.bad-m.good:m.good-m.bad}))
-       .sort((a,b)=>b.separation-a.separation);
-      const d=metrics[0], dbl=metrics.find(m=>m.key==="doublesPlus"), bird=metrics.find(m=>m.key==="birdiesPlus");
-      let headline=d.key==="doublesPlus"?"Doubles are the clearest difference between your good and bad rounds":
-        d.key==="top3"?"A few damaging holes separate your good and bad rounds":
-        d.key==="parsOrBetter"?"Your good rounds come from producing more solid holes":
-        d.key==="birdiesPlus"?"Your good rounds contain meaningfully more birdies":
-        "Damage control is the main separator between good and bad rounds";
-      const explanation=`${d.label}: ${d.good.toFixed(1)} in better rounds versus ${d.bad.toFixed(1)} in poorer rounds.`;
-      const strategy=(dbl&&bird&&dbl.separation>Math.max(.5,bird.separation))
-        ?`Reducing doubles matters more than chasing extra birdies: ${dbl.good.toFixed(1)} doubles+ in better rounds versus ${dbl.bad.toFixed(1)} in poorer rounds.`
-        :`The strongest measurable lever is ${d.label}. Change that pattern rather than trying to improve everything at once.`;
-      goodBad={ok:true,bucketN:n,headline,explanation,strategy,metrics:metrics.slice(0,3)};
-    }
-
     return {
       ok:true,
-      goodBad,
       verdictTitle,
       verdictText,
       topLost,
@@ -13353,14 +13294,11 @@ const playerActionDashboard = (() => {
           ${playerActionDashboard.topLost.length ? `
             ${playerActionDashboard.topLost.map(h=>`
               <div class="PRexecBar">
-                <div title="Gross ${h.gross}, target ${h.targetGross}, SI ${h.si}">H${h.hole}</div>
+                <div>H${h.hole}</div>
                 <div class="PRexecTrack">
                   <div class="PRexecFillBad" style="width:${Math.min(100,Math.max(12,Number(h.cost||0)*28))}%"></div>
                 </div>
                 <div style="text-align:right;color:#b91c1c;font-weight:900;">-${Number(h.cost||0).toFixed(1)}</div>
-                <div style="grid-column:1 / -1;font-size:9px;color:#64748b;margin-top:-3px;">
-                  Gross ${Number(h.gross).toFixed(0)} · handicap target ${Number(h.targetGross).toFixed(0)} · SI ${Number.isFinite(Number(h.si))?Number(h.si).toFixed(0):"—"}
-                </div>
               </div>
             `).join("")}
           ` : `<div class="PRexecMini" style="margin-top:6px;">No holes finished worse than the playing-to-handicap target.</div>`}
@@ -13399,22 +13337,6 @@ const playerActionDashboard = (() => {
         </div>
       </div>
 
-      ${playerActionDashboard.goodBad?.ok ? `
-      <div style="padding:0 12px 12px;">
-        <div class="PRexecCard PRexecTarget">
-          <h4>What separates your good rounds from your bad rounds?</h4>
-          <div style="font-size:19px;font-weight:950;color:#0f172a;">${PR_escapeHtml(playerActionDashboard.goodBad.headline)}</div>
-          <div class="PRexecVerdictText" style="margin-top:5px;">${PR_escapeHtml(playerActionDashboard.goodBad.explanation)}</div>
-          <div style="font-size:12px;font-weight:900;margin-top:8px;color:#1d4ed8;">${PR_escapeHtml(playerActionDashboard.goodBad.strategy)}</div>
-          <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px;">
-            ${playerActionDashboard.goodBad.metrics.map(m=>`
-              <div style="border:1px solid #dbeafe;border-radius:10px;padding:8px;background:#fff;">
-                <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:900;">${PR_escapeHtml(m.label)}</div>
-                <div style="font-size:12px;margin-top:4px;">Better <b>${m.good.toFixed(1)}</b><br/>Poorer <b>${m.bad.toFixed(1)}</b></div>
-              </div>`).join("")}
-          </div>
-        </div>
-      </div>` : ""}
       <div class="PRexecGrid4">
         <div class="PRexecCard PRexecGood">
           <h4>Keep doing</h4>
@@ -13433,7 +13355,9 @@ const playerActionDashboard = (() => {
                 <li>
                   <b>${PR_escapeHtml(r.displayLabel || r.label || "Area")}</b>
                   · ${PR_escapeHtml(r.weaknessClass || r.confidence || "LOW EVIDENCE")}
-                   · ${Number(r.delta).toFixed(2)}/hole · n=${r.sample} · ${r.rounds} rounds
+                  ${r.todayOnly
+                    ? ` · lost ${Math.abs(Number(r.cost || r.delta || 0)).toFixed(1)} today`
+                    : ` · ${Number(r.delta).toFixed(2)}/hole · n=${r.sample}`}
                 </li>
               `).join("")}
             </ul>
@@ -13448,7 +13372,9 @@ const playerActionDashboard = (() => {
                 <li>
                   <b>${PR_escapeHtml(r.displayLabel || r.label || "Area")}</b>
                   · <b>${PR_escapeHtml(r.weaknessClass || r.confidence || "LOW EVIDENCE")}</b>
-                   · ${Number(r.delta).toFixed(2)}/hole vs target · n=${r.sample} · ${r.rounds} rounds
+                  ${r.todayOnly
+                    ? ` · lost ${Math.abs(Number(r.cost || r.delta || 0)).toFixed(1)} stroke${Math.abs(Number(r.cost || r.delta || 0))===1?"":"s"} today`
+                    : ` · ${Number(r.delta).toFixed(2)}/hole vs target · n=${r.sample}`}
                 </li>
               `).join("")}
             </ul>
@@ -17742,9 +17668,6 @@ function PlayerInsightsView({
 
 
 function App(props) {
-  const __sharedPlayerReport=(typeof window!=="undefined")?PR_readSharePayload():null;
-  if(__sharedPlayerReport) return <PR_SharedPlayerReport />;
-
         const [view, setView] = useState("home");
 
 const [tenantTick, setTenantTick] = useState(0);
