@@ -12680,6 +12680,47 @@ const scorecardIntel = (() => {
   }
 })();
 
+// ============================================================
+// HANDICAP PERFORMANCE DIAL
+// Centre = played exactly to Course Handicap target.
+// Positive = better than handicap target (green/right).
+// Negative = worse than handicap target (red/left).
+// The visual scale is capped at +/-8 strokes for readability,
+// while the actual numeric difference is always shown.
+// ============================================================
+const handicapDial = (() => {
+  try {
+    const rr = scorecardIntel?.ok ? scorecardIntel.latest : null;
+    if (!rr || !Number.isFinite(Number(rr.delta))) return { ok:false };
+
+    const delta = Number(rr.delta); // targetGross - actualGross: + is better
+    const capped = Math.max(-8, Math.min(8, delta));
+    const angle = -90 + ((capped + 8) / 16) * 180;
+
+    let status = "Played to handicap";
+    let statusClass = "neutral";
+    if (delta >= 0.5) { status = "Better than handicap"; statusClass = "good"; }
+    else if (delta <= -0.5) { status = "Worse than handicap"; statusClass = "bad"; }
+
+    const target = Number(rr.targetGross);
+    const actual = Number(rr.actualGross);
+
+    return {
+      ok:true,
+      delta,
+      capped,
+      angle,
+      status,
+      statusClass,
+      target,
+      actual,
+      ch:Number(rr.ch)
+    };
+  } catch(e) {
+    return {ok:false};
+  }
+})();
+
   const htmlFragment = `
   <style>
     .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a}
@@ -12731,7 +12772,16 @@ const scorecardIntel = (() => {
     .PRscoreCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
     .PRscoreBig{font-size:20px;font-weight:950;margin-top:3px}
     .PRconf{display:inline-block;border:1px solid #cbd5e1;border-radius:999px;padding:2px 7px;font-size:10px;font-weight:950}
-    @media(max-width:700px){.PRintelGrid,.PRscoreGrid{grid-template-columns:1fr}}
+    .PRdialWrap{border:1px solid #e2e8f0;border-radius:16px;padding:12px 14px;background:#fff;margin-top:10px}
+    .PRdialGrid{display:grid;grid-template-columns:minmax(260px,1.1fr) minmax(180px,.9fr);gap:14px;align-items:center}
+    .PRdialSvg{display:block;width:100%;max-width:420px;height:auto;margin:0 auto}
+    .PRdialStatus{font-size:19px;font-weight:950;color:#0f172a}
+    .PRdialDiff{font-size:31px;font-weight:950;letter-spacing:-.03em;margin-top:2px}
+    .PRdialGood{color:#15803d}
+    .PRdialBad{color:#b91c1c}
+    .PRdialNeutral{color:#334155}
+    .PRdialMeta{font-size:12px;color:#64748b;line-height:1.5;margin-top:4px}
+    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRdialGrid{grid-template-columns:1fr}}
   </style>
 
   <div class="PRr">
@@ -12882,6 +12932,63 @@ const scorecardIntel = (() => {
       <div class="PRmuted">Not enough prior hole-by-hole history yet to build a reliable latest-round expectation.</div>
     </div>
     `}
+
+    ${handicapDial?.ok ? `
+    <div class="PRdialWrap PRsec">
+      <div class="PRsecTitle">Round vs Handicap</div>
+      <div class="PRdialGrid">
+        <div>
+          <svg class="PRdialSvg" viewBox="0 0 420 235" role="img" aria-label="Handicap performance dial. Red is worse than handicap, centre is playing to handicap, green is better than handicap.">
+            <!-- semicircle track -->
+            <path d="M55 195 A155 155 0 0 1 210 40"
+                  fill="none" stroke="#dc2626" stroke-width="28" stroke-linecap="butt"/>
+            <path d="M210 40 A155 155 0 0 1 365 195"
+                  fill="none" stroke="#16a34a" stroke-width="28" stroke-linecap="butt"/>
+
+            <!-- centre handicap marker -->
+            <line x1="210" y1="24" x2="210" y2="58" stroke="#0f172a" stroke-width="5"/>
+            <text x="210" y="18" text-anchor="middle" font-size="12" font-weight="800" fill="#0f172a">HANDICAP</text>
+
+            <!-- scale labels -->
+            <text x="43" y="224" text-anchor="middle" font-size="12" font-weight="800" fill="#b91c1c">WORSE</text>
+            <text x="210" y="224" text-anchor="middle" font-size="12" font-weight="800" fill="#334155">0</text>
+            <text x="377" y="224" text-anchor="middle" font-size="12" font-weight="800" fill="#15803d">BETTER</text>
+
+            <!-- tick labels -->
+            <text x="70" y="166" text-anchor="middle" font-size="10" fill="#64748b">-8</text>
+            <text x="113" y="94" text-anchor="middle" font-size="10" fill="#64748b">-4</text>
+            <text x="307" y="94" text-anchor="middle" font-size="10" fill="#64748b">+4</text>
+            <text x="350" y="166" text-anchor="middle" font-size="10" fill="#64748b">+8</text>
+
+            <!-- needle -->
+            <g transform="rotate(${handicapDial.angle.toFixed(1)} 210 195)">
+              <line x1="210" y1="195" x2="210" y2="68" stroke="#0f172a" stroke-width="7" stroke-linecap="round"/>
+              <polygon points="210,55 201,78 219,78" fill="#0f172a"/>
+            </g>
+            <circle cx="210" cy="195" r="13" fill="#0f172a"/>
+            <circle cx="210" cy="195" r="5" fill="#fff"/>
+          </svg>
+        </div>
+
+        <div>
+          <div class="PRintelLabel">Latest round</div>
+          <div class="PRdialStatus">${PR_escapeHtml(handicapDial.status)}</div>
+          <div class="PRdialDiff ${handicapDial.statusClass==="good"?"PRdialGood":(handicapDial.statusClass==="bad"?"PRdialBad":"PRdialNeutral")}">
+            ${handicapDial.delta>=0?"+":""}${handicapDial.delta.toFixed(1)}
+            <span style="font-size:15px;font-weight:800;">strokes</span>
+          </div>
+          <div class="PRdialMeta">
+            Actual gross: <b>${Number.isFinite(handicapDial.actual)?handicapDial.actual.toFixed(0):"—"}</b><br/>
+            Handicap target: <b>${Number.isFinite(handicapDial.target)?handicapDial.target.toFixed(0):"—"}</b>
+            ${Number.isFinite(handicapDial.ch)?` · Course Handicap: <b>${Math.round(handicapDial.ch)}</b>`:""}
+          </div>
+          <div class="PRnote" style="margin-top:8px;">
+            The centre marker is playing exactly to handicap. The needle moves right into green when you beat the target and left into red when you finish above it.
+          </div>
+        </div>
+      </div>
+    </div>
+    ` : ""}
 
     ${scorecardIntel?.ok ? `
     <div class="PRbox PRsec">
