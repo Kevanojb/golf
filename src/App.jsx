@@ -12510,11 +12510,16 @@ const scorecardIntel = (() => {
       return ax - bx;
     });
 
-    const roundsAll = sortRounds(
+    // SINGLE SOURCE OF TRUTH:
+    // use the exact year / recent-games window already selected for this report.
+    // Never silently analyse the player's full history when the report is showing
+    // only (for example) 2026 / Last 3.
+    const __rawScorecardSeries =
       (Array.isArray(__sourcePlayer?.roundSeries) && __sourcePlayer.roundSeries.length)
         ? __sourcePlayer.roundSeries
-        : __sourcePlayer?.series
-    );
+        : (Array.isArray(__sourcePlayer?.series) ? __sourcePlayer.series : []);
+
+    const roundsAll = sortRounds(__filterSeries(__rawScorecardSeries));
 
     if (!roundsAll.length) return { ok:false };
 
@@ -12528,6 +12533,10 @@ const scorecardIntel = (() => {
     };
     const grossOf = r => {
       const x = r?.grossPerHole || r?.grossHoles || r?.holeGross || r?.scoresPerHole || r?.scores;
+      return Array.isArray(x) ? x.slice(0,18).map(Number) : [];
+    };
+    const yardsOf = r => {
+      const x = r?.yardsArr || r?.yardsPerHole || r?.ydsPerHole || r?.yards || r?.holeYards || r?.yardages;
       return Array.isArray(x) ? x.slice(0,18).map(Number) : [];
     };
 
@@ -12570,18 +12579,30 @@ const scorecardIntel = (() => {
     const teeNameOf = r => String(r?.teeName || r?.teeLabel || r?.tee || "Tee");
 
     const analysed = roundsAll.map((r, ri) => {
-      const pars = parsOf(r), sis = siOf(r), gross = grossOf(r);
+      const pars = parsOf(r), sis = siOf(r), gross = grossOf(r), yards = yardsOf(r);
       const ch = calcCH(r);
       const holes = [];
       for (let i=0; i<18; i++) {
-        const p = Number(pars[i]), si = Number(sis[i]), g = Number(gross[i]);
+        const p = Number(pars[i]), si = Number(sis[i]), g = Number(gross[i]), yard = Number(yards[i]);
         if (!Number.isFinite(p) || !Number.isFinite(g) || g <= 0) continue;
         const recv = strokesReceived(ch, si);
         const targetGross = p + recv;
-        const delta = targetGross - g; // positive = better than playing-to-handicap target
+
+        // ONLY definition used by the coaching dashboard:
+        // target - actual. Positive = beat handicap target; negative = lost strokes.
+        const delta = targetGross - g;
+
         holes.push({
-          hole:i+1, par:p, si, gross:g, recv, targetGross, delta,
-          cost:Math.max(0, -delta), gain:Math.max(0, delta)
+          hole:i+1,
+          par:p,
+          si,
+          yard:Number.isFinite(yard) ? yard : NaN,
+          gross:g,
+          recv,
+          targetGross,
+          delta,
+          cost:Math.max(0, g - targetGross),
+          gain:Math.max(0, targetGross - g)
         });
       }
       if (!holes.length) return null;
@@ -12771,123 +12792,114 @@ const playerActionDashboard = (() => {
       : [];
 
     // -------------------------
-    // Build category evidence
-    // from existing report rows
+    // HANDICAP-TARGET CATEGORY EVIDENCE
+    // Rebuilt directly from the SAME holes used by Round vs Handicap.
+    // No Field / Peer / Handicap-band numbers are allowed into coaching advice.
     // -------------------------
-    const allRows = [
-      ...(Array.isArray(byPar) ? byPar : []),
-      ...(Array.isArray(bySI) ? bySI : []),
-      ...(Array.isArray(byYd) ? byYd : [])
-    ];
-
-    const enrich = (r) => {
-      const n = Number(r?.meHoles ?? r?.holes ?? r?.n ?? 0);
-      const playerAvg = Number(r?.playerAvg);
-      const targetAvg = Number(r?.fieldAvg);
-
-      // Same sign convention used everywhere else in the report:
-      // positive = player is doing BETTER than the comparator/target.
-      const delta = PR_goodDelta(scoringMode, playerAvg, targetAvg);
-
-      let confidence = "LOW";
-      if(n >= 24) confidence = "HIGH";
-      else if(n >= 12) confidence = "MEDIUM";
-
-      const dimName = r?.dim === "Yards" ? "Yardage"
-        : (r?.dim === "SI" ? "Stroke Index" : (r?.dim === "Par" ? "Par" : ""));
-      const displayLabel = dimName ? `${dimName}: ${String(r?.label || r?.key || "Area")}` : String(r?.label || r?.key || "Area");
-
-      return {
-        ...r,
-        sample:n,
-        playerAvg,
-        targetAvg,
-        delta,
-        confidence,
-        displayLabel
-      };
+    const yardBand = y => {
+      const n = Number(y);
+      if(!Number.isFinite(n)) return null;
+      if(n < 150) return "<150";
+      if(n <= 200) return "150–200";
+      if(n <= 350) return "201–350";
+      if(n <= 420) return "351–420";
+      return "420+";
+    };
+    const siBand = si => {
+      const n = Number(si);
+      if(!Number.isFinite(n)) return null;
+      if(n <= 6) return "SI 1–6";
+      if(n <= 12) return "SI 7–12";
+      return "SI 13–18";
     };
 
-    const evidenceRows = allRows
-      .map(enrich)
-      .filter(r =>
-        Number.isFinite(r.delta) &&
-        Number.isFinite(r.playerAvg) &&
-        Number.isFinite(r.targetAvg) &&
-        r.sample > 0
-      );
+    const categoryMap = new Map();
 
-    // Small threshold avoids describing statistical noise as a strength/weakness.
+    const addCategory = (type, label, h) => {
+      if(!label || !Number.isFinite(Number(h?.delta))) return;
+      const key = `${type}|${label}`;
+      const rec = categoryMap.get(key) || {
+        type, label, displayLabel:`${type}: ${label}`,
+        sample:0, totalDelta:0, badHoles:0, goodHoles:0,
+        rounds:new Set()
+      };
+      rec.sample += 1;
+      rec.totalDelta += Number(h.delta);
+      if(Number(h.delta) < 0) rec.badHoles += 1;
+      if(Number(h.delta) > 0) rec.goodHoles += 1;
+      rec.rounds.add(Number(h.__roundIndex));
+      categoryMap.set(key, rec);
+    };
+
+    analysed.forEach((rr, roundIndex) => {
+      (rr.holes || []).forEach(h0 => {
+        const h = {...h0, __roundIndex:roundIndex};
+        addCategory("Par", `Par ${h.par}`, h);
+        addCategory("Stroke Index", siBand(h.si), h);
+        const yb = yardBand(h.yard);
+        if(yb) addCategory("Yardage", yb, h);
+      });
+    });
+
+    const evidenceRows = Array.from(categoryMap.values()).map(r => {
+      const delta = r.sample ? r.totalDelta / r.sample : NaN;
+      const roundCount = r.rounds.size;
+      const badRate = r.sample ? r.badHoles / r.sample : 0;
+      let confidence = "LOW";
+      if(r.sample >= 24 && roundCount >= 4) confidence = "HIGH";
+      else if(r.sample >= 12 && roundCount >= 3) confidence = "MEDIUM";
+      return {
+        ...r,
+        rounds:roundCount,
+        delta,
+        badRate,
+        confidence
+      };
+    }).filter(r => Number.isFinite(r.delta));
+
+    // Rank by effect AND evidence, but retain honest per-hole values.
+    const evidenceWeight = r => Math.sqrt(Math.max(1, r.sample)) * Math.max(1, r.rounds);
+
     const goodRows = evidenceRows
       .filter(r => r.delta >= 0.10)
-      .sort((a,b)=>(b.delta * Math.sqrt(Math.max(1,b.sample))) - (a.delta * Math.sqrt(Math.max(1,a.sample))));
+      .sort((a,b)=>(b.delta*evidenceWeight(b))-(a.delta*evidenceWeight(a)));
 
     const badRows = evidenceRows
       .filter(r => r.delta <= -0.10)
-      .sort((a,b)=>(a.delta * Math.sqrt(Math.max(1,a.sample))) - (b.delta * Math.sqrt(Math.max(1,b.sample))));
+      .sort((a,b)=>(a.delta*evidenceWeight(a))-(b.delta*evidenceWeight(b)));
 
-    // Always give the golfer a useful priority without overstating certainty.
-    // Classification:
-    //   CONFIRMED = >=24 holes
-    //   EMERGING  = >=12 holes
-    //   TODAY ONLY / LOW EVIDENCE = <12 holes
-    const classifyWeakness = (r) => {
-      const n = Number(r?.sample || 0);
-      if(n >= 24) return "CONFIRMED";
-      if(n >= 12) return "EMERGING";
+    const classifyWeakness = r => {
+      if(r.sample >= 24 && r.rounds >= 4) return "CONFIRMED";
+      if(r.sample >= 12 && r.rounds >= 3) return "EMERGING";
       return "LOW EVIDENCE";
     };
 
-    const keep = goodRows.slice(0,4);
+    // Avoid four overlapping "strengths" that tell the golfer the same thing.
+    // Prefer one best item from each dimension.
+    const keep = [];
+    ["Par","Stroke Index","Yardage"].forEach(type => {
+      const best = goodRows.find(r => r.type === type);
+      if(best) keep.push(best);
+    });
 
-    // FIX FIRST is ALWAYS the strongest below-target category if one exists.
-    // One priority is clearer than filling the box with overlapping categories.
+    // Fix first = strongest genuine below-handicap category.
     const fix = badRows.length
       ? [{...badRows[0], weaknessClass:classifyWeakness(badRows[0])}]
       : [];
 
-    // WATCH uses the next negative category. If every historical category is
-    // above target, use the latest round's next-costliest hole as a watch item.
-    const watch = badRows.length > 1
-      ? badRows.slice(1,3).map(r => ({...r, weaknessClass:classifyWeakness(r)}))
-      : [];
+    // Watch = next genuinely different category, preferably another dimension.
+    const watch = [];
+    if(badRows.length > 1){
+      const first = fix[0];
+      const diffDim = badRows.find(r => r !== first && r.type !== first?.type);
+      const second = diffDim || badRows.find(r => r !== first);
+      if(second) watch.push({...second, weaknessClass:classifyWeakness(second)});
+    }
 
-    // Biggest opportunity drives the next-round mission.
     const biggest = fix[0] || null;
 
-    // If category history has no negative row, today's costly holes still
-    // provide an honest action point. This is explicitly labelled TODAY ONLY.
-    const todayFix = (!fix.length && topLost.length)
-      ? {
-          displayLabel:`Hole ${topLost[0].hole}`,
-          label:`Hole ${topLost[0].hole}`,
-          delta:-Math.abs(Number(topLost[0].cost || 0)),
-          sample:1,
-          confidence:"LOW",
-          weaknessClass:"TODAY ONLY",
-          todayOnly:true,
-          cost:Number(topLost[0].cost || 0)
-        }
-      : null;
-
-    if(todayFix){
-      fix.push(todayFix);
-    }
-
-    if(!watch.length && topLost.length > 1){
-      watch.push({
-        displayLabel:`Hole ${topLost[1].hole}`,
-        label:`Hole ${topLost[1].hole}`,
-        delta:-Math.abs(Number(topLost[1].cost || 0)),
-        sample:1,
-        confidence:"LOW",
-        weaknessClass:"TODAY ONLY",
-        todayOnly:true,
-        cost:Number(topLost[1].cost || 0)
-      });
-    }
-
-    // Re-evaluate biggest after today's fallback has been added.
+    // Never promote one bad hole into a long-term "Fix First" diagnosis.
+    // Today's hole damage is already shown separately above.
     const actionPriority = fix[0] || null;
 
     // -------------------------
@@ -12920,8 +12932,6 @@ const playerActionDashboard = (() => {
         missionText = "This is your strongest confirmed scoring weakness in the selected window.";
       }else if(actionPriority.weaknessClass === "EMERGING"){
         missionText = "This is your strongest emerging scoring weakness. The pattern is worth acting on, but keep gathering evidence.";
-      }else if(actionPriority.weaknessClass === "TODAY ONLY"){
-        missionText = "This was the clearest scoring leak in this round. Treat it as today's priority rather than a proven long-term weakness.";
       }else{
         missionText = "This is currently your weakest below-target area, but the sample is still small.";
       }
@@ -12933,11 +12943,7 @@ const playerActionDashboard = (() => {
         Math.min(3, perHoleLoss * Math.min(6, Math.max(1, sample/Math.max(1, analysed.length))))
       );
 
-      if(actionPriority.todayOnly){
-        missionMetric = `Next round: avoid losing more than 1 stroke to handicap on ${String(actionPriority.displayLabel || actionPriority.label)} if you play it again, and keep total damage from your three danger holes to 2 strokes or fewer.`;
-      }else{
-        missionMetric = `Next round: keep the total loss in ${String(actionPriority.displayLabel || actionPriority.label)} to 2 strokes or fewer. Moving this area toward target is worth roughly ${roughPerRound.toFixed(1)} strokes per round.`;
-      }
+      missionMetric = `Next round: keep the total loss in ${String(actionPriority.displayLabel || actionPriority.label)} to 2 strokes or fewer. Moving this area toward target is worth roughly ${roughPerRound.toFixed(1)} strokes per round.`;
     }
 
     // -------------------------
@@ -13347,11 +13353,14 @@ const playerActionDashboard = (() => {
           ${playerActionDashboard.topLost.length ? `
             ${playerActionDashboard.topLost.map(h=>`
               <div class="PRexecBar">
-                <div>H${h.hole}</div>
+                <div title="Gross ${h.gross}, target ${h.targetGross}, SI ${h.si}">H${h.hole}</div>
                 <div class="PRexecTrack">
                   <div class="PRexecFillBad" style="width:${Math.min(100,Math.max(12,Number(h.cost||0)*28))}%"></div>
                 </div>
                 <div style="text-align:right;color:#b91c1c;font-weight:900;">-${Number(h.cost||0).toFixed(1)}</div>
+                <div style="grid-column:1 / -1;font-size:9px;color:#64748b;margin-top:-3px;">
+                  Gross ${Number(h.gross).toFixed(0)} · handicap target ${Number(h.targetGross).toFixed(0)} · SI ${Number.isFinite(Number(h.si))?Number(h.si).toFixed(0):"—"}
+                </div>
               </div>
             `).join("")}
           ` : `<div class="PRexecMini" style="margin-top:6px;">No holes finished worse than the playing-to-handicap target.</div>`}
@@ -13424,9 +13433,7 @@ const playerActionDashboard = (() => {
                 <li>
                   <b>${PR_escapeHtml(r.displayLabel || r.label || "Area")}</b>
                   · ${PR_escapeHtml(r.weaknessClass || r.confidence || "LOW EVIDENCE")}
-                  ${r.todayOnly
-                    ? ` · lost ${Math.abs(Number(r.cost || r.delta || 0)).toFixed(1)} today`
-                    : ` · ${Number(r.delta).toFixed(2)}/hole · n=${r.sample}`}
+                   · ${Number(r.delta).toFixed(2)}/hole · n=${r.sample} · ${r.rounds} rounds
                 </li>
               `).join("")}
             </ul>
@@ -13441,9 +13448,7 @@ const playerActionDashboard = (() => {
                 <li>
                   <b>${PR_escapeHtml(r.displayLabel || r.label || "Area")}</b>
                   · <b>${PR_escapeHtml(r.weaknessClass || r.confidence || "LOW EVIDENCE")}</b>
-                  ${r.todayOnly
-                    ? ` · lost ${Math.abs(Number(r.cost || r.delta || 0)).toFixed(1)} stroke${Math.abs(Number(r.cost || r.delta || 0))===1?"":"s"} today`
-                    : ` · ${Number(r.delta).toFixed(2)}/hole vs target · n=${r.sample}`}
+                   · ${Number(r.delta).toFixed(2)}/hole vs target · n=${r.sample} · ${r.rounds} rounds
                 </li>
               `).join("")}
             </ul>
