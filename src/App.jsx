@@ -6881,6 +6881,67 @@ function UX_KeyMoments({ pts, holes }) {
   );
 }
 
+
+// ============================================================
+// SHAREABLE ONLINE PLAYER REPORT — GitHub Pages friendly.
+// The report snapshot lives in the URL hash; no PDF/canvas work.
+// ============================================================
+function PR_utf8ToB64Url(str){
+  const bytes=new TextEncoder().encode(String(str||""));
+  let bin=""; for(let i=0;i<bytes.length;i++) bin+=String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+}
+function PR_b64UrlToUtf8(s){
+  let b64=String(s||"").replace(/-/g,"+").replace(/_/g,"/");
+  while(b64.length%4)b64+="=";
+  const bin=atob(b64), bytes=new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+function PR_readSharePayload(){
+  try{
+    const h=String(window.location.hash||""), p="#player-report=";
+    if(!h.startsWith(p))return null;
+    const obj=JSON.parse(PR_b64UrlToUtf8(h.slice(p.length)));
+    return obj?.v===1 && obj?.html ? obj : null;
+  }catch(e){console.error(e);return null;}
+}
+function PR_SharedPlayerReport(){
+  const p=PR_readSharePayload();
+  if(!p)return null;
+  return <div style={{minHeight:"100vh",background:"#f1f5f9",padding:"18px 10px"}}>
+    <div style={{maxWidth:"920px",margin:"0 auto"}}>
+      <div style={{background:"#0f2747",color:"#fff",borderRadius:"18px",padding:"18px 20px",marginBottom:"12px"}}>
+        <div style={{fontSize:"12px",fontWeight:900,letterSpacing:".08em",opacity:.8}}>DEN GOLF PERFORMANCE</div>
+        <div style={{fontSize:"28px",fontWeight:950,marginTop:"3px"}}>{p.player}</div>
+        <div style={{fontSize:"13px",opacity:.85,marginTop:"3px"}}>{p.season} · Shared performance report</div>
+      </div>
+      <div style={{background:"#fff",borderRadius:"18px",padding:"4px 12px 18px",overflow:"hidden"}}
+           dangerouslySetInnerHTML={{__html:p.html}} />
+      <div style={{textAlign:"center",fontSize:"11px",color:"#64748b",padding:"16px"}}>
+        Scorecard-based analysis: where scoring changed, not an invented diagnosis of the shot that caused it.
+      </div>
+    </div>
+  </div>;
+}
+async function PR_sharePlayerReport(args){
+  const r=PR_generateSeasonReportHTML(args);
+  if(!r?.ok || !(r.htmlFragment||r.html)) throw new Error(r?.error||"Could not generate report.");
+  const payload={v:1,player:String(args.playerName||"Golfer"),season:String(args.yearLabel||"Season"),
+    created:new Date().toISOString(),html:String(r.htmlFragment||r.html)};
+  const encoded=PR_utf8ToB64Url(JSON.stringify(payload));
+  const base=`${window.location.origin}${window.location.pathname}${window.location.search||""}`;
+  const url=`${base}#player-report=${encoded}`;
+  try{
+    if(navigator.share){
+      await navigator.share({title:`${args.playerName} — Golf Performance Report`,url});
+      return {ok:true,url,shared:true};
+    }
+  }catch(e){if(e?.name==="AbortError")return {ok:true,url,cancelled:true};}
+  try{await navigator.clipboard.writeText(url);return {ok:true,url,copied:true};}
+  catch(e){window.prompt("Copy this report link:",url);return {ok:true,url,prompted:true};}
+}
+
 function PlayerProgressView({
   seasonModel,
   scoringMode,
@@ -9260,71 +9321,25 @@ const coachLine = (row) => {
 
                   <button
                     className="btn-primary"
-                    onClick={() => {
-                      try {
-                        const snap = (typeof window !== "undefined" && window.__dslOverviewReport)
-                          ? window.__dslOverviewReport
-                          : null;
-
-                        const lens = String(
-                          snap?.lensMode ||
-                          (typeof localStorage !== "undefined"
-                            ? (localStorage.getItem("dsl_lens") || "pointsField")
-                            : "pointsField")
-                        );
-
-                        const uiCohort = (
-                          typeof window !== "undefined" &&
-                          window.__dslUiState &&
-                          window.__dslUiState.cohortMode
-                        ) ? window.__dslUiState.cohortMode : null;
-
-                        let comparator = String(
-                          snap?.comparatorMode ||
-                          (uiCohort ? (uiCohort === "field" ? "field" : "band") : "") ||
-                          (window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode) ||
-                          "band"
-                        );
-
-                        if (lens === "strokesPar") comparator = "par";
-                        if (comparator !== "par" && comparator !== "field" && comparator !== "band") {
-                          comparator = "band";
-                        }
-
-                        const r = PR_generateAllGolfersReportHTML({
-                          model: seasonModel,
-                          yearLabel: seasonYear,
-                          seasonLimit: seasonLimit,
-                          scoringMode,
-                          lensMode: lens,
-                          comparatorMode: comparator
+                    onClick={async()=>{
+                      try{
+                        const playerName=String(seasonPlayer||"").trim();
+                        if(!playerName){alert("Choose a golfer first.");return;}
+                        const lens=(localStorage.getItem("dsl_lens")||"pointsField");
+                        const uiCohort=window.__dslUiState?.cohortMode||null;
+                        let comparator=uiCohort?(uiCohort==="field"?"field":"band"):
+                          (window.__dslSeasonReportParams?.comparatorMode||"band");
+                        if(lens==="strokesPar")comparator="par";
+                        const result=await PR_sharePlayerReport({
+                          model:seasonModel,playerName,yearLabel:seasonYear,seasonLimit,
+                          scoringMode,lensMode:lens,comparatorMode:comparator
                         });
-
-                        if (!r || !r.ok) {
-                          alert(r?.error || "Could not generate all-golfers PDF.");
-                          return;
-                        }
-
-                        window.__dslSeasonReportParams = {
-                          model: seasonModel,
-                          playerName: "All-Golfers",
-                          yearLabel: seasonYear,
-                          seasonLimit: seasonLimit,
-                          scoringMode,
-                          lensMode: lens,
-                          comparatorMode: comparator
-                        };
-
-                        PR_showInlineSeasonReport(r.htmlFragment || r.html);
-                        setTimeout(() => PR_downloadAllGolfersPDFSegmented(), 180);
-                      } catch (e) {
-                        console.error(e);
-                        alert("Could not generate all-golfers PDF.");
-                      }
+                        if(result?.copied)alert("Report link copied — paste it into WhatsApp, Messages or email.");
+                      }catch(e){console.error(e);alert(`Could not create share link: ${String(e?.message||e||"Unknown error")}`);}
                     }}
-                    title="Download one PDF containing every golfer's full report"
+                    title="Create a read-only online report link for the selected golfer"
                   >
-                    Download All Golfers PDF
+                    Share Player Report
                   </button>
 
                   <button
@@ -9342,9 +9357,6 @@ const coachLine = (row) => {
                     Problem Holes
                   </button>
                 </div>
-              </div>
-              <div className="mt-2 text-xs font-bold text-emerald-700">
-                All Golfers PDF is available from the button above.
               </div>
             <div className="mt-1 break-words leading-tight">
               <span className="text-4xl md:text-5xl font-black tracking-tight text-neutral-900">{firstName}</span>
@@ -12951,8 +12963,49 @@ const playerActionDashboard = (() => {
       }
     }
 
+    // What genuinely separates this golfer's better and poorer rounds?
+    const roundRows=analysed
+      .filter(r=>Number.isFinite(Number(r?.actualGross))&&Number.isFinite(Number(r?.targetGross)))
+      .map(r=>{
+        const hs=Array.isArray(r.holes)?r.holes:[];
+        return {...r,
+          performance:Number(r.targetGross)-Number(r.actualGross),
+          doublesPlus:hs.filter(h=>Number(h?.gross)-Number(h?.par)>=2).length,
+          bogeyPlus:hs.filter(h=>Number(h?.gross)-Number(h?.par)>=1).length,
+          parsOrBetter:hs.filter(h=>Number(h?.gross)-Number(h?.par)<=0).length,
+          birdiesPlus:hs.filter(h=>Number(h?.gross)-Number(h?.par)<=-1).length,
+          top3:hs.map(h=>Math.max(0,Number(h?.cost||0))).sort((a,b)=>b-a).slice(0,3).reduce((s,v)=>s+v,0)
+        };
+      }).sort((a,b)=>b.performance-a.performance);
+
+    let goodBad=null;
+    if(roundRows.length>=4){
+      const n=Math.max(2,Math.ceil(roundRows.length*.3)), good=roundRows.slice(0,n), bad=roundRows.slice(-n);
+      const avg=(a,k)=>a.reduce((s,r)=>s+Number(r[k]||0),0)/Math.max(1,a.length);
+      const metrics=[
+        {key:"doublesPlus",label:"doubles-or-worse",good:avg(good,"doublesPlus"),bad:avg(bad,"doublesPlus"),hb:true},
+        {key:"bogeyPlus",label:"bogeys-or-worse",good:avg(good,"bogeyPlus"),bad:avg(bad,"bogeyPlus"),hb:true},
+        {key:"parsOrBetter",label:"pars-or-better",good:avg(good,"parsOrBetter"),bad:avg(bad,"parsOrBetter"),hb:false},
+        {key:"birdiesPlus",label:"birdies-or-better",good:avg(good,"birdiesPlus"),bad:avg(bad,"birdiesPlus"),hb:false},
+        {key:"top3",label:"damage from 3 costliest holes",good:avg(good,"top3"),bad:avg(bad,"top3"),hb:true}
+      ].map(m=>({...m,separation:m.hb?m.bad-m.good:m.good-m.bad}))
+       .sort((a,b)=>b.separation-a.separation);
+      const d=metrics[0], dbl=metrics.find(m=>m.key==="doublesPlus"), bird=metrics.find(m=>m.key==="birdiesPlus");
+      let headline=d.key==="doublesPlus"?"Doubles are the clearest difference between your good and bad rounds":
+        d.key==="top3"?"A few damaging holes separate your good and bad rounds":
+        d.key==="parsOrBetter"?"Your good rounds come from producing more solid holes":
+        d.key==="birdiesPlus"?"Your good rounds contain meaningfully more birdies":
+        "Damage control is the main separator between good and bad rounds";
+      const explanation=`${d.label}: ${d.good.toFixed(1)} in better rounds versus ${d.bad.toFixed(1)} in poorer rounds.`;
+      const strategy=(dbl&&bird&&dbl.separation>Math.max(.5,bird.separation))
+        ?`Reducing doubles matters more than chasing extra birdies: ${dbl.good.toFixed(1)} doubles+ in better rounds versus ${dbl.bad.toFixed(1)} in poorer rounds.`
+        :`The strongest measurable lever is ${d.label}. Change that pattern rather than trying to improve everything at once.`;
+      goodBad={ok:true,bucketN:n,headline,explanation,strategy,metrics:metrics.slice(0,3)};
+    }
+
     return {
       ok:true,
+      goodBad,
       verdictTitle,
       verdictText,
       topLost,
@@ -13337,6 +13390,22 @@ const playerActionDashboard = (() => {
         </div>
       </div>
 
+      ${playerActionDashboard.goodBad?.ok ? `
+      <div style="padding:0 12px 12px;">
+        <div class="PRexecCard PRexecTarget">
+          <h4>What separates your good rounds from your bad rounds?</h4>
+          <div style="font-size:19px;font-weight:950;color:#0f172a;">${PR_escapeHtml(playerActionDashboard.goodBad.headline)}</div>
+          <div class="PRexecVerdictText" style="margin-top:5px;">${PR_escapeHtml(playerActionDashboard.goodBad.explanation)}</div>
+          <div style="font-size:12px;font-weight:900;margin-top:8px;color:#1d4ed8;">${PR_escapeHtml(playerActionDashboard.goodBad.strategy)}</div>
+          <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px;">
+            ${playerActionDashboard.goodBad.metrics.map(m=>`
+              <div style="border:1px solid #dbeafe;border-radius:10px;padding:8px;background:#fff;">
+                <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:900;">${PR_escapeHtml(m.label)}</div>
+                <div style="font-size:12px;margin-top:4px;">Better <b>${m.good.toFixed(1)}</b><br/>Poorer <b>${m.bad.toFixed(1)}</b></div>
+              </div>`).join("")}
+          </div>
+        </div>
+      </div>` : ""}
       <div class="PRexecGrid4">
         <div class="PRexecCard PRexecGood">
           <h4>Keep doing</h4>
@@ -17668,6 +17737,9 @@ function PlayerInsightsView({
 
 
 function App(props) {
+  const __sharedPlayerReport=(typeof window!=="undefined")?PR_readSharePayload():null;
+  if(__sharedPlayerReport) return <PR_SharedPlayerReport />;
+
         const [view, setView] = useState("home");
 
 const [tenantTick, setTenantTick] = useState(0);
