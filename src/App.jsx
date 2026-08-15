@@ -14171,6 +14171,68 @@ const planKPIs = React.useMemo(() => {
         setScoringMode={setScoringMode}
       />
 
+      <div className="mt-3">
+        <button
+          className="btn-primary w-full"
+          style={{
+            width: "100%",
+            padding: "14px 16px",
+            fontSize: "16px",
+            fontWeight: 900,
+            borderRadius: "14px"
+          }}
+          onClick={() => {
+            try{
+              const lens = (localStorage.getItem("dsl_lens") || "pointsField");
+              const uiCohort = (window.__dslUiState && window.__dslUiState.cohortMode)
+                ? window.__dslUiState.cohortMode
+                : null;
+              const comparator = uiCohort
+                ? (uiCohort === "field" ? "field" : "band")
+                : ((window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode)
+                    ? window.__dslSeasonReportParams.comparatorMode
+                    : "band");
+
+              const r = PR_generateAllGolfersReportHTML({
+                model: seasonModel,
+                yearLabel: seasonYear,
+                seasonLimit: seasonLimit,
+                scoringMode,
+                lensMode: lens,
+                comparatorMode: comparator
+              });
+
+              if(!r?.ok){
+                alert(r?.error || "Could not generate all-golfers PDF.");
+                return;
+              }
+
+              window.__dslSeasonReportParams = {
+                model: seasonModel,
+                playerName: "All-Golfers",
+                yearLabel: seasonYear,
+                seasonLimit: seasonLimit,
+                scoringMode,
+                lensMode: lens,
+                comparatorMode: comparator
+              };
+
+              PR_showInlineSeasonReport(r.htmlFragment);
+              setTimeout(() => PR_downloadSeasonReportPDF(), 150);
+            }catch(e){
+              console.error(e);
+              alert("Could not generate all-golfers PDF.");
+            }
+          }}
+          title="Download one shareable PDF containing every golfer's full report"
+        >
+          Download All Golfers PDF
+        </button>
+        <div style={{fontSize:"11px", color:"#64748b", marginTop:"5px"}}>
+          One PDF containing every golfer's full performance report.
+        </div>
+      </div>
+
       <div className="mt-3 flex gap-2 flex-wrap">
         <button
           className="btn-primary"
@@ -14258,52 +14320,7 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
           Download PDF Report
         </button>
 
-        <button
-          className="btn-secondary"
-          onClick={() => {
-            try{
-              const lens = (localStorage.getItem("dsl_lens") || "pointsField");
-              const uiCohort = (window.__dslUiState && window.__dslUiState.cohortMode) ? window.__dslUiState.cohortMode : null;
-              const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
-                : ((window.__dslSeasonReportParams && window.__dslSeasonReportParams.comparatorMode)
-                    ? window.__dslSeasonReportParams.comparatorMode
-                    : "band");
 
-              const r = PR_generateAllGolfersReportHTML({
-                model: seasonModel,
-                yearLabel: seasonYear,
-                seasonLimit: seasonLimit,
-                scoringMode,
-                lensMode: lens,
-                comparatorMode: comparator
-              });
-
-              if(!r?.ok){
-                alert(r?.error || "Could not generate all-golfers PDF.");
-                return;
-              }
-
-              window.__dslSeasonReportParams = {
-                model: seasonModel,
-                playerName: "All-Golfers",
-                yearLabel: seasonYear,
-                seasonLimit: seasonLimit,
-                scoringMode,
-                lensMode: lens,
-                comparatorMode: comparator
-              };
-
-              PR_showInlineSeasonReport(r.htmlFragment);
-              setTimeout(() => PR_downloadSeasonReportPDF(), 150);
-            }catch(e){
-              console.error(e);
-              alert("Could not generate all-golfers PDF.");
-            }
-          }}
-          title="Download one shareable PDF containing every golfer's full report"
-        >
-          Download All Golfers PDF
-        </button>
         </div>
 
 
