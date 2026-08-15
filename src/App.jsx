@@ -12588,112 +12588,192 @@ const scorecardIntel = (() => {
 // ============================================================
 const visualIntel = (() => {
   try{
-    if(!scorecardIntel?.ok) return {ok:false};
+    const sortRounds = arr => (Array.isArray(arr)?arr.filter(Boolean).slice():[])
+      .sort((a,b)=>{
+        const ax=Number.isFinite(Number(a?.dateMs))?Number(a.dateMs):Number(a?.idx||0);
+        const bx=Number.isFinite(Number(b?.dateMs))?Number(b.dateMs):Number(b?.idx||0);
+        return ax-bx;
+      });
 
-    const latest = scorecardIntel.latest;
-    const analysed = scorecardIntel.analysed || [];
-    const latestLosses = (latest?.losses || []).slice(0,5);
+    // Same report window that the golfer can see.
+    const series = sortRounds(
+      Array.isArray(windowSeries) && windowSeries.length
+        ? windowSeries
+        : __filterSeries(Array.isArray(cur?.series)?cur.series:[])
+    );
+    if(!series.length) return {ok:false};
 
-    const yardBand = y => {
+    const parsOf=r=>{
+      const x=r&&(r.parsPerHole||r.parPerHole||r.parsArr||r.pars||r.parHoles||r.par);
+      return Array.isArray(x)?x.slice(0,18).map(Number):[];
+    };
+    const siOf=r=>{
+      const x=r&&(r.siPerHole||r.strokeIndexPerHole||r.siArr||r.si||r.strokeIndex);
+      return Array.isArray(x)?x.slice(0,18).map(Number):[];
+    };
+    const yardsOf=r=>{
+      const x=r&&(r.yardsPerHole||r.ydsPerHole||r.yardsArr||r.yards||r.holeYards||r.yardages||r.yardage);
+      return Array.isArray(x)?x.slice(0,18).map(Number):[];
+    };
+    const grossOf=r=>{
+      const x=r&&(r.grossPerHole||r.grossHoles||r.holeGross||r.scoresPerHole||r.scores||r.grossArr);
+      return Array.isArray(x)?x.slice(0,18).map(Number):[];
+    };
+
+    const calcCH=r=>{
+      const pars=parsOf(r);
+      const parTotal=pars.reduce((s,v)=>s+(Number.isFinite(v)?v:0),0);
+      const hi=Number.isFinite(Number(r?.startExact))?Number(r.startExact)
+        : Number.isFinite(Number(r?.handicapIndex))?Number(r.handicapIndex)
+        : Number.isFinite(Number(r?.handicap))?Number(r.handicap)
+        : NaN;
+      const slope=Number.isFinite(Number(r?.teeSlope))?Number(r.teeSlope)
+        : Number.isFinite(Number(r?.slope))?Number(r.slope)
+        : Number.isFinite(Number(r?.slopeRating))?Number(r.slopeRating)
+        : NaN;
+      const rating=Number.isFinite(Number(r?.teeRating))?Number(r.teeRating)
+        : Number.isFinite(Number(r?.rating))?Number(r.rating)
+        : Number.isFinite(Number(r?.courseRating))?Number(r.courseRating)
+        : NaN;
+
+      if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0){
+        return WHS_courseHandicap(hi,slope,rating,parTotal);
+      }
+      return Number.isFinite(Number(r?.courseHandicap))?Number(r.courseHandicap)
+        : Number.isFinite(Number(r?.playingHcap))?Number(r.playingHcap)
+        : Number.isFinite(Number(r?.hcap))?Number(r.hcap)
+        : NaN;
+    };
+
+    const recvFor=(ch,si)=>{
+      const h=Math.max(0,Math.round(Number(ch)||0));
+      const s=Number(si);
+      if(!Number.isFinite(s)||s<1||s>18)return 0;
+      return Math.floor(h/18)+((h%18)>0&&s<=(h%18)?1:0);
+    };
+
+    const yardBand=y=>{
       const n=Number(y);
-      if(!Number.isFinite(n)) return null;
-      if(n<150) return "<150";
-      if(n<=200) return "150–200";
-      if(n<=350) return "201–350";
-      if(n<=420) return "351–420";
+      if(!Number.isFinite(n))return null;
+      if(n<150)return "<150";
+      if(n<=200)return "150–200";
+      if(n<=350)return "201–350";
+      if(n<=420)return "351–420";
       return "420+";
     };
-    const siBand = s => {
+    const siBand=s=>{
       const n=Number(s);
-      if(!Number.isFinite(n)) return null;
-      if(n<=6) return "SI 1–6";
-      if(n<=12) return "SI 7–12";
+      if(!Number.isFinite(n))return null;
+      if(n<=6)return "SI 1–6";
+      if(n<=12)return "SI 7–12";
       return "SI 13–18";
     };
 
+    const analysed=series.map((r,ri)=>{
+      const pars=parsOf(r),sis=siOf(r),yards=yardsOf(r),gross=grossOf(r),ch=calcCH(r);
+      const holes=[];
+      for(let i=0;i<18;i++){
+        const par=Number(pars[i]),si=Number(sis[i]),g=Number(gross[i]),yard=Number(yards[i]);
+        if(!Number.isFinite(par)||!Number.isFinite(g)||g<=0)continue;
+        const recv=recvFor(ch,si);
+        const targetGross=par+recv;
+        const delta=targetGross-g;
+        holes.push({
+          ri,hole:i+1,par,si,yard:Number.isFinite(yard)?yard:NaN,
+          gross:g,recv,targetGross,delta,
+          cost:Math.max(0,g-targetGross),
+          gain:Math.max(0,targetGross-g)
+        });
+      }
+      if(!holes.length)return null;
+      const actualGross=holes.reduce((s,h)=>s+h.gross,0);
+      const targetGross=holes.reduce((s,h)=>s+h.targetGross,0);
+      const losses=holes.filter(h=>h.cost>0).sort((a,b)=>(b.cost-a.cost)||(a.hole-b.hole));
+      const totalLoss=losses.reduce((s,h)=>s+h.cost,0);
+      const top3Loss=losses.slice(0,3).reduce((s,h)=>s+h.cost,0);
+      const damageShare=totalLoss?top3Loss/totalLoss:0;
+      const top3Set=new Set(losses.slice(0,3).map(h=>h.hole));
+      const restDelta=holes.filter(h=>!top3Set.has(h.hole)).reduce((s,h)=>s+h.delta,0);
+      return {
+        round:r,ch,holes,actualGross,targetGross,
+        delta:targetGross-actualGross,losses,totalLoss,top3Loss,damageShare,restDelta
+      };
+    }).filter(Boolean);
+
+    if(!analysed.length)return {ok:false};
+    const latest=analysed[analysed.length-1];
+
+    // Historical category evidence, always vs that round's exact handicap target.
     const map=new Map();
-    const add=(type,label,h,roundIndex)=>{
-      if(!label || !Number.isFinite(Number(h?.delta))) return;
+    const add=(type,label,h,ri)=>{
+      if(!label)return;
       const key=`${type}|${label}`;
-      const r=map.get(key)||{
+      const rec=map.get(key)||{
         type,label,displayLabel:`${type}: ${label}`,
         holes:0,roundSet:new Set(),sum:0,bad:0,good:0
       };
-      r.holes++;
-      r.roundSet.add(roundIndex);
-      r.sum+=Number(h.delta);
-      if(Number(h.delta)<0) r.bad++;
-      if(Number(h.delta)>0) r.good++;
-      map.set(key,r);
+      rec.holes++;
+      rec.roundSet.add(ri);
+      rec.sum+=h.delta;
+      if(h.delta<0)rec.bad++;
+      if(h.delta>0)rec.good++;
+      map.set(key,rec);
     };
-
     analysed.forEach((rr,ri)=>{
-      (rr.holes||[]).forEach(h=>{
+      rr.holes.forEach(h=>{
         add("Par",`Par ${h.par}`,h,ri);
         add("Stroke Index",siBand(h.si),h,ri);
         const yb=yardBand(h.yard);
-        if(yb) add("Yardage",yb,h,ri);
+        if(yb)add("Yardage",yb,h,ri);
       });
     });
 
     const categories=Array.from(map.values()).map(r=>{
-      const rounds=r.roundSet.size;
-      const avg=r.holes ? r.sum/r.holes : NaN;
-      let confidence="LOW";
-      if(r.holes>=24 && rounds>=4) confidence="HIGH";
-      else if(r.holes>=12 && rounds>=3) confidence="MEDIUM";
-      return {
-        ...r,rounds,avg,confidence,
-        badRate:r.holes?r.bad/r.holes:0
-      };
+      const rounds=r.roundSet.size, avg=r.holes?r.sum/r.holes:NaN;
+      let confidence="LOW EVIDENCE";
+      if(r.holes>=24&&rounds>=4)confidence="CONFIRMED";
+      else if(r.holes>=12&&rounds>=3)confidence="EMERGING";
+      return {...r,rounds,avg,confidence,badRate:r.holes?r.bad/r.holes:0};
     }).filter(r=>Number.isFinite(r.avg));
 
-    // Avoid repetitive overlap: at most one "keep" item from each dimension.
     const keep=[];
     ["Par","Stroke Index","Yardage"].forEach(type=>{
-      const best=categories
-        .filter(r=>r.type===type && r.avg>0.05)
+      const best=categories.filter(r=>r.type===type&&r.avg>0.05)
         .sort((a,b)=>(b.avg*Math.sqrt(b.holes))-(a.avg*Math.sqrt(a.holes)))[0];
-      if(best) keep.push(best);
+      if(best)keep.push(best);
     });
 
-    const bad=categories
-      .filter(r=>r.avg<-0.05)
+    const bad=categories.filter(r=>r.avg<-0.05)
       .sort((a,b)=>(a.avg*Math.sqrt(a.holes))-(b.avg*Math.sqrt(b.holes)));
-
     const fix=bad[0]||null;
-    const watch=(fix ? bad.find(r=>r.type!==fix.type) : null) || bad[1] || null;
-
-    const confidenceLabel=r=>{
-      if(!r) return "";
-      if(r.confidence==="HIGH") return "CONFIRMED";
-      if(r.confidence==="MEDIUM") return "EMERGING";
-      return "LOW EVIDENCE";
-    };
-
-    const actual=Number(latest?.actualGross);
-    const target=Number(latest?.targetGross);
-    const diff=Number(latest?.delta);
+    const watch=(fix?bad.find(r=>r.type!==fix.type):null)||bad[1]||null;
 
     let verdict="Played to handicap";
     let verdictTone="neutral";
-    if(diff>=2){ verdict="Beat handicap target"; verdictTone="good"; }
-    else if(diff>0){ verdict="Slightly better than handicap"; verdictTone="good"; }
-    else if(diff<=-3 && Number(latest?.damageShare)>=0.65){
-      verdict="Good golf, damaged by a few holes"; verdictTone="bad";
-    } else if(diff<0){ verdict="Below handicap target"; verdictTone="bad"; }
+    if(latest.delta>=2){verdict="Beat handicap target";verdictTone="good";}
+    else if(latest.delta>0){verdict="Slightly better than handicap";verdictTone="good";}
+    else if(latest.delta<=-3&&latest.damageShare>=0.65){verdict="Good golf, damaged by a few holes";verdictTone="bad";}
+    else if(latest.delta<0){verdict="Below handicap target";verdictTone="bad";}
 
-    let nextTarget="Keep the card at or better than handicap target.";
-    if(fix){
-      nextTarget=`Keep total loss in ${fix.displayLabel} to 2 strokes or fewer.`;
-    }else if(latestLosses.length){
-      nextTarget="Keep total damage from your three costliest holes to 2 strokes or fewer.";
+    let story="The round matched your handicap expectation closely.";
+    if(latest.losses.length && latest.damageShare>=0.65){
+      story=`${Math.round(latest.damageShare*100)}% of all strokes lost to handicap target came from the three costliest holes. The rest of the card was ${latest.restDelta>=0?`${latest.restDelta.toFixed(0)} strokes better than target`:`${Math.abs(latest.restDelta).toFixed(0)} strokes below target`}.`;
+    }else if(latest.delta>0){
+      story=`You beat your handicap target by ${latest.delta.toFixed(0)} strokes across the round.`;
+    }else if(latest.delta<0){
+      story=`You finished ${Math.abs(latest.delta).toFixed(0)} strokes above your handicap target, with the damage spread more broadly across the card.`;
     }
 
+    let nextTarget="Keep the whole card at or better than handicap target.";
+    if(fix)nextTarget=`Keep total loss in ${fix.displayLabel} to 2 strokes or fewer next round.`;
+    else if(latest.losses.length)nextTarget="Keep total damage from the three costliest holes to 2 strokes or fewer next round.";
+
     return {
-      ok:true,latest,latestLosses,keep,fix,watch,
-      fixStatus:confidenceLabel(fix),watchStatus:confidenceLabel(watch),
-      actual,target,diff,verdict,verdictTone,nextTarget
+      ok:true,analysed,latest,
+      latestLosses:latest.losses.slice(0,5),
+      keep,fix,watch,
+      actual:latest.actualGross,target:latest.targetGross,diff:latest.delta,
+      verdict,verdictTone,story,nextTarget
     };
   }catch(e){
     try{console.error("Visual performance dashboard failed:",e);}catch(_){}
@@ -12908,15 +12988,20 @@ const visualIntel = (() => {
 
     <div class="PRstory">
       <div class="PRstoryTitle">The story of this round</div>
-      <div class="PRstoryMain">${PR_escapeHtml(scorecardIntel.classification||visualIntel.verdict)}</div>
+      <div class="PRstoryMain">${PR_escapeHtml(visualIntel.verdict)}</div>
       <div class="PRstorySub">
-        ${PR_escapeHtml(scorecardIntel.classWhy||"")}
-        ${Number.isFinite(Number(scorecardIntel.latest?.damageShare)) && visualIntel.latestLosses.length
-          ? ` The three costliest holes accounted for ${Math.round(Number(scorecardIntel.latest.damageShare)*100)}% of all shots lost to handicap target.`
-          : ""}
+        ${PR_escapeHtml(visualIntel.story||"")}
       </div>
     </div>
-    ` : ""}
+    ` : `
+      <div class="PRdashCard" style="margin-top:14px;border-color:#fecaca;background:#fff7f7;">
+        <div class="PRverdict bad">Performance graphics unavailable</div>
+        <div class="PRmuted" style="font-size:11px;margin-top:5px;">
+          The selected round does not currently expose enough gross/par/SI data to build the handicap gauge.
+          This warning is shown deliberately rather than silently hiding the graphics.
+        </div>
+      </div>
+    `}
 
     <div class="PRsub" style="margin-top:12px;">
       Benchmark: <b>${PR_escapeHtml(peerBand||"—")}</b>
@@ -13008,12 +13093,12 @@ const visualIntel = (() => {
 
       <div class="PRintelCard" style="margin-top:10px;">
         <div class="PRintelLabel">Where the round was lost</div>
-        ${(scorecardIntel?.ok && scorecardIntel.latest?.losses?.length) ? `
+        ${(visualIntel?.ok && visualIntel.latest?.losses?.length) ? `
           <div style="font-weight:900;margin-top:4px;">
-            ${Number.isFinite(scorecardIntel.latest.damageShare)?`The three costliest holes produced ${(scorecardIntel.latest.damageShare*100).toFixed(0)}% of all shots lost to handicap target.`:""}
+            ${Number.isFinite(visualIntel.latest.damageShare)?`The three costliest holes produced ${(visualIntel.latest.damageShare*100).toFixed(0)}% of all shots lost to handicap target.`:""}
           </div>
           <div style="margin-top:5px;line-height:1.6;">
-            ${scorecardIntel.latest.losses.slice(0,3).map(h=>`
+            ${visualIntel.latest.losses.slice(0,3).map(h=>`
               <div>
                 <b>Hole ${h.hole}</b> (Par ${h.par}${Number.isFinite(h.si)?`, SI ${h.si}`:""}):
                 cost <span class="PRbad"><b>${Number(h.cost).toFixed(0)}</b></span> stroke${Number(h.cost)===1?"":"s"}
