@@ -12588,7 +12588,80 @@ const postRoundIntel = (() => {
           goodBad={bucketN,metrics,driver,headline};
         }
 
-        return {ok:true,rows,keep,fix,watch,roundSummaries,goodBad};
+
+        // COURSE DNA: recurring hole and round-phase patterns.
+        let courseDNA=null;
+        if(roundSummaries.length){
+          const hm=new Map();
+          roundSummaries.forEach(r=>{
+            (r.holes||[]).forEach(h=>{
+              const x=hm.get(h.hole)||{hole:h.hole,appearances:0,totalDelta:0,totalCost:0,badCount:0,goodCount:0,parCounts:new Map()};
+              x.appearances++; x.totalDelta+=Number(h.delta||0); x.totalCost+=Math.max(0,Number(h.cost||0));
+              if(Number(h.delta)<0)x.badCount++; if(Number(h.delta)>0)x.goodCount++;
+              x.parCounts.set(h.par,(x.parCounts.get(h.par)||0)+1);
+              hm.set(h.hole,x);
+            });
+          });
+          const holeRows=Array.from(hm.values()).map(x=>{
+            const avgDelta=x.totalDelta/x.appearances;
+            const badRate=x.badCount/x.appearances;
+            const goodRate=x.goodCount/x.appearances;
+            const dominantPar=Array.from(x.parCounts.entries()).sort((a,b)=>b[1]-a[1])[0]?.[0]??NaN;
+            return {...x,avgDelta,badRate,goodRate,dominantPar};
+          }).filter(x=>x.appearances>=2);
+
+          const nemesis=holeRows.filter(x=>x.avgDelta<0&&(x.appearances>=3||(x.appearances>=2&&x.badRate===1)))
+            .sort((a,b)=>(Math.abs(b.avgDelta)*b.badRate*Math.sqrt(b.appearances))-(Math.abs(a.avgDelta)*a.badRate*Math.sqrt(a.appearances))).slice(0,3);
+          const strongholds=holeRows.filter(x=>x.avgDelta>0&&(x.appearances>=3||(x.appearances>=2&&x.goodRate===1)))
+            .sort((a,b)=>(b.avgDelta*b.goodRate*Math.sqrt(b.appearances))-(a.avgDelta*a.goodRate*Math.sqrt(a.appearances))).slice(0,3);
+
+          const defs=[
+            {key:"start",label:"Holes 1–3",from:1,to:3},
+            {key:"early",label:"Holes 4–6",from:4,to:6},
+            {key:"middle",label:"Holes 7–12",from:7,to:12},
+            {key:"late",label:"Holes 13–15",from:13,to:15},
+            {key:"finish",label:"Holes 16–18",from:16,to:18}
+          ];
+          const phases=defs.map(p=>{
+            let total=0,rounds=0,badRounds=0,holesN=0;
+            roundSummaries.forEach(r=>{
+              const hs=(r.holes||[]).filter(h=>h.hole>=p.from&&h.hole<=p.to);
+              if(!hs.length)return;
+              const d=hs.reduce((s,h)=>s+Number(h.delta||0),0);
+              total+=d; rounds++; holesN+=hs.length; if(d<0)badRounds++;
+            });
+            return {...p,rounds,holes:holesN,avgPerRound:rounds?total/rounds:NaN,badRoundRate:rounds?badRounds/rounds:0};
+          }).filter(p=>p.rounds);
+
+          const startPhase=phases.find(p=>p.key==="start")||null;
+          let startPattern=null;
+          if(startPhase&&startPhase.rounds>=3){
+            if(startPhase.avgPerRound<=-0.75||startPhase.badRoundRate>=0.6){
+              startPattern={status:"PROBLEM",headline:"You repeatedly start rounds below handicap target",detail:`Holes 1–3 average ${startPhase.avgPerRound.toFixed(1)} strokes per round versus target and are below target in ${Math.round(startPhase.badRoundRate*100)}% of rounds.`};
+            }else if(startPhase.avgPerRound>=0.75){
+              startPattern={status:"STRENGTH",headline:"You generally start rounds strongly",detail:`Holes 1–3 average +${startPhase.avgPerRound.toFixed(1)} strokes per round versus target.`};
+            }
+          }
+
+          const hole1=holeRows.find(x=>x.hole===1)||null;
+          let hole1Pattern=null;
+          if(hole1&&hole1.appearances>=3&&hole1.badRate>=0.6&&hole1.avgDelta<0){
+            hole1Pattern={headline:"Hole 1 is a recurring problem",detail:`Below handicap target in ${hole1.badCount}/${hole1.appearances} rounds, averaging ${Math.abs(hole1.avgDelta).toFixed(2)} strokes lost per appearance and ${hole1.totalCost.toFixed(0)} strokes lost in total.`};
+          }
+
+          let specificityInsight=null;
+          if(nemesis.length){
+            const h=nemesis[0];
+            const parRow=rows.find(r=>r.displayLabel===`Par: Par ${h.dominantPar}`);
+            if(parRow&&Number.isFinite(parRow.avg)&&parRow.avg>0.05){
+              specificityInsight={headline:`Hole ${h.hole} looks like a specific-hole problem, not a Par ${h.dominantPar} problem`,detail:`Hole ${h.hole} averages ${Math.abs(h.avgDelta).toFixed(2)} strokes below target, while Par ${h.dominantPar}s overall are +${parRow.avg.toFixed(2)} strokes/hole versus target.`};
+            }
+          }
+
+          courseDNA={holeRows,nemesis,strongholds,phases,startPhase,startPattern,hole1Pattern,specificityInsight};
+        }
+
+        return {ok:true,rows,keep,fix,watch,roundSummaries,goodBad,courseDNA};
       }catch(e){
         try{console.error("Exact category history failed:",e);}catch(_){}
         return {ok:false,rows:[],keep:[],fix:null,watch:null};
@@ -12899,11 +12972,19 @@ const scorecardIntel = (() => {
     .PRgbHead{font-size:9px;font-weight:950;color:#64748b;text-transform:uppercase}.PRgbLabel{font-size:10px;font-weight:900}
     .PRgbBar{height:9px;background:#e2e8f0;border-radius:999px;overflow:hidden}.PRgbGood{height:100%;background:#16a34a}.PRgbBad{height:100%;background:#dc2626}
     .PRgbVal{font-size:9px;color:#475569;margin-top:2px}
+    .PRdnaGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:12px}
+    .PRdnaCard{border:1px solid #e2e8f0;border-radius:14px;padding:11px;background:#fff}
+    .PRdnaCard.bad{background:#fff7f7;border-color:#fecaca}.PRdnaCard.good{background:#f0fdf4;border-color:#bbf7d0}.PRdnaCard.info{background:#f8fbff;border-color:#bfdbfe}
+    .PRdnaK{font-size:9px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;color:#64748b}
+    .PRdnaV{font-size:15px;font-weight:950;margin-top:4px}.PRdnaS{font-size:10px;color:#64748b;line-height:1.45;margin-top:4px}
+    .PRphaseBars{margin-top:10px}.PRphaseRow{display:grid;grid-template-columns:85px 1fr 58px;gap:8px;align-items:center;margin-top:7px}
+    .PRphaseTrack{height:9px;background:#e2e8f0;border-radius:999px;overflow:hidden}
+    .PRphaseFillGood{height:100%;background:#16a34a}.PRphaseFillBad{height:100%;background:#dc2626}
     .PRscoreGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
     .PRscoreCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
     .PRscoreBig{font-size:20px;font-weight:950;margin-top:3px}
     .PRconf{display:inline-block;border:1px solid #cbd5e1;border-radius:999px;padding:2px 7px;font-size:10px;font-weight:950}
-    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples,.PRlatestGrid,.PRgeneralGrid{grid-template-columns:1fr}.PRcostAudit{padding-left:0}.PRholeStrip{grid-template-columns:repeat(9,minmax(0,1fr))}}
+    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples,.PRlatestGrid,.PRgeneralGrid{grid-template-columns:1fr}.PRcostAudit{padding-left:0}.PRholeStrip{grid-template-columns:repeat(9,minmax(0,1fr))}.PRdnaGrid{grid-template-columns:1fr}}
   </style>
 
   <div class="PRr">
@@ -13142,9 +13223,95 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
           `).join("")}
         </div>
       </div>
+
     </div>
   </div>
 </div>
+
+${postRoundIntel.exactCategories?.courseDNA ? (() => {
+  const dna=postRoundIntel.exactCategories.courseDNA;
+  const maxPhase=Math.max(1,...(dna.phases||[]).map(p=>Math.abs(Number(p.avgPerRound||0))));
+  return `
+  <div class="PRvizSection">
+    <div class="PRvizTitle">Course DNA — Recurring Patterns</div>
+    <div class="PRvizSub">Repeated tendencies that may not be obvious from a single scorecard.</div>
+
+    <div class="PRdnaGrid">
+      <div class="PRdnaCard bad">
+        <div class="PRdnaK">Nemesis hole</div>
+        ${dna.nemesis?.length ? `
+          <div class="PRdnaV">Hole ${dna.nemesis[0].hole}</div>
+          <div class="PRdnaS">Below target in ${dna.nemesis[0].badCount}/${dna.nemesis[0].appearances} rounds · ${Math.abs(dna.nemesis[0].avgDelta).toFixed(2)} strokes lost/appearance · ${dna.nemesis[0].totalCost.toFixed(0)} total strokes lost.</div>
+        ` : `<div class="PRdnaS">No repeated problem hole has enough evidence yet.</div>`}
+      </div>
+
+      <div class="PRdnaCard good">
+        <div class="PRdnaK">Stronghold hole</div>
+        ${dna.strongholds?.length ? `
+          <div class="PRdnaV">Hole ${dna.strongholds[0].hole}</div>
+          <div class="PRdnaS">Beats target in ${dna.strongholds[0].goodCount}/${dna.strongholds[0].appearances} rounds · +${dna.strongholds[0].avgDelta.toFixed(2)} strokes/appearance.</div>
+        ` : `<div class="PRdnaS">No repeated stronghold has enough evidence yet.</div>`}
+      </div>
+
+      <div class="PRdnaCard info">
+        <div class="PRdnaK">Starting pattern</div>
+        ${dna.startPattern ? `
+          <div class="PRdnaV">${PR_escapeHtml(dna.startPattern.headline)}</div>
+          <div class="PRdnaS">${PR_escapeHtml(dna.startPattern.detail)}</div>
+        ` : dna.startPhase ? `
+          <div class="PRdnaV">Starts are broadly neutral</div>
+          <div class="PRdnaS">Holes 1–3 average ${dna.startPhase.avgPerRound>=0?"+":""}${dna.startPhase.avgPerRound.toFixed(1)} strokes/round versus target.</div>
+        ` : `<div class="PRdnaS">Not enough rounds to classify starts.</div>`}
+      </div>
+    </div>
+
+    ${dna.hole1Pattern ? `
+      <div class="PRdnaCard bad" style="margin-top:10px;">
+        <div class="PRdnaK">Hole 1 alert</div>
+        <div class="PRdnaV">${PR_escapeHtml(dna.hole1Pattern.headline)}</div>
+        <div class="PRdnaS">${PR_escapeHtml(dna.hole1Pattern.detail)}</div>
+      </div>
+    ` : ""}
+
+    ${dna.specificityInsight ? `
+      <div class="PRdnaCard info" style="margin-top:10px;">
+        <div class="PRdnaK">What the pattern means</div>
+        <div class="PRdnaV">${PR_escapeHtml(dna.specificityInsight.headline)}</div>
+        <div class="PRdnaS">${PR_escapeHtml(dna.specificityInsight.detail)}</div>
+      </div>
+    ` : ""}
+
+    <div class="PRgeneralGrid">
+      <div class="PRchartBox">
+        <div class="PRvizTitle" style="font-size:12px;">Round phase pattern</div>
+        <div class="PRvizSub">Average strokes per round versus target by section of the card.</div>
+        <div class="PRphaseBars">
+          ${(dna.phases||[]).map(p=>{
+            const v=Number(p.avgPerRound||0);
+            const pct=Math.max(6,Math.min(100,Math.abs(v)/maxPhase*100));
+            return `<div class="PRphaseRow">
+              <div style="font-size:10px;font-weight:900;">${PR_escapeHtml(p.label)}</div>
+              <div class="PRphaseTrack"><div class="${v>=0?"PRphaseFillGood":"PRphaseFillBad"}" style="width:${pct}%"></div></div>
+              <div style="font-size:10px;font-weight:950;text-align:right;color:${v>=0?"#15803d":"#b91c1c"};">${v>=0?"+":""}${v.toFixed(1)}</div>
+            </div>`;
+          }).join("")}
+        </div>
+      </div>
+
+      <div class="PRchartBox">
+        <div class="PRvizTitle" style="font-size:12px;">Recurring hole ranking</div>
+        <div class="PRvizSub">Worst repeated hole numbers across the selected rounds.</div>
+        ${(dna.nemesis||[]).length ? (dna.nemesis||[]).map((h,i)=>`
+          <div style="border-bottom:1px solid #e2e8f0;padding:7px 0;">
+            <div style="display:flex;justify-content:space-between;gap:8px;"><b style="font-size:11px;">${i+1}. Hole ${h.hole}</b><span style="font-size:11px;font-weight:950;color:#b91c1c;">${h.avgDelta.toFixed(2)}/round</span></div>
+            <div class="PRdnaS">${Math.round(h.badRate*100)}% below target · ${h.appearances} appearances · ${h.totalCost.toFixed(0)} strokes lost</div>
+          </div>
+        `).join("") : `<div class="PRdnaS" style="margin-top:8px;">No recurring problem hole has enough evidence yet.</div>`}
+      </div>
+    </div>
+  </div>
+`;
+})() : ""}
 ` : ""}`;
       })()}
     ` : `
