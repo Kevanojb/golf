@@ -12474,6 +12474,8 @@ const postRoundIntel = (() => {
           map.set(key,x);
         };
 
+        const roundSummaries=[];
+
         allRounds.forEach((r,ri)=>{
           const ps=arrPars(r),sis=arrSI(r),ys=arrYards(r),gs=arrGross(r);
           const pt=ps.reduce((s,v)=>s+(Number.isFinite(Number(v))?Number(v):0),0);
@@ -12495,13 +12497,50 @@ const postRoundIntel = (() => {
           };
 
           const n=Math.min(18,Math.max(ps.length,sis.length,ys.length,gs.length));
+          const roundHoles=[];
           for(let i=0;i<n;i++){
             const par=Number(ps[i]),si=Number(sis[i]),y=Number(ys[i]),g=Number(gs[i]);
             if(!Number.isFinite(par)||!Number.isFinite(g)||g<=0)continue;
-            const d=(par+rec(si))-g; // + better than handicap
+            const strokes=rec(si);
+            const target=par+strokes;
+            const d=target-g;
+            const cost=Math.max(0,g-target);
+
+            roundHoles.push({
+              hole:i+1,par,si,yard:Number.isFinite(y)?y:NaN,
+              gross:g,strokes,target,delta:d,cost
+            });
+
             add("Par",`Par ${par}`,d,ri);
             add("Stroke Index",sBand(si),d,ri);
             add("Yardage",yBand(y),d,ri);
+          }
+
+          if(roundHoles.length){
+            const actual=roundHoles.reduce((s,h)=>s+h.gross,0);
+            const target=roundHoles.reduce((s,h)=>s+h.target,0);
+            const delta=target-actual;
+            const losses=roundHoles.filter(h=>h.cost>0).sort((a,b)=>b.cost-a.cost);
+            const top3Loss=losses.slice(0,3).reduce((s,h)=>s+h.cost,0);
+            const doublesPlus=roundHoles.filter(h=>(h.gross-h.par)>=2).length;
+            const bogeyPlus=roundHoles.filter(h=>(h.gross-h.par)>=1).length;
+            const parsOrBetter=roundHoles.filter(h=>(h.gross-h.par)<=0).length;
+            const birdiesPlus=roundHoles.filter(h=>(h.gross-h.par)<=-1).length;
+
+            const dateRaw=r?.date||r?.roundDate||r?.playedAt||r?.played_on||"";
+            const dateObj=new Date(dateRaw);
+            const dateLabel=dateRaw
+              ? (isNaN(dateObj.getTime())?String(dateRaw):dateObj.toLocaleDateString(undefined,{day:"2-digit",month:"short"}))
+              : `R${ri+1}`;
+
+            roundSummaries.push({
+              ri,dateLabel,
+              course:String(r?.courseName||r?.course||""),
+              tee:String(r?.teeName||r?.teeLabel||r?.tee||""),
+              ch,actual,target,delta,top3Loss,
+              doublesPlus,bogeyPlus,parsOrBetter,birdiesPlus,
+              holes:roundHoles
+            });
           }
         });
 
@@ -12523,7 +12562,33 @@ const postRoundIntel = (() => {
           .sort((a,b)=>(a.avg*Math.sqrt(a.n))-(b.avg*Math.sqrt(b.n)));
         const fix=bad[0]||null;
         const watch=(fix?bad.find(x=>x.type!==fix.type):null)||bad[1]||null;
-        return {ok:true,rows,keep,fix,watch};
+        let goodBad=null;
+        if(roundSummaries.length>=4){
+          const sorted=roundSummaries.slice().sort((a,b)=>b.delta-a.delta);
+          const bucketN=Math.max(2,Math.ceil(sorted.length*0.30));
+          const good=sorted.slice(0,bucketN);
+          const badR=sorted.slice(-bucketN);
+          const avg=(arr,key)=>arr.reduce((s,r)=>s+Number(r[key]||0),0)/Math.max(1,arr.length);
+
+          const metrics=[
+            {key:"doublesPlus",label:"Doubles+",good:avg(good,"doublesPlus"),bad:avg(badR,"doublesPlus"),higherBad:true},
+            {key:"parsOrBetter",label:"Pars+",good:avg(good,"parsOrBetter"),bad:avg(badR,"parsOrBetter"),higherBad:false},
+            {key:"birdiesPlus",label:"Birdies+",good:avg(good,"birdiesPlus"),bad:avg(badR,"birdiesPlus"),higherBad:false},
+            {key:"top3Loss",label:"Top-3 damage",good:avg(good,"top3Loss"),bad:avg(badR,"top3Loss"),higherBad:true}
+          ].map(m=>({...m,separation:m.higherBad?(m.bad-m.good):(m.good-m.bad)}))
+           .sort((a,b)=>b.separation-a.separation);
+
+          const driver=metrics[0];
+          let headline="Damage control separates your good and poor rounds";
+          if(driver.key==="doublesPlus") headline="Doubles are the clearest separator";
+          else if(driver.key==="parsOrBetter") headline="Your better rounds contain far more solid holes";
+          else if(driver.key==="birdiesPlus") headline="Your better rounds genuinely contain more birdies";
+          else if(driver.key==="top3Loss") headline="A few blow-up holes separate good and poor rounds";
+
+          goodBad={bucketN,metrics,driver,headline};
+        }
+
+        return {ok:true,rows,keep,fix,watch,roundSummaries,goodBad};
       }catch(e){
         try{console.error("Exact category history failed:",e);}catch(_){}
         return {ok:false,rows:[],keep:[],fix:null,watch:null};
@@ -12812,11 +12877,33 @@ const scorecardIntel = (() => {
     .PRstory{margin-top:14px;border-radius:18px;padding:14px 16px;background:#0f172a;color:#fff}
     .PRstoryK{font-size:10px;font-weight:950;letter-spacing:.09em;text-transform:uppercase;color:#94a3b8}
     .PRstoryV{font-size:18px;font-weight:950;margin-top:4px}.PRstoryS{font-size:11px;color:#cbd5e1;line-height:1.5;margin-top:5px}
+    .PRvizSection{margin-top:14px;background:#fff;border:1px solid #dce5ef;border-radius:20px;padding:15px;box-shadow:0 8px 24px rgba(15,23,42,.05)}
+    .PRvizTitle{font-size:15px;font-weight:950;color:#0f172a}
+    .PRvizSub{font-size:10px;color:#64748b;margin-top:2px}
+    .PRholeStrip{display:grid;grid-template-columns:repeat(18,minmax(0,1fr));gap:4px;margin-top:10px}
+    .PRholeTile{border-radius:8px;padding:7px 1px;text-align:center;border:1px solid rgba(15,23,42,.06)}
+    .PRholeN{font-size:9px;font-weight:950}.PRholeD{font-size:10px;font-weight:950;margin-top:2px}
+    .PRtileGreat{background:#dcfce7;color:#166534}.PRtileGood{background:#ecfdf5;color:#15803d}
+    .PRtileEven{background:#f1f5f9;color:#475569}.PRtileBad{background:#ffedd5;color:#c2410c}.PRtileVeryBad{background:#fee2e2;color:#991b1b}
+    .PRlatestGrid{display:grid;grid-template-columns:1.3fr .7fr;gap:12px;margin-top:12px}
+    .PRchartBox{border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#fbfdff}
+    .PRchartSvg{display:block;width:100%;height:auto}
+    .PRdamageWrap{display:flex;align-items:center;gap:14px}
+    .PRdonutText{font-size:11px;color:#475569;line-height:1.5}
+    .PRgeneralGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+    .PRheat{overflow-x:auto;margin-top:10px}
+    .PRheatGrid{display:grid;grid-template-columns:72px repeat(18,22px);gap:3px;align-items:center;min-width:520px}
+    .PRheatHead{font-size:8px;text-align:center;color:#64748b;font-weight:900}.PRheatDate{font-size:9px;color:#475569;font-weight:800;white-space:nowrap}
+    .PRheatCell{width:22px;height:22px;border-radius:5px;border:1px solid rgba(15,23,42,.05)}
+    .PRgbGrid{display:grid;grid-template-columns:120px 1fr 1fr;gap:5px 8px;align-items:center;margin-top:9px}
+    .PRgbHead{font-size:9px;font-weight:950;color:#64748b;text-transform:uppercase}.PRgbLabel{font-size:10px;font-weight:900}
+    .PRgbBar{height:9px;background:#e2e8f0;border-radius:999px;overflow:hidden}.PRgbGood{height:100%;background:#16a34a}.PRgbBad{height:100%;background:#dc2626}
+    .PRgbVal{font-size:9px;color:#475569;margin-top:2px}
     .PRscoreGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
     .PRscoreCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
     .PRscoreBig{font-size:20px;font-weight:950;margin-top:3px}
     .PRconf{display:inline-block;border:1px solid #cbd5e1;border-radius:999px;padding:2px 7px;font-size:10px;font-weight:950}
-    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples{grid-template-columns:1fr}.PRcostAudit{padding-left:0}}
+    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples,.PRlatestGrid,.PRgeneralGrid{grid-template-columns:1fr}.PRcostAudit{padding-left:0}.PRholeStrip{grid-template-columns:repeat(9,minmax(0,1fr))}}
   </style>
 
   <div class="PRr">
@@ -12894,7 +12981,171 @@ const scorecardIntel = (() => {
           <div class="PRact target"><div class="PRactK">Next-round target</div><div class="PRactV">${PR_escapeHtml(next)}</div><div class="PRactS">One measurable scoring job.</div></div>
         </div>
 
-        <div class="PRstory"><div class="PRstoryK">The story of this round</div><div class="PRstoryV">${PR_escapeHtml(verdict)}</div><div class="PRstoryS">${PR_escapeHtml(story)}</div></div>`;
+        
+<div class="PRstory"><div class="PRstoryK">The story of this round</div><div class="PRstoryV">${PR_escapeHtml(verdict)}</div><div class="PRstoryS">${PR_escapeHtml(story)}</div></div>
+
+<div class="PRvizSection">
+  <div class="PRvizTitle">Latest Round Pattern</div>
+  <div class="PRvizSub">Every hole versus its exact playing-to-handicap gross target.</div>
+
+  <div class="PRholeStrip">
+    ${eh.holes.map(h=>{
+      const cls=h.delta>=2?"PRtileGreat":h.delta>=1?"PRtileGood":h.delta===0?"PRtileEven":h.delta===-1?"PRtileBad":"PRtileVeryBad";
+      const txt=h.delta>0?`+${h.delta}`:`${h.delta}`;
+      return `<div class="PRholeTile ${cls}" title="Hole ${h.hole}: gross ${h.gross}, target ${h.target}">
+        <div class="PRholeN">${h.hole}</div><div class="PRholeD">${txt}</div>
+      </div>`;
+    }).join("")}
+  </div>
+
+  <div class="PRlatestGrid">
+    <div class="PRchartBox">
+      <div class="PRvizTitle" style="font-size:12px;">Momentum through the round</div>
+      <div class="PRvizSub">Cumulative strokes versus handicap target. Above zero = ahead of target.</div>
+      ${(() => {
+        const vals=[0]; let c=0;
+        eh.holes.forEach(h=>{c+=Number(h.delta||0);vals.push(c);});
+        const min=Math.min(-1,...vals),max=Math.max(1,...vals);
+        const W=620,H=230,L=38,R=14,T=18,B=28;
+        const x=i=>L+(i/(vals.length-1))*(W-L-R);
+        const y=v=>T+((max-v)/(max-min))*(H-T-B);
+        const z=y(0);
+        const pts=vals.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+        return `<svg class="PRchartSvg" viewBox="0 0 ${W} ${H}">
+          <line x1="${L}" y1="${z}" x2="${W-R}" y2="${z}" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <polyline points="${pts}" fill="none" stroke="#0f2747" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
+          ${vals.map((v,i)=>`<circle cx="${x(i)}" cy="${y(v)}" r="${i===vals.length-1?5:3}" fill="${v>=0?"#16a34a":"#dc2626"}"/>`).join("")}
+          ${[1,3,6,9,12,15,18].filter(h=>h<vals.length).map(h=>`<text x="${x(h)}" y="${H-8}" text-anchor="middle" font-size="9" fill="#64748b">${h}</text>`).join("")}
+          <text x="${L}" y="${Math.max(10,z-5)}" font-size="9" fill="#64748b">Handicap line</text>
+        </svg>`;
+      })()}
+    </div>
+
+    <div class="PRchartBox">
+      <div class="PRvizTitle" style="font-size:12px;">Damage concentration</div>
+      <div class="PRvizSub">Share of all lost strokes caused by the three costliest holes.</div>
+      <div class="PRdamageWrap" style="margin-top:10px;">
+        ${(() => {
+          const pct=Math.max(0,Math.min(100,Math.round((eh.damageShare||0)*100)));
+          const r=52,circ=2*Math.PI*r,dash=circ*pct/100;
+          return `<svg width="130" height="130" viewBox="0 0 130 130">
+            <circle cx="65" cy="65" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="15"/>
+            <circle cx="65" cy="65" r="${r}" fill="none" stroke="#dc2626" stroke-width="15"
+              stroke-dasharray="${dash} ${circ-dash}" stroke-linecap="round" transform="rotate(-90 65 65)"/>
+            <text x="65" y="61" text-anchor="middle" font-size="25" font-weight="950" fill="#0f172a">${pct}%</text>
+            <text x="65" y="79" text-anchor="middle" font-size="9" font-weight="800" fill="#64748b">TOP 3 HOLES</text>
+          </svg>`;
+        })()}
+        <div class="PRdonutText">
+          <b>${eh.top3Loss.toFixed(0)} strokes</b> lost on the three costliest holes.<br/>
+          <b>${Math.max(0,eh.totalLoss-eh.top3Loss).toFixed(0)} strokes</b> lost across the other holes.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
+<div class="PRvizSection">
+  <div class="PRvizTitle">Your Game — Pattern & Trend</div>
+  <div class="PRvizSub">Longer-term scoring shape using the same exact handicap target on every round.</div>
+
+  <div class="PRgeneralGrid">
+    <div class="PRchartBox">
+      <div class="PRvizTitle" style="font-size:12px;">Form trend — recent rounds</div>
+      <div class="PRvizSub">Green dots beat handicap target; red dots missed it.</div>
+      ${(() => {
+        const rs=postRoundIntel.exactCategories.roundSummaries.slice(-10);
+        const vals=rs.map(r=>Number(r.delta||0));
+        const min=Math.min(-2,...vals),max=Math.max(2,...vals);
+        const W=620,H=230,L=38,R=14,T=18,B=34;
+        const x=i=>L+(rs.length===1?0.5:(i/(rs.length-1)))*(W-L-R);
+        const y=v=>T+((max-v)/(max-min))*(H-T-B);
+        const z=y(0);
+        const pts=vals.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+        return `<svg class="PRchartSvg" viewBox="0 0 ${W} ${H}">
+          <line x1="${L}" y1="${z}" x2="${W-R}" y2="${z}" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 4"/>
+          <polyline points="${pts}" fill="none" stroke="#0f2747" stroke-width="4" stroke-linejoin="round"/>
+          ${rs.map((r,i)=>`<circle cx="${x(i)}" cy="${y(vals[i])}" r="5" fill="${vals[i]>=0?"#16a34a":"#dc2626"}"/>
+            <text x="${x(i)}" y="${H-10}" text-anchor="middle" font-size="8" fill="#64748b">${PR_escapeHtml(r.dateLabel)}</text>`).join("")}
+        </svg>`;
+      })()}
+    </div>
+
+    <div class="PRchartBox">
+      <div class="PRvizTitle" style="font-size:12px;">Game shape radar</div>
+      <div class="PRvizSub">50 = handicap target. Further out = stronger than target.</div>
+      ${(() => {
+        const rows=postRoundIntel.exactCategories.rows||[];
+        const val=label=>rows.find(r=>r.displayLabel===label)?.avg;
+        const combine=(a,b)=>{
+          const xs=[a,b].map(Number).filter(Number.isFinite);
+          return xs.length?xs.reduce((s,v)=>s+v,0)/xs.length:NaN;
+        };
+        const axes=[
+          ["Par 3",val("Par: Par 3")],
+          ["Par 4",val("Par: Par 4")],
+          ["Par 5",val("Par: Par 5")],
+          ["<200",combine(val("Yardage: <150"),val("Yardage: 150–200"))],
+          ["201–350",val("Yardage: 201–350")],
+          ["351+",combine(val("Yardage: 351–420"),val("Yardage: 420+"))],
+          ["SI 1–6",val("Stroke Index: SI 1–6")],
+          ["SI 13–18",val("Stroke Index: SI 13–18")]
+        ];
+        const N=axes.length,cx=150,cy=140,maxR=104;
+        const p=(i,r)=>{const a=-Math.PI/2+i*2*Math.PI/N;return [cx+Math.cos(a)*r,cy+Math.sin(a)*r];};
+        const score=v=>Number.isFinite(Number(v))?Math.max(12,Math.min(92,50+Number(v)*45)):50;
+        const poly=axes.map(([l,v],i)=>p(i,maxR*score(v)/100).join(",")).join(" ");
+        return `<svg class="PRchartSvg" viewBox="0 0 300 290">
+          ${[25,50,75,100].map(q=>`<polygon points="${axes.map((_,i)=>p(i,maxR*q/100).join(",")).join(" ")}" fill="none" stroke="${q===50?"#94a3b8":"#e2e8f0"}" stroke-width="${q===50?1.5:1}"/>`).join("")}
+          ${axes.map((_,i)=>{const [x2,y2]=p(i,maxR);return `<line x1="${cx}" y1="${cy}" x2="${x2}" y2="${y2}" stroke="#e2e8f0"/>`;}).join("")}
+          <polygon points="${poly}" fill="rgba(15,106,80,.18)" stroke="#0f6a50" stroke-width="3"/>
+          ${axes.map(([label],i)=>{const [lx,ly]=p(i,maxR+20);return `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="8.5" font-weight="800" fill="#475569">${PR_escapeHtml(label)}</text>`;}).join("")}
+          <text x="${cx}" y="${cy+3}" text-anchor="middle" font-size="9" font-weight="900" fill="#64748b">50 = target</text>
+        </svg>`;
+      })()}
+    </div>
+  </div>
+
+  <div class="PRgeneralGrid">
+    <div class="PRchartBox">
+      <div class="PRvizTitle" style="font-size:12px;">Good rounds vs poor rounds</div>
+      <div class="PRvizSub">${postRoundIntel.exactCategories.goodBad ? PR_escapeHtml(postRoundIntel.exactCategories.goodBad.headline) : "Need at least four rounds for this comparison."}</div>
+      ${postRoundIntel.exactCategories.goodBad ? (() => {
+        const ms=postRoundIntel.exactCategories.goodBad.metrics;
+        const maxV=Math.max(1,...ms.flatMap(m=>[m.good,m.bad]));
+        return `<div class="PRgbGrid">
+          <div></div><div class="PRgbHead">Better 30%</div><div class="PRgbHead">Poorer 30%</div>
+          ${ms.map(m=>`
+            <div class="PRgbLabel">${PR_escapeHtml(m.label)}</div>
+            <div><div class="PRgbBar"><div class="PRgbGood" style="width:${Math.min(100,m.good/maxV*100)}%"></div></div><div class="PRgbVal">${m.good.toFixed(1)}</div></div>
+            <div><div class="PRgbBar"><div class="PRgbBad" style="width:${Math.min(100,m.bad/maxV*100)}%"></div></div><div class="PRgbVal">${m.bad.toFixed(1)}</div></div>
+          `).join("")}
+        </div>`;
+      })() : ""}
+    </div>
+
+    <div class="PRchartBox">
+      <div class="PRvizTitle" style="font-size:12px;">Recent-round consistency heatmap</div>
+      <div class="PRvizSub">Repeated red columns reveal recurring hole problems immediately.</div>
+      <div class="PRheat">
+        <div class="PRheatGrid">
+          <div></div>${Array.from({length:18},(_,i)=>`<div class="PRheatHead">${i+1}</div>`).join("")}
+          ${postRoundIntel.exactCategories.roundSummaries.slice(-8).map(r=>`
+            <div class="PRheatDate">${PR_escapeHtml(r.dateLabel)}</div>
+            ${Array.from({length:18},(_,i)=>{
+              const h=r.holes.find(x=>x.hole===i+1);
+              if(!h)return `<div class="PRheatCell" style="background:#f8fafc"></div>`;
+              const bg=h.delta>=1?"#bbf7d0":h.delta===0?"#e2e8f0":h.delta===-1?"#fed7aa":"#fecaca";
+              return `<div class="PRheatCell" style="background:${bg}" title="${r.dateLabel} H${i+1}: ${h.delta>=0?"+":""}${h.delta}"></div>`;
+            }).join("")}
+          `).join("")}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+` : ""}`;
       })()}
     ` : `
       <div class="PRvisualCard" style="margin-top:14px;border-color:#fecaca;background:#fff7f7;">
