@@ -13005,6 +13005,22 @@ const scorecardIntel = (() => {
     .PRplanV{font-size:14px;font-weight:950;margin-top:4px;line-height:1.3}
     .PRplanS{font-size:10px;color:#64748b;line-height:1.45;margin-top:4px}
     .PRcourseDnaPage{break-before:page;page-break-before:always}
+    .PRgameDnaPage{break-before:page;page-break-before:always}
+    .PRdetailsPage{break-before:page;page-break-before:always}
+    .PRconfidence{display:inline-flex;align-items:center;border-radius:999px;padding:3px 7px;font-size:8px;font-weight:950;letter-spacing:.06em;text-transform:uppercase;margin-top:5px}
+    .PRconfidence.confirmed{background:#dcfce7;color:#166534;border:1px solid #86efac}
+    .PRconfidence.emerging{background:#ffedd5;color:#c2410c;border:1px solid #fdba74}
+    .PRconfidence.low{background:#f1f5f9;color:#475569;border:1px solid #cbd5e1}
+    .PRimpact{display:inline-block;margin-top:7px;border-radius:10px;padding:6px 8px;background:#fff;border:1px solid rgba(15,23,42,.10)}
+    .PRimpactK{font-size:8px;font-weight:950;text-transform:uppercase;letter-spacing:.06em;color:#64748b}
+    .PRimpactV{font-size:15px;font-weight:950;color:#0f172a;margin-top:1px}
+    .PRpriorityBanner{margin-top:14px;border-radius:20px;padding:16px 18px;background:linear-gradient(135deg,#7f1d1d,#b91c1c 60%,#ef4444);color:#fff;box-shadow:0 12px 28px rgba(185,28,28,.18)}
+    .PRpriorityK{font-size:10px;font-weight:950;letter-spacing:.12em;text-transform:uppercase;opacity:.82}
+    .PRpriorityV{font-size:23px;font-weight:950;letter-spacing:-.025em;margin-top:4px}
+    .PRpriorityS{font-size:11px;line-height:1.5;margin-top:5px;color:#fee2e2}
+    .PRpriorityMeta{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}
+    .PRpriorityChip{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.24);border-radius:999px;padding:4px 8px;font-size:9px;font-weight:900}
+    .PRvizSection,.PRvisualCard,.PRchartBox,.PRdnaCard,.PRplanCard,.PRact{break-inside:avoid;page-break-inside:avoid}
     .PRscoreGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
     .PRscoreCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
     .PRscoreBig{font-size:20px;font-weight:950;margin-top:3px}
@@ -13027,6 +13043,33 @@ const scorecardIntel = (() => {
         const angle=-90+((capped+8)/16)*180;
         const cats=postRoundIntel.exactCategories||{};
         const fix=cats.fix||null, watch=cats.watch||null, keep=Array.isArray(cats.keep)?cats.keep:[];
+        const reportRoundCount=Math.max(1,Number(cats.roundSummaries?.length||rounds||1));
+        const impactEstimate=x=>{
+          if(!x||!Number.isFinite(Number(x.avg))||!Number.isFinite(Number(x.n)))return NaN;
+          const occurrencesPerRound=Number(x.n)/reportRoundCount;
+          return Math.max(0,Math.abs(Number(x.avg))*occurrencesPerRound);
+        };
+        const fixImpact=impactEstimate(fix);
+        const watchImpact=impactEstimate(watch);
+        const confidenceClass=s=>String(s||"").toUpperCase()==="CONFIRMED"?"confirmed":String(s||"").toUpperCase()==="EMERGING"?"emerging":"low";
+
+        const cdna=cats.courseDNA||null;
+        const nemesisTop=cdna?.nemesis?.[0]||null;
+        const nemesisImpact=nemesisTop?Math.abs(Number(nemesisTop.avgDelta||0)):NaN;
+        let executivePriority={
+          title:fix?`Improve ${fix.displayLabel}`:"Protect the card",
+          detail:fix?`${fix.displayLabel} is the strongest recurring category below your playing-to-handicap target.`:"No recurring category currently dominates the scoring loss.",
+          impact:Number.isFinite(fixImpact)?fixImpact:NaN,
+          confidence:fix?.status||"LOW EVIDENCE"
+        };
+        if(nemesisTop && (!Number.isFinite(fixImpact) || nemesisImpact>fixImpact*0.75)){
+          executivePriority={
+            title:`Recurring Hole ${nemesisTop.hole} damage`,
+            detail:`Hole ${nemesisTop.hole} is below handicap target in ${nemesisTop.badCount}/${nemesisTop.appearances} rounds and has cost ${nemesisTop.totalCost.toFixed(0)} strokes in total.`,
+            impact:nemesisImpact,
+            confidence:nemesisTop.appearances>=4?"CONFIRMED":nemesisTop.appearances>=3?"EMERGING":"LOW EVIDENCE"
+          };
+        }
         const verdict=d>=2?"Beat handicap target":d>0?"Slightly better than handicap":d<=-3&&eh.damageShare>=.65?"Good golf, damaged by a few holes":d<0?"Below handicap target":"Played to handicap";
         const story=eh.losses.length&&eh.damageShare>=.65
           ? `${Math.round(eh.damageShare*100)}% of all strokes lost to handicap target came from the three costliest holes. The other holes combined were ${eh.restDelta>=0?`${eh.restDelta.toFixed(0)} strokes better than target`:`${Math.abs(eh.restDelta).toFixed(0)} strokes below target`}.`
@@ -13074,15 +13117,42 @@ const scorecardIntel = (() => {
           </div>
         </div>
 
+        <div class="PRpriorityBanner">
+          <div class="PRpriorityK">#1 Scoring Opportunity</div>
+          <div class="PRpriorityV">${PR_escapeHtml(executivePriority.title)}</div>
+          <div class="PRpriorityS">${PR_escapeHtml(executivePriority.detail)}</div>
+          <div class="PRpriorityMeta">
+            <span class="PRpriorityChip">${PR_escapeHtml(executivePriority.confidence||"LOW EVIDENCE")}</span>
+            ${Number.isFinite(executivePriority.impact)
+              ? `<span class="PRpriorityChip">Estimated upside: ~${executivePriority.impact.toFixed(1)} stroke${executivePriority.impact<1.5?"":"s"}/round if brought to target</span>`
+              : ""}
+          </div>
+        </div>
+
         <div class="PRactions">
           <div class="PRact keep"><div class="PRactK">Keep doing</div>
-            ${keep.length?keep.map(x=>`<div style="margin-bottom:6px;"><div class="PRactV">${PR_escapeHtml(x.displayLabel)}</div><div class="PRactS">+${x.avg.toFixed(2)}/hole vs handicap · ${x.n} holes</div></div>`).join(""):`<div class="PRactS">No category is clearly above handicap target yet.</div>`}
+            ${keep.length?keep.map(x=>`
+              <div style="margin-bottom:8px;">
+                <div class="PRactV">${PR_escapeHtml(x.displayLabel)}</div>
+                <div class="PRactS">+${x.avg.toFixed(2)}/hole vs handicap target · ${x.n} holes</div>
+                <span class="PRconfidence ${confidenceClass(x.status)}">${PR_escapeHtml(x.status||"EVIDENCE")}</span>
+              </div>`).join(""):`<div class="PRactS">No category is clearly above handicap target yet.</div>`}
           </div>
           <div class="PRact watch"><div class="PRactK">Watch</div>
-            ${watch?`<div class="PRactV">${PR_escapeHtml(watch.displayLabel)}</div><div class="PRactS">${watch.avg.toFixed(2)}/hole · ${watch.status} · ${watch.n} holes</div>`:`<div class="PRactS">No second scoring leak needs attention.</div>`}
+            ${watch?`
+              <div class="PRactV">${PR_escapeHtml(watch.displayLabel)}</div>
+              <div class="PRactS">${watch.avg.toFixed(2)}/hole vs target · ${watch.n} holes</div>
+              <span class="PRconfidence ${confidenceClass(watch.status)}">${PR_escapeHtml(watch.status||"LOW EVIDENCE")}</span>
+              ${Number.isFinite(watchImpact)?`<div class="PRimpact"><div class="PRimpactK">Potential upside</div><div class="PRimpactV">~${watchImpact.toFixed(1)} strokes/round</div></div>`:""}
+            `:`<div class="PRactS">No second scoring leak needs attention.</div>`}
           </div>
           <div class="PRact fix"><div class="PRactK">Fix first</div>
-            ${fix?`<div class="PRactV">${PR_escapeHtml(fix.displayLabel)}</div><div class="PRactS">${fix.avg.toFixed(2)}/hole · ${fix.status} · ${fix.n} holes</div>`:`<div class="PRactS">No recurring area is currently below handicap target.</div>`}
+            ${fix?`
+              <div class="PRactV">${PR_escapeHtml(fix.displayLabel)}</div>
+              <div class="PRactS">${fix.avg.toFixed(2)}/hole vs target · ${fix.n} holes</div>
+              <span class="PRconfidence ${confidenceClass(fix.status)}">${PR_escapeHtml(fix.status||"LOW EVIDENCE")}</span>
+              ${Number.isFinite(fixImpact)?`<div class="PRimpact"><div class="PRimpactK">Impact if brought to target</div><div class="PRimpactV">~${fixImpact.toFixed(1)} strokes/round</div></div>`:""}
+            `:`<div class="PRactS">No recurring area is currently below handicap target.</div>`}
           </div>
           <div class="PRact target"><div class="PRactK">Next-round target</div><div class="PRactV">${PR_escapeHtml(next)}</div><div class="PRactS">One measurable scoring job.</div></div>
         </div>
@@ -13152,8 +13222,8 @@ const scorecardIntel = (() => {
 </div>
 
 ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
-<div class="PRvizSection">
-  <div class="PRvizTitle">Your Game — Pattern & Trend</div>
+<div class="PRvizSection PRgameDnaPage">
+  <div class="PRvizTitle">Your Game DNA — Pattern & Trend</div>
   <div class="PRvizSub">Longer-term scoring shape using the same exact handicap target on every round.</div>
 
   <div class="PRgeneralGrid">
@@ -13339,26 +13409,34 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
 
   // Rank the strongest actionable signal into ONE headline opportunity.
   const opportunityCandidates=[];
+  const dnaRounds=Math.max(1,Number(cats.roundSummaries?.length||1));
   if(dna.nemesis?.length){
     const h=dna.nemesis[0];
     opportunityCandidates.push({
       score:Math.abs(h.avgDelta)*Math.max(.5,h.badRate)*Math.sqrt(h.appearances),
       title:`Recurring Hole ${h.hole} damage`,
-      detail:`Hole ${h.hole} is below handicap target in ${h.badCount}/${h.appearances} rounds and has cost ${h.totalCost.toFixed(0)} strokes in total.`
+      detail:`Hole ${h.hole} is below handicap target in ${h.badCount}/${h.appearances} rounds and has cost ${h.totalCost.toFixed(0)} strokes in total.`,
+      impact:Math.abs(Number(h.avgDelta||0)),
+      confidence:h.appearances>=4?"CONFIRMED":h.appearances>=3?"EMERGING":"LOW EVIDENCE"
     });
   }
   if(dna.startPattern?.status==="PROBLEM" && dna.startPhase){
     opportunityCandidates.push({
       score:Math.abs(Number(dna.startPhase.avgPerRound||0))*1.25,
       title:"Improve the start of the round",
-      detail:`Holes 1–3 average ${dna.startPhase.avgPerRound.toFixed(1)} strokes per round versus target and are below target in ${Math.round(dna.startPhase.badRoundRate*100)}% of rounds.`
+      detail:`Holes 1–3 average ${dna.startPhase.avgPerRound.toFixed(1)} strokes per round versus target and are below target in ${Math.round(dna.startPhase.badRoundRate*100)}% of rounds.`,
+      impact:Math.abs(Number(dna.startPhase.avgPerRound||0)),
+      confidence:dna.startPhase.rounds>=4?"CONFIRMED":dna.startPhase.rounds>=3?"EMERGING":"LOW EVIDENCE"
     });
   }
   if(cats.fix){
+    const fi=Math.abs(Number(cats.fix.avg||0))*(Number(cats.fix.n||0)/dnaRounds);
     opportunityCandidates.push({
       score:Math.abs(Number(cats.fix.avg||0))*Math.sqrt(Math.max(1,cats.fix.n))/3,
       title:`Improve ${cats.fix.displayLabel}`,
-      detail:`This category averages ${cats.fix.avg.toFixed(2)} strokes per hole versus handicap target across ${cats.fix.n} holes.`
+      detail:`This category averages ${cats.fix.avg.toFixed(2)} strokes per hole versus handicap target across ${cats.fix.n} holes.`,
+      impact:fi,
+      confidence:cats.fix.status||"LOW EVIDENCE"
     });
   }
   if(cats.goodBad?.driver){
@@ -13366,12 +13444,16 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
     opportunityCandidates.push({
       score:Math.max(0,Number(d.separation||0)),
       title:`Reduce ${d.label.toLowerCase()}`,
-      detail:`This is the biggest measurable separator between the better and poorer 30% of rounds.`
+      detail:`This is the biggest measurable separator between the better and poorer 30% of rounds.`,
+      impact:Math.max(0,Number(d.separation||0)),
+      confidence:cats.roundSummaries?.length>=6?"CONFIRMED":cats.roundSummaries?.length>=4?"EMERGING":"LOW EVIDENCE"
     });
   }
   const topOpportunity=opportunityCandidates.sort((a,b)=>b.score-a.score)[0]||{
     title:"Protect the card",
-    detail:"No single recurring weakness dominates yet; focus on limiting costly holes."
+    detail:"No single recurring weakness dominates yet; focus on limiting costly holes.",
+    impact:NaN,
+    confidence:"LOW EVIDENCE"
   };
 
   const holeFingerprint=Array.from({length:18},(_,i)=>{
@@ -13397,9 +13479,15 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
     <div class="PRvizSub">Repeated tendencies that may not be obvious from a single scorecard.</div>
 
     <div class="PRopportunity">
-      <div class="PRoppK">#1 Scoring Opportunity</div>
+      <div class="PRoppK">#1 Recurring Pattern</div>
       <div class="PRoppV">${PR_escapeHtml(topOpportunity.title)}</div>
       <div class="PRoppS">${PR_escapeHtml(topOpportunity.detail)}</div>
+      <div class="PRpriorityMeta">
+        <span class="PRpriorityChip">${PR_escapeHtml(topOpportunity.confidence||"LOW EVIDENCE")}</span>
+        ${Number.isFinite(Number(topOpportunity.impact))
+          ? `<span class="PRpriorityChip">Estimated impact: ~${Number(topOpportunity.impact).toFixed(1)} strokes/round</span>`
+          : ""}
+      </div>
     </div>
 
     <div class="PRchartBox" style="margin-top:12px;">
@@ -13429,6 +13517,7 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
         ${dna.nemesis?.length ? `
           <div class="PRdnaV">Hole ${dna.nemesis[0].hole}</div>
           <div class="PRdnaS">Below target in ${dna.nemesis[0].badCount}/${dna.nemesis[0].appearances} rounds · ${Math.abs(dna.nemesis[0].avgDelta).toFixed(2)} strokes lost/appearance · ${dna.nemesis[0].totalCost.toFixed(0)} total strokes lost.</div>
+          <span class="PRconfidence ${dna.nemesis[0].appearances>=4?"confirmed":dna.nemesis[0].appearances>=3?"emerging":"low"}">${dna.nemesis[0].appearances>=4?"CONFIRMED":dna.nemesis[0].appearances>=3?"EMERGING":"LOW EVIDENCE"}</span>
         ` : `<div class="PRdnaS">No repeated problem hole has enough evidence yet.</div>`}
       </div>
 
@@ -13437,6 +13526,7 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
         ${dna.strongholds?.length ? `
           <div class="PRdnaV">Hole ${dna.strongholds[0].hole}</div>
           <div class="PRdnaS">Beats target in ${dna.strongholds[0].goodCount}/${dna.strongholds[0].appearances} rounds · +${dna.strongholds[0].avgDelta.toFixed(2)} strokes/appearance.</div>
+          <span class="PRconfidence ${dna.strongholds[0].appearances>=4?"confirmed":dna.strongholds[0].appearances>=3?"emerging":"low"}">${dna.strongholds[0].appearances>=4?"CONFIRMED":dna.strongholds[0].appearances>=3?"EMERGING":"LOW EVIDENCE"}</span>
         ` : `<div class="PRdnaS">No repeated stronghold has enough evidence yet.</div>`}
       </div>
 
@@ -13530,8 +13620,9 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
       </div>
     `}
 
-    <div class="PRsub" style="margin-top:12px;">
-      Benchmark: <b>${PR_escapeHtml(peerBand||"—")}</b> · detailed evidence below
+    <div class="PRsub PRdetailsPage" style="margin-top:12px;padding-top:4px;">
+      <b style="font-size:14px;color:#0f172a;">Detailed Evidence</b><br/>
+      Benchmark: <b>${PR_escapeHtml(peerBand||"—")}</b> · supporting analysis below
       <span class="PRpill" style="margin-left:8px;">${(String(scoringMode)==="gross" ? "Gross strokes" : "Stableford points")} vs ${(__usingVirtualSameHcapPeer ? "Virtual same-handicap player" : (__effComparatorMode==="par" ? "Par baseline" : (__effComparatorMode==="field" ? "Field" : "Handicap band")))}</span>
     </div>
 
