@@ -12362,12 +12362,180 @@ const postRoundIntel = (() => {
       oneJobWhy=`It hurt today, but the history does not yet confirm it as a recurring weakness.`;
     }
 
+    // ------------------------------------------------------------
+    // EXACT PLAYING-TO-HANDICAP SNAPSHOT
+    // Uses the SAME latest round and arrays that this working block
+    // has already successfully parsed.
+    //
+    // Hole target = Par + strokes received.
+    // Hole cost   = Gross - target.
+    // Therefore individual hole costs are exact whole strokes.
+    // ------------------------------------------------------------
+    const exactHandicap = (() => {
+      try{
+        const ps=arrPars(latest);
+        const sis=arrSI(latest);
+        const ys=arrYards(latest);
+        const gs=arrGross(latest);
+
+        // Calculate the actual Course Handicap for this round.
+        // Prefer WHS HI/Slope/Rating, then fall back to stored playing hcap.
+        const parTotal=ps.reduce((s,v)=>s+(Number.isFinite(Number(v))?Number(v):0),0);
+        const hi=Number.isFinite(Number(latest?.startExact))?Number(latest.startExact)
+          : Number.isFinite(Number(latest?.handicapIndex))?Number(latest.handicapIndex)
+          : Number.isFinite(Number(latest?.handicap))?Number(latest.handicap)
+          : NaN;
+        const slope=Number.isFinite(Number(latest?.teeSlope))?Number(latest.teeSlope)
+          : Number.isFinite(Number(latest?.slope))?Number(latest.slope)
+          : Number.isFinite(Number(latest?.slopeRating))?Number(latest.slopeRating)
+          : NaN;
+        const rating=Number.isFinite(Number(latest?.teeRating))?Number(latest.teeRating)
+          : Number.isFinite(Number(latest?.rating))?Number(latest.rating)
+          : Number.isFinite(Number(latest?.courseRating))?Number(latest.courseRating)
+          : NaN;
+
+        let ch=NaN;
+        if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0){
+          ch=WHS_courseHandicap(hi,slope,rating,parTotal);
+        }
+        if(!Number.isFinite(ch)){
+          ch=Number.isFinite(Number(latest?.courseHandicap))?Number(latest.courseHandicap)
+            : Number.isFinite(Number(latest?.playingHcap))?Number(latest.playingHcap)
+            : Number.isFinite(Number(latest?.hcap))?Number(latest.hcap)
+            : NaN;
+        }
+
+        const rec=(si)=>{
+          const h=Math.max(0,Math.round(Number(ch)||0));
+          const s=Number(si);
+          if(!Number.isFinite(s)||s<1||s>18)return 0;
+          return Math.floor(h/18)+((h%18)>0&&s<=(h%18)?1:0);
+        };
+
+        const holes=[];
+        const n=Math.min(18,Math.max(ps.length,sis.length,ys.length,gs.length));
+        for(let i=0;i<n;i++){
+          const par=Number(ps[i]),si=Number(sis[i]),yard=Number(ys[i]),gross=Number(gs[i]);
+          if(!Number.isFinite(par)||!Number.isFinite(gross)||gross<=0)continue;
+          const strokes=rec(si);
+          const target=par+strokes;
+          holes.push({
+            hole:i+1,par,si,yard:Number.isFinite(yard)?yard:NaN,
+            gross,strokes,target,
+            delta:target-gross,
+            cost:Math.max(0,gross-target),
+            gain:Math.max(0,target-gross)
+          });
+        }
+        if(!holes.length)return {ok:false};
+
+        const actual=holes.reduce((s,h)=>s+h.gross,0);
+        const target=holes.reduce((s,h)=>s+h.target,0);
+        const delta=target-actual;
+        const losses=holes.filter(h=>h.cost>0).sort((a,b)=>(b.cost-a.cost)||(a.hole-b.hole));
+        const totalLoss=losses.reduce((s,h)=>s+h.cost,0);
+        const top3Loss=losses.slice(0,3).reduce((s,h)=>s+h.cost,0);
+        const damageShare=totalLoss?top3Loss/totalLoss:0;
+        const topSet=new Set(losses.slice(0,3).map(h=>h.hole));
+        const restDelta=holes.filter(h=>!topSet.has(h.hole)).reduce((s,h)=>s+h.delta,0);
+
+        return {ok:true,ch,holes,actual,target,delta,losses,totalLoss,top3Loss,damageShare,restDelta};
+      }catch(e){
+        try{console.error("Exact handicap snapshot failed:",e);}catch(_){}
+        return {ok:false};
+      }
+    })();
+
+    // Exact handicap-target history for the visual action cards.
+    const exactCategories = (() => {
+      try{
+        const allRounds=(fullSeries.length?fullSeries:displaySeries);
+        const map=new Map();
+
+        const yBand=y=>{
+          const n=Number(y); if(!Number.isFinite(n))return null;
+          if(n<150)return "<150";
+          if(n<=200)return "150–200";
+          if(n<=350)return "201–350";
+          if(n<=420)return "351–420";
+          return "420+";
+        };
+        const sBand=s=>{
+          const n=Number(s); if(!Number.isFinite(n))return null;
+          if(n<=6)return "SI 1–6";
+          if(n<=12)return "SI 7–12";
+          return "SI 13–18";
+        };
+        const add=(type,label,d,ri)=>{
+          if(!label||!Number.isFinite(d))return;
+          const key=`${type}|${label}`;
+          const x=map.get(key)||{type,label,displayLabel:`${type}: ${label}`,sum:0,n:0,roundSet:new Set(),bad:0};
+          x.sum+=d;x.n++;x.roundSet.add(ri);if(d<0)x.bad++;
+          map.set(key,x);
+        };
+
+        allRounds.forEach((r,ri)=>{
+          const ps=arrPars(r),sis=arrSI(r),ys=arrYards(r),gs=arrGross(r);
+          const pt=ps.reduce((s,v)=>s+(Number.isFinite(Number(v))?Number(v):0),0);
+          const hi=Number.isFinite(Number(r?.startExact))?Number(r.startExact)
+            :Number.isFinite(Number(r?.handicapIndex))?Number(r.handicapIndex)
+            :Number.isFinite(Number(r?.handicap))?Number(r.handicap):NaN;
+          const sl=Number.isFinite(Number(r?.teeSlope))?Number(r.teeSlope):Number(r?.slope);
+          const cr=Number.isFinite(Number(r?.teeRating))?Number(r.teeRating):Number(r?.rating);
+          let ch=NaN;
+          if(Number.isFinite(hi)&&Number.isFinite(sl)&&sl>0&&Number.isFinite(cr)&&pt>0)ch=WHS_courseHandicap(hi,sl,cr,pt);
+          if(!Number.isFinite(ch))ch=Number.isFinite(Number(r?.courseHandicap))?Number(r.courseHandicap)
+            :Number.isFinite(Number(r?.playingHcap))?Number(r.playingHcap)
+            :Number.isFinite(Number(r?.hcap))?Number(r.hcap):NaN;
+
+          const rec=si=>{
+            const h=Math.max(0,Math.round(Number(ch)||0)),s=Number(si);
+            if(!Number.isFinite(s)||s<1||s>18)return 0;
+            return Math.floor(h/18)+((h%18)>0&&s<=(h%18)?1:0);
+          };
+
+          const n=Math.min(18,Math.max(ps.length,sis.length,ys.length,gs.length));
+          for(let i=0;i<n;i++){
+            const par=Number(ps[i]),si=Number(sis[i]),y=Number(ys[i]),g=Number(gs[i]);
+            if(!Number.isFinite(par)||!Number.isFinite(g)||g<=0)continue;
+            const d=(par+rec(si))-g; // + better than handicap
+            add("Par",`Par ${par}`,d,ri);
+            add("Stroke Index",sBand(si),d,ri);
+            add("Yardage",yBand(y),d,ri);
+          }
+        });
+
+        const rows=Array.from(map.values()).map(x=>{
+          const rounds=x.roundSet.size,avg=x.n?x.sum/x.n:NaN;
+          let status="LOW EVIDENCE";
+          if(x.n>=24&&rounds>=4)status="CONFIRMED";
+          else if(x.n>=12&&rounds>=3)status="EMERGING";
+          return {...x,rounds,avg,status,badRate:x.n?x.bad/x.n:0};
+        }).filter(x=>Number.isFinite(x.avg));
+
+        const keep=[];
+        ["Par","Stroke Index","Yardage"].forEach(type=>{
+          const row=rows.filter(x=>x.type===type&&x.avg>0.05)
+            .sort((a,b)=>(b.avg*Math.sqrt(b.n))-(a.avg*Math.sqrt(a.n)))[0];
+          if(row)keep.push(row);
+        });
+        const bad=rows.filter(x=>x.avg<-0.05)
+          .sort((a,b)=>(a.avg*Math.sqrt(a.n))-(b.avg*Math.sqrt(b.n)));
+        const fix=bad[0]||null;
+        const watch=(fix?bad.find(x=>x.type!==fix.type):null)||bad[1]||null;
+        return {ok:true,rows,keep,fix,watch};
+      }catch(e){
+        try{console.error("Exact category history failed:",e);}catch(_){}
+        return {ok:false,rows:[],keep:[],fix:null,watch:null};
+      }
+    })();
+
     const eventName=String(latest?.eventName||latest?.event||latest?.competition||latest?.courseName||latest?.course||"Latest round");
 
     return {
       ok:true,priorRounds:prior.length,coverage,roundDelta,actualTotal,expectedTotal,
       verdict,costly,damageShare,weakness,strength,dna,dnaWhy,biggestLever,recoverable,totalRecoverable,restDelta,restHoles,
-      confidence,oneJob,oneJobWhy,isGrossMode,eventName,isSoloRound,virtualCH
+      confidence,oneJob,oneJobWhy,isGrossMode,eventName,isSoloRound,virtualCH,exactHandicap,exactCategories
     };
   } catch(e) {
     console.error("Post-round intelligence failed:",e);
@@ -12390,13 +12558,11 @@ const scorecardIntel = (() => {
       return ax - bx;
     });
 
-    const __scorecardRaw =
+    const roundsAll = sortRounds(
       (Array.isArray(__sourcePlayer?.roundSeries) && __sourcePlayer.roundSeries.length)
         ? __sourcePlayer.roundSeries
-        : (Array.isArray(__sourcePlayer?.series) ? __sourcePlayer.series : []);
-
-    // Use exactly the same year / recent-games window as the visible report.
-    const roundsAll = sortRounds(__filterSeries(__scorecardRaw));
+        : __sourcePlayer?.series
+    );
 
     if (!roundsAll.length) return { ok:false };
 
@@ -12410,10 +12576,6 @@ const scorecardIntel = (() => {
     };
     const grossOf = r => {
       const x = r?.grossPerHole || r?.grossHoles || r?.holeGross || r?.scoresPerHole || r?.scores;
-      return Array.isArray(x) ? x.slice(0,18).map(Number) : [];
-    };
-    const yardsOf = r => {
-      const x = r?.yardsArr || r?.yardsPerHole || r?.ydsPerHole || r?.yards || r?.holeYards || r?.yardages;
       return Array.isArray(x) ? x.slice(0,18).map(Number) : [];
     };
 
@@ -12456,21 +12618,18 @@ const scorecardIntel = (() => {
     const teeNameOf = r => String(r?.teeName || r?.teeLabel || r?.tee || "Tee");
 
     const analysed = roundsAll.map((r, ri) => {
-      const pars = parsOf(r), sis = siOf(r), gross = grossOf(r), yards = yardsOf(r);
+      const pars = parsOf(r), sis = siOf(r), gross = grossOf(r);
       const ch = calcCH(r);
       const holes = [];
       for (let i=0; i<18; i++) {
-        const p = Number(pars[i]), si = Number(sis[i]), g = Number(gross[i]), y = Number(yards[i]);
+        const p = Number(pars[i]), si = Number(sis[i]), g = Number(gross[i]);
         if (!Number.isFinite(p) || !Number.isFinite(g) || g <= 0) continue;
         const recv = strokesReceived(ch, si);
         const targetGross = p + recv;
         const delta = targetGross - g; // positive = better than playing-to-handicap target
         holes.push({
-          hole:i+1, par:p, si, yard:Number.isFinite(y)?y:NaN,
-          gross:g, recv, targetGross, delta,
-          // EXACT whole-stroke cost against handicap target.
-          cost:Math.max(0, g - targetGross),
-          gain:Math.max(0, targetGross - g)
+          hole:i+1, par:p, si, gross:g, recv, targetGross, delta,
+          cost:Math.max(0, -delta), gain:Math.max(0, delta)
         });
       }
       if (!holes.length) return null;
@@ -12581,245 +12740,9 @@ const scorecardIntel = (() => {
   }
 })();
 
-// ============================================================
-// VISUAL PERFORMANCE DASHBOARD
-// One data source only: scorecardIntel's exact playing-to-handicap
-// hole targets. No peer averages are used for costly-hole strokes.
-// ============================================================
-const visualIntel = (() => {
-  try{
-    const sortRounds = arr => (Array.isArray(arr)?arr.filter(Boolean).slice():[])
-      .sort((a,b)=>{
-        const ax=Number.isFinite(Number(a?.dateMs))?Number(a.dateMs):Number(a?.idx||0);
-        const bx=Number.isFinite(Number(b?.dateMs))?Number(b.dateMs):Number(b?.idx||0);
-        return ax-bx;
-      });
-
-    // Same report window that the golfer can see.
-    const series = sortRounds(
-      Array.isArray(windowSeries) && windowSeries.length
-        ? windowSeries
-        : __filterSeries(Array.isArray(cur?.series)?cur.series:[])
-    );
-    if(!series.length) return {ok:false};
-
-    const parsOf=r=>{
-      const x=r&&(r.parsPerHole||r.parPerHole||r.parsArr||r.pars||r.parHoles||r.par);
-      return Array.isArray(x)?x.slice(0,18).map(Number):[];
-    };
-    const siOf=r=>{
-      const x=r&&(r.siPerHole||r.strokeIndexPerHole||r.siArr||r.si||r.strokeIndex);
-      return Array.isArray(x)?x.slice(0,18).map(Number):[];
-    };
-    const yardsOf=r=>{
-      const x=r&&(r.yardsPerHole||r.ydsPerHole||r.yardsArr||r.yards||r.holeYards||r.yardages||r.yardage);
-      return Array.isArray(x)?x.slice(0,18).map(Number):[];
-    };
-    const grossOf=r=>{
-      const x=r&&(r.grossPerHole||r.grossHoles||r.holeGross||r.scoresPerHole||r.scores||r.grossArr);
-      return Array.isArray(x)?x.slice(0,18).map(Number):[];
-    };
-
-    const calcCH=r=>{
-      const pars=parsOf(r);
-      const parTotal=pars.reduce((s,v)=>s+(Number.isFinite(v)?v:0),0);
-      const hi=Number.isFinite(Number(r?.startExact))?Number(r.startExact)
-        : Number.isFinite(Number(r?.handicapIndex))?Number(r.handicapIndex)
-        : Number.isFinite(Number(r?.handicap))?Number(r.handicap)
-        : NaN;
-      const slope=Number.isFinite(Number(r?.teeSlope))?Number(r.teeSlope)
-        : Number.isFinite(Number(r?.slope))?Number(r.slope)
-        : Number.isFinite(Number(r?.slopeRating))?Number(r.slopeRating)
-        : NaN;
-      const rating=Number.isFinite(Number(r?.teeRating))?Number(r.teeRating)
-        : Number.isFinite(Number(r?.rating))?Number(r.rating)
-        : Number.isFinite(Number(r?.courseRating))?Number(r.courseRating)
-        : NaN;
-
-      if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0){
-        return WHS_courseHandicap(hi,slope,rating,parTotal);
-      }
-      return Number.isFinite(Number(r?.courseHandicap))?Number(r.courseHandicap)
-        : Number.isFinite(Number(r?.playingHcap))?Number(r.playingHcap)
-        : Number.isFinite(Number(r?.hcap))?Number(r.hcap)
-        : NaN;
-    };
-
-    const recvFor=(ch,si)=>{
-      const h=Math.max(0,Math.round(Number(ch)||0));
-      const s=Number(si);
-      if(!Number.isFinite(s)||s<1||s>18)return 0;
-      return Math.floor(h/18)+((h%18)>0&&s<=(h%18)?1:0);
-    };
-
-    const yardBand=y=>{
-      const n=Number(y);
-      if(!Number.isFinite(n))return null;
-      if(n<150)return "<150";
-      if(n<=200)return "150–200";
-      if(n<=350)return "201–350";
-      if(n<=420)return "351–420";
-      return "420+";
-    };
-    const siBand=s=>{
-      const n=Number(s);
-      if(!Number.isFinite(n))return null;
-      if(n<=6)return "SI 1–6";
-      if(n<=12)return "SI 7–12";
-      return "SI 13–18";
-    };
-
-    const analysed=series.map((r,ri)=>{
-      const pars=parsOf(r),sis=siOf(r),yards=yardsOf(r),gross=grossOf(r),ch=calcCH(r);
-      const holes=[];
-      for(let i=0;i<18;i++){
-        const par=Number(pars[i]),si=Number(sis[i]),g=Number(gross[i]),yard=Number(yards[i]);
-        if(!Number.isFinite(par)||!Number.isFinite(g)||g<=0)continue;
-        const recv=recvFor(ch,si);
-        const targetGross=par+recv;
-        const delta=targetGross-g;
-        holes.push({
-          ri,hole:i+1,par,si,yard:Number.isFinite(yard)?yard:NaN,
-          gross:g,recv,targetGross,delta,
-          cost:Math.max(0,g-targetGross),
-          gain:Math.max(0,targetGross-g)
-        });
-      }
-      if(!holes.length)return null;
-      const actualGross=holes.reduce((s,h)=>s+h.gross,0);
-      const targetGross=holes.reduce((s,h)=>s+h.targetGross,0);
-      const losses=holes.filter(h=>h.cost>0).sort((a,b)=>(b.cost-a.cost)||(a.hole-b.hole));
-      const totalLoss=losses.reduce((s,h)=>s+h.cost,0);
-      const top3Loss=losses.slice(0,3).reduce((s,h)=>s+h.cost,0);
-      const damageShare=totalLoss?top3Loss/totalLoss:0;
-      const top3Set=new Set(losses.slice(0,3).map(h=>h.hole));
-      const restDelta=holes.filter(h=>!top3Set.has(h.hole)).reduce((s,h)=>s+h.delta,0);
-      return {
-        round:r,ch,holes,actualGross,targetGross,
-        delta:targetGross-actualGross,losses,totalLoss,top3Loss,damageShare,restDelta
-      };
-    }).filter(Boolean);
-
-    if(!analysed.length)return {ok:false};
-    const latest=analysed[analysed.length-1];
-
-    // Historical category evidence, always vs that round's exact handicap target.
-    const map=new Map();
-    const add=(type,label,h,ri)=>{
-      if(!label)return;
-      const key=`${type}|${label}`;
-      const rec=map.get(key)||{
-        type,label,displayLabel:`${type}: ${label}`,
-        holes:0,roundSet:new Set(),sum:0,bad:0,good:0
-      };
-      rec.holes++;
-      rec.roundSet.add(ri);
-      rec.sum+=h.delta;
-      if(h.delta<0)rec.bad++;
-      if(h.delta>0)rec.good++;
-      map.set(key,rec);
-    };
-    analysed.forEach((rr,ri)=>{
-      rr.holes.forEach(h=>{
-        add("Par",`Par ${h.par}`,h,ri);
-        add("Stroke Index",siBand(h.si),h,ri);
-        const yb=yardBand(h.yard);
-        if(yb)add("Yardage",yb,h,ri);
-      });
-    });
-
-    const categories=Array.from(map.values()).map(r=>{
-      const rounds=r.roundSet.size, avg=r.holes?r.sum/r.holes:NaN;
-      let confidence="LOW EVIDENCE";
-      if(r.holes>=24&&rounds>=4)confidence="CONFIRMED";
-      else if(r.holes>=12&&rounds>=3)confidence="EMERGING";
-      return {...r,rounds,avg,confidence,badRate:r.holes?r.bad/r.holes:0};
-    }).filter(r=>Number.isFinite(r.avg));
-
-    const keep=[];
-    ["Par","Stroke Index","Yardage"].forEach(type=>{
-      const best=categories.filter(r=>r.type===type&&r.avg>0.05)
-        .sort((a,b)=>(b.avg*Math.sqrt(b.holes))-(a.avg*Math.sqrt(a.holes)))[0];
-      if(best)keep.push(best);
-    });
-
-    const bad=categories.filter(r=>r.avg<-0.05)
-      .sort((a,b)=>(a.avg*Math.sqrt(a.holes))-(b.avg*Math.sqrt(b.holes)));
-    const fix=bad[0]||null;
-    const watch=(fix?bad.find(r=>r.type!==fix.type):null)||bad[1]||null;
-
-    let verdict="Played to handicap";
-    let verdictTone="neutral";
-    if(latest.delta>=2){verdict="Beat handicap target";verdictTone="good";}
-    else if(latest.delta>0){verdict="Slightly better than handicap";verdictTone="good";}
-    else if(latest.delta<=-3&&latest.damageShare>=0.65){verdict="Good golf, damaged by a few holes";verdictTone="bad";}
-    else if(latest.delta<0){verdict="Below handicap target";verdictTone="bad";}
-
-    let story="The round matched your handicap expectation closely.";
-    if(latest.losses.length && latest.damageShare>=0.65){
-      story=`${Math.round(latest.damageShare*100)}% of all strokes lost to handicap target came from the three costliest holes. The rest of the card was ${latest.restDelta>=0?`${latest.restDelta.toFixed(0)} strokes better than target`:`${Math.abs(latest.restDelta).toFixed(0)} strokes below target`}.`;
-    }else if(latest.delta>0){
-      story=`You beat your handicap target by ${latest.delta.toFixed(0)} strokes across the round.`;
-    }else if(latest.delta<0){
-      story=`You finished ${Math.abs(latest.delta).toFixed(0)} strokes above your handicap target, with the damage spread more broadly across the card.`;
-    }
-
-    let nextTarget="Keep the whole card at or better than handicap target.";
-    if(fix)nextTarget=`Keep total loss in ${fix.displayLabel} to 2 strokes or fewer next round.`;
-    else if(latest.losses.length)nextTarget="Keep total damage from the three costliest holes to 2 strokes or fewer next round.";
-
-    return {
-      ok:true,analysed,latest,
-      latestLosses:latest.losses.slice(0,5),
-      keep,fix,watch,
-      actual:latest.actualGross,target:latest.targetGross,diff:latest.delta,
-      verdict,verdictTone,story,nextTarget
-    };
-  }catch(e){
-    try{console.error("Visual performance dashboard failed:",e);}catch(_){}
-    return {ok:false};
-  }
-})();
-
   const htmlFragment = `
   <style>
-    .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a;background:#f4f7fb;padding:2px}
-    .PRhero{position:relative;overflow:hidden;border-radius:24px;padding:22px 24px;background:linear-gradient(135deg,#071b33 0%,#123a62 58%,#116149 100%);color:#fff;box-shadow:0 18px 45px rgba(15,39,71,.20)}
-    .PRhero:after{content:"";position:absolute;width:260px;height:260px;border-radius:50%;right:-80px;top:-100px;background:rgba(255,255,255,.07)}
-    .PRheroEyebrow{font-size:10px;font-weight:950;letter-spacing:.14em;text-transform:uppercase;opacity:.72}
-    .PRheroName{font-size:30px;font-weight:950;letter-spacing:-.035em;margin-top:4px}
-    .PRheroMeta{font-size:12px;opacity:.85;margin-top:4px}
-    .PRdash{display:grid;grid-template-columns:minmax(300px,1.15fr) minmax(260px,.85fr);gap:14px;margin-top:14px}
-    .PRdashCard{border:1px solid #dce5ef;border-radius:20px;background:#fff;padding:15px;box-shadow:0 8px 24px rgba(15,23,42,.06)}
-    .PRgauge{width:100%;max-width:410px;height:auto;display:block;margin:0 auto}
-    .PRmetricStrip{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:10px}
-    .PRmetric{background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;padding:8px 9px}
-    .PRmetricK{font-size:9px;font-weight:900;letter-spacing:.07em;text-transform:uppercase;color:#64748b}
-    .PRmetricV{font-size:18px;font-weight:950;margin-top:2px}
-    .PRverdict{font-size:20px;font-weight:950;letter-spacing:-.02em}
-    .PRverdict.good{color:#15803d}.PRverdict.bad{color:#b91c1c}.PRverdict.neutral{color:#334155}
-    .PRcostRows{margin-top:10px}
-    .PRcostRow{display:grid;grid-template-columns:54px 1fr 54px;gap:8px;align-items:center;margin-top:7px}
-    .PRcostLabel{font-size:11px;font-weight:900}
-    .PRcostTrack{height:9px;background:#fee2e2;border-radius:999px;overflow:hidden}
-    .PRcostFill{height:100%;background:linear-gradient(90deg,#ef4444,#b91c1c);border-radius:999px}
-    .PRcostValue{text-align:right;font-size:11px;font-weight:950;color:#b91c1c}
-    .PRaudit{grid-column:1/-1;font-size:9px;color:#64748b;margin-top:-4px;padding-left:62px}
-    .PRactionGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}
-    .PRaction{border-radius:16px;padding:12px;border:1px solid #e2e8f0;min-height:112px}
-    .PRaction.keep{background:linear-gradient(180deg,#ecfdf5,#f7fffb);border-color:#bbf7d0}
-    .PRaction.watch{background:linear-gradient(180deg,#fff7ed,#fffdf8);border-color:#fed7aa}
-    .PRaction.fix{background:linear-gradient(180deg,#fff1f2,#fffafa);border-color:#fecaca}
-    .PRaction.target{background:linear-gradient(180deg,#eff6ff,#f8fbff);border-color:#bfdbfe}
-    .PRactionTitle{font-size:10px;font-weight:950;text-transform:uppercase;letter-spacing:.08em;margin-bottom:7px}
-    .PRaction.keep .PRactionTitle{color:#166534}.PRaction.watch .PRactionTitle{color:#c2410c}.PRaction.fix .PRactionTitle{color:#b91c1c}.PRaction.target .PRactionTitle{color:#1d4ed8}
-    .PRactionMain{font-size:14px;font-weight:950;line-height:1.25}
-    .PRactionSub{font-size:10px;color:#64748b;line-height:1.45;margin-top:4px}
-    .PRstory{margin-top:14px;border-radius:18px;padding:14px 16px;background:#0f172a;color:#fff}
-    .PRstoryTitle{font-size:10px;letter-spacing:.09em;text-transform:uppercase;font-weight:950;color:#94a3b8}
-    .PRstoryMain{font-size:18px;font-weight:950;margin-top:4px;line-height:1.25}
-    .PRstorySub{font-size:11px;color:#cbd5e1;margin-top:5px;line-height:1.5}
-
+    .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a}
     .PRh1{font-size:22px;font-weight:950;margin:0 0 6px}
     .PRsub{color:#475569;font-size:13px;margin:0 0 14px}
     .PRbox{border:1px solid #e5e7eb;border-radius:14px;padding:12px 14px;background:#fff}
@@ -12864,148 +12787,124 @@ const visualIntel = (() => {
     .PRintelCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
     .PRintelLabel{font-size:10px;font-weight:900;text-transform:uppercase;letter-spacing:.07em;color:#64748b}
     .PRintelValue{font-size:16px;font-weight:950;margin-top:3px;color:#0f172a}
+    .PRvisualHero{position:relative;overflow:hidden;border-radius:24px;padding:22px 24px;background:linear-gradient(135deg,#061a31 0%,#123d67 56%,#0f6a50 100%);color:#fff;box-shadow:0 18px 45px rgba(15,39,71,.20)}
+    .PRvisualHero:after{content:"";position:absolute;width:280px;height:280px;border-radius:50%;right:-90px;top:-115px;background:rgba(255,255,255,.07)}
+    .PRheroEye{font-size:10px;font-weight:950;letter-spacing:.14em;text-transform:uppercase;opacity:.72}
+    .PRheroPlayer{font-size:31px;font-weight:950;letter-spacing:-.035em;margin-top:5px}
+    .PRheroLine{font-size:12px;opacity:.86;margin-top:4px}
+    .PRvisualGrid{display:grid;grid-template-columns:minmax(300px,1.1fr) minmax(250px,.9fr);gap:14px;margin-top:14px}
+    .PRvisualCard{background:#fff;border:1px solid #dce5ef;border-radius:20px;padding:15px;box-shadow:0 8px 24px rgba(15,23,42,.06)}
+    .PRgauge{width:100%;max-width:420px;height:auto;display:block;margin:0 auto}
+    .PRtriples{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}
+    .PRmini{border:1px solid #e2e8f0;background:#f8fafc;border-radius:12px;padding:8px}
+    .PRminiK{font-size:9px;font-weight:950;letter-spacing:.07em;text-transform:uppercase;color:#64748b}
+    .PRminiV{font-size:19px;font-weight:950;margin-top:2px}
+    .PRcostRow{display:grid;grid-template-columns:55px 1fr 42px;gap:8px;align-items:center;margin-top:8px}
+    .PRcostTrack{height:10px;background:#fee2e2;border-radius:999px;overflow:hidden}
+    .PRcostFill{height:100%;background:linear-gradient(90deg,#ef4444,#991b1b);border-radius:999px}
+    .PRcostAudit{grid-column:1/-1;font-size:9px;color:#64748b;margin-top:-4px;padding-left:63px}
+    .PRactions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}
+    .PRact{border-radius:16px;padding:12px;min-height:112px;border:1px solid}
+    .PRact.keep{background:#f0fdf4;border-color:#bbf7d0}.PRact.watch{background:#fff7ed;border-color:#fed7aa}.PRact.fix{background:#fff1f2;border-color:#fecaca}.PRact.target{background:#eff6ff;border-color:#bfdbfe}
+    .PRactK{font-size:10px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;margin-bottom:7px}
+    .PRact.keep .PRactK{color:#166534}.PRact.watch .PRactK{color:#c2410c}.PRact.fix .PRactK{color:#b91c1c}.PRact.target .PRactK{color:#1d4ed8}
+    .PRactV{font-size:14px;font-weight:950;line-height:1.3}.PRactS{font-size:10px;color:#64748b;line-height:1.45;margin-top:4px}
+    .PRstory{margin-top:14px;border-radius:18px;padding:14px 16px;background:#0f172a;color:#fff}
+    .PRstoryK{font-size:10px;font-weight:950;letter-spacing:.09em;text-transform:uppercase;color:#94a3b8}
+    .PRstoryV{font-size:18px;font-weight:950;margin-top:4px}.PRstoryS{font-size:11px;color:#cbd5e1;line-height:1.5;margin-top:5px}
     .PRscoreGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
     .PRscoreCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
     .PRscoreBig{font-size:20px;font-weight:950;margin-top:3px}
     .PRconf{display:inline-block;border:1px solid #cbd5e1;border-radius:999px;padding:2px 7px;font-size:10px;font-weight:950}
-    @media(max-width:700px){
-      .PRintelGrid,.PRscoreGrid,.PRdash,.PRactionGrid,.PRmetricStrip{grid-template-columns:1fr}
-      .PRhero{padding:18px}
-      .PRheroName{font-size:25px}
-      .PRaudit{padding-left:0}
-    }
+    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples{grid-template-columns:1fr}.PRcostAudit{padding-left:0}}
   </style>
 
   <div class="PRr">
-    <div class="PRhero">
-      <div class="PRheroEyebrow">Den Golf · Performance Intelligence</div>
-      <div class="PRheroName">${PR_escapeHtml(playerName||"")}</div>
-      <div class="PRheroMeta">
-        ${PR_escapeHtml(String(yearLabel||"All"))}
-        ${String(seasonLimit||"All")!=="All" ? ` · Last ${PR_escapeHtml(String(seasonLimit))} games` : ""}
-        · ${PR_num(rounds,0)} rounds · ${PR_num(holes,0)} holes
-        · ${String(scoringMode)==="gross" ? "Gross scoring" : "Stableford"}
-      </div>
+    <div class="PRvisualHero">
+      <div class="PRheroEye">Den Golf · Performance Intelligence</div>
+      <div class="PRheroPlayer">${PR_escapeHtml(playerName||"")}</div>
+      <div class="PRheroLine">${PR_escapeHtml(String(yearLabel||"All"))} · ${PR_num(rounds,0)} rounds · ${PR_num(holes,0)} holes · ${String(scoringMode)==="gross"?"Gross scoring":"Stableford"}</div>
     </div>
 
-    ${visualIntel?.ok ? `
-    <div class="PRdash">
-      <div class="PRdashCard">
-        <div class="PRsecTitle" style="margin-bottom:2px;">Round vs Handicap</div>
-        ${(() => {
-          const d=Number(visualIntel.diff||0);
-          const capped=Math.max(-8,Math.min(8,d));
-          const angle=-90+((capped+8)/16)*180;
-          return `
-          <svg class="PRgauge" viewBox="0 0 420 235" aria-label="Round versus handicap gauge">
-            <defs>
-              <linearGradient id="redArc" x1="0" x2="1"><stop offset="0" stop-color="#7f1d1d"/><stop offset="1" stop-color="#ef4444"/></linearGradient>
-              <linearGradient id="greenArc" x1="0" x2="1"><stop offset="0" stop-color="#22c55e"/><stop offset="1" stop-color="#166534"/></linearGradient>
-            </defs>
-            <path d="M55 195 A155 155 0 0 1 210 40" fill="none" stroke="url(#redArc)" stroke-width="30"/>
-            <path d="M210 40 A155 155 0 0 1 365 195" fill="none" stroke="url(#greenArc)" stroke-width="30"/>
-            <line x1="210" y1="24" x2="210" y2="61" stroke="#0f172a" stroke-width="5"/>
-            <text x="210" y="18" text-anchor="middle" font-size="12" font-weight="900" fill="#0f172a">HANDICAP</text>
-            <text x="50" y="224" text-anchor="middle" font-size="11" font-weight="900" fill="#991b1b">WORSE</text>
-            <text x="210" y="224" text-anchor="middle" font-size="11" font-weight="900" fill="#475569">0</text>
-            <text x="370" y="224" text-anchor="middle" font-size="11" font-weight="900" fill="#166534">BETTER</text>
-            <g transform="rotate(${angle.toFixed(1)} 210 195)">
-              <line x1="210" y1="195" x2="210" y2="69" stroke="#0f172a" stroke-width="7" stroke-linecap="round"/>
-              <polygon points="210,53 201,79 219,79" fill="#0f172a"/>
-            </g>
-            <circle cx="210" cy="195" r="14" fill="#0f172a"/>
-            <circle cx="210" cy="195" r="5" fill="#fff"/>
-          </svg>`;
-        })()}
-
-        <div class="PRmetricStrip">
-          <div class="PRmetric">
-            <div class="PRmetricK">Actual</div>
-            <div class="PRmetricV">${Number.isFinite(visualIntel.actual)?visualIntel.actual.toFixed(0):"—"}</div>
-          </div>
-          <div class="PRmetric">
-            <div class="PRmetricK">Handicap target</div>
-            <div class="PRmetricV">${Number.isFinite(visualIntel.target)?visualIntel.target.toFixed(0):"—"}</div>
-          </div>
-          <div class="PRmetric">
-            <div class="PRmetricK">Difference</div>
-            <div class="PRmetricV ${visualIntel.diff>0?"PRgood":(visualIntel.diff<0?"PRbad":"")}">${visualIntel.diff>=0?"+":""}${Number(visualIntel.diff).toFixed(0)}</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="PRdashCard">
-        <div class="PRintelLabel">Round verdict</div>
-        <div class="PRverdict ${visualIntel.verdictTone}">${PR_escapeHtml(visualIntel.verdict)}</div>
-        <div class="PRmuted" style="font-size:11px;margin-top:5px;">${PR_escapeHtml(scorecardIntel.classWhy||"")}</div>
-
-        <div class="PRcostRows">
-          <div class="PRintelLabel" style="margin-top:12px;">Where the shots went</div>
-          ${visualIntel.latestLosses.length ? visualIntel.latestLosses.slice(0,3).map(h=>`
-            <div class="PRcostRow">
-              <div class="PRcostLabel">Hole ${h.hole}</div>
-              <div class="PRcostTrack"><div class="PRcostFill" style="width:${Math.min(100,Math.max(16,Number(h.cost)*34))}%"></div></div>
-              <div class="PRcostValue">-${Number(h.cost).toFixed(0)}</div>
-              <div class="PRaudit">Gross ${h.gross} · target ${h.targetGross} · Par ${h.par} · SI ${Number.isFinite(Number(h.si))?Number(h.si):"—"} · receives ${h.recv}</div>
+    ${(postRoundIntel?.exactHandicap?.ok) ? `
+      ${(() => {
+        const eh=postRoundIntel.exactHandicap;
+        const d=Number(eh.delta||0);
+        const capped=Math.max(-8,Math.min(8,d));
+        const angle=-90+((capped+8)/16)*180;
+        const cats=postRoundIntel.exactCategories||{};
+        const fix=cats.fix||null, watch=cats.watch||null, keep=Array.isArray(cats.keep)?cats.keep:[];
+        const verdict=d>=2?"Beat handicap target":d>0?"Slightly better than handicap":d<=-3&&eh.damageShare>=.65?"Good golf, damaged by a few holes":d<0?"Below handicap target":"Played to handicap";
+        const story=eh.losses.length&&eh.damageShare>=.65
+          ? `${Math.round(eh.damageShare*100)}% of all strokes lost to handicap target came from the three costliest holes. The other holes combined were ${eh.restDelta>=0?`${eh.restDelta.toFixed(0)} strokes better than target`:`${Math.abs(eh.restDelta).toFixed(0)} strokes below target`}.`
+          : d>0?`You beat your handicap target by ${d.toFixed(0)} strokes.`:d<0?`You finished ${Math.abs(d).toFixed(0)} strokes above handicap target.`:"You played exactly to handicap target.";
+        const next=fix?`Keep total loss in ${fix.displayLabel} to 2 strokes or fewer next round.`:"Keep total damage from the three costliest holes to 2 strokes or fewer next round.";
+        return `
+        <div class="PRvisualGrid">
+          <div class="PRvisualCard">
+            <div class="PRsecTitle">Round vs Handicap</div>
+            <svg class="PRgauge" viewBox="0 0 420 235">
+              <defs>
+                <linearGradient id="prRed" x1="0" x2="1"><stop offset="0" stop-color="#7f1d1d"/><stop offset="1" stop-color="#ef4444"/></linearGradient>
+                <linearGradient id="prGreen" x1="0" x2="1"><stop offset="0" stop-color="#22c55e"/><stop offset="1" stop-color="#166534"/></linearGradient>
+              </defs>
+              <path d="M55 195 A155 155 0 0 1 210 40" fill="none" stroke="url(#prRed)" stroke-width="30"/>
+              <path d="M210 40 A155 155 0 0 1 365 195" fill="none" stroke="url(#prGreen)" stroke-width="30"/>
+              <line x1="210" y1="24" x2="210" y2="61" stroke="#0f172a" stroke-width="5"/>
+              <text x="210" y="18" text-anchor="middle" font-size="12" font-weight="900" fill="#0f172a">HANDICAP</text>
+              <text x="50" y="224" text-anchor="middle" font-size="11" font-weight="900" fill="#991b1b">WORSE</text>
+              <text x="210" y="224" text-anchor="middle" font-size="11" font-weight="900" fill="#475569">0</text>
+              <text x="370" y="224" text-anchor="middle" font-size="11" font-weight="900" fill="#166534">BETTER</text>
+              <g transform="rotate(${angle.toFixed(1)} 210 195)">
+                <line x1="210" y1="195" x2="210" y2="69" stroke="#0f172a" stroke-width="7" stroke-linecap="round"/>
+                <polygon points="210,53 201,79 219,79" fill="#0f172a"/>
+              </g>
+              <circle cx="210" cy="195" r="14" fill="#0f172a"/><circle cx="210" cy="195" r="5" fill="#fff"/>
+            </svg>
+            <div class="PRtriples">
+              <div class="PRmini"><div class="PRminiK">Actual</div><div class="PRminiV">${eh.actual}</div></div>
+              <div class="PRmini"><div class="PRminiK">Handicap target</div><div class="PRminiV">${eh.target}</div></div>
+              <div class="PRmini"><div class="PRminiK">Difference</div><div class="PRminiV ${d>0?"PRgood":d<0?"PRbad":""}">${d>=0?"+":""}${d.toFixed(0)}</div></div>
             </div>
-          `).join("") : `<div class="PRmuted" style="font-size:11px;margin-top:6px;">No holes finished worse than handicap target.</div>`}
+          </div>
+
+          <div class="PRvisualCard">
+            <div class="PRsecTitle">Where the shots went</div>
+            <div style="font-size:20px;font-weight:950;margin-top:2px;">${PR_escapeHtml(verdict)}</div>
+            ${eh.losses.slice(0,3).map(h=>`
+              <div class="PRcostRow">
+                <div style="font-size:11px;font-weight:950;">Hole ${h.hole}</div>
+                <div class="PRcostTrack"><div class="PRcostFill" style="width:${Math.min(100,Math.max(18,h.cost*34))}%"></div></div>
+                <div style="font-size:12px;font-weight:950;color:#b91c1c;text-align:right;">-${h.cost.toFixed(0)}</div>
+                <div class="PRcostAudit">Gross ${h.gross} · target ${h.target} · Par ${h.par} · SI ${Number.isFinite(h.si)?h.si:"—"} · receives ${h.strokes}</div>
+              </div>`).join("")}
+          </div>
         </div>
-      </div>
-    </div>
 
-    <div class="PRactionGrid">
-      <div class="PRaction keep">
-        <div class="PRactionTitle">Keep doing</div>
-        ${visualIntel.keep.length ? visualIntel.keep.map(x=>`
-          <div style="margin-bottom:7px;">
-            <div class="PRactionMain">${PR_escapeHtml(x.displayLabel)}</div>
-            <div class="PRactionSub">${x.avg>=0?"+":""}${x.avg.toFixed(2)} strokes/hole vs handicap target · n=${x.holes}</div>
-          </div>`).join("") : `<div class="PRactionSub">No category is clearly above handicap target yet.</div>`}
-      </div>
+        <div class="PRactions">
+          <div class="PRact keep"><div class="PRactK">Keep doing</div>
+            ${keep.length?keep.map(x=>`<div style="margin-bottom:6px;"><div class="PRactV">${PR_escapeHtml(x.displayLabel)}</div><div class="PRactS">+${x.avg.toFixed(2)}/hole vs handicap · ${x.n} holes</div></div>`).join(""):`<div class="PRactS">No category is clearly above handicap target yet.</div>`}
+          </div>
+          <div class="PRact watch"><div class="PRactK">Watch</div>
+            ${watch?`<div class="PRactV">${PR_escapeHtml(watch.displayLabel)}</div><div class="PRactS">${watch.avg.toFixed(2)}/hole · ${watch.status} · ${watch.n} holes</div>`:`<div class="PRactS">No second scoring leak needs attention.</div>`}
+          </div>
+          <div class="PRact fix"><div class="PRactK">Fix first</div>
+            ${fix?`<div class="PRactV">${PR_escapeHtml(fix.displayLabel)}</div><div class="PRactS">${fix.avg.toFixed(2)}/hole · ${fix.status} · ${fix.n} holes</div>`:`<div class="PRactS">No recurring area is currently below handicap target.</div>`}
+          </div>
+          <div class="PRact target"><div class="PRactK">Next-round target</div><div class="PRactV">${PR_escapeHtml(next)}</div><div class="PRactS">One measurable scoring job.</div></div>
+        </div>
 
-      <div class="PRaction watch">
-        <div class="PRactionTitle">Watch</div>
-        ${visualIntel.watch ? `
-          <div class="PRactionMain">${PR_escapeHtml(visualIntel.watch.displayLabel)}</div>
-          <div class="PRactionSub">${visualIntel.watch.avg.toFixed(2)} strokes/hole vs target · ${visualIntel.watchStatus} · n=${visualIntel.watch.holes}</div>
-        ` : `<div class="PRactionSub">No second scoring leak currently needs attention.</div>`}
-      </div>
-
-      <div class="PRaction fix">
-        <div class="PRactionTitle">Fix first</div>
-        ${visualIntel.fix ? `
-          <div class="PRactionMain">${PR_escapeHtml(visualIntel.fix.displayLabel)}</div>
-          <div class="PRactionSub">${visualIntel.fix.avg.toFixed(2)} strokes/hole vs target · ${visualIntel.fixStatus} · n=${visualIntel.fix.holes}</div>
-        ` : `<div class="PRactionSub">No recurring category is currently below handicap target.</div>`}
-      </div>
-
-      <div class="PRaction target">
-        <div class="PRactionTitle">Next-round target</div>
-        <div class="PRactionMain">${PR_escapeHtml(visualIntel.nextTarget)}</div>
-        <div class="PRactionSub">One measurable job — not ten swing thoughts.</div>
-      </div>
-    </div>
-
-    <div class="PRstory">
-      <div class="PRstoryTitle">The story of this round</div>
-      <div class="PRstoryMain">${PR_escapeHtml(visualIntel.verdict)}</div>
-      <div class="PRstorySub">
-        ${PR_escapeHtml(visualIntel.story||"")}
-      </div>
-    </div>
+        <div class="PRstory"><div class="PRstoryK">The story of this round</div><div class="PRstoryV">${PR_escapeHtml(verdict)}</div><div class="PRstoryS">${PR_escapeHtml(story)}</div></div>`;
+      })()}
     ` : `
-      <div class="PRdashCard" style="margin-top:14px;border-color:#fecaca;background:#fff7f7;">
-        <div class="PRverdict bad">Performance graphics unavailable</div>
-        <div class="PRmuted" style="font-size:11px;margin-top:5px;">
-          The selected round does not currently expose enough gross/par/SI data to build the handicap gauge.
-          This warning is shown deliberately rather than silently hiding the graphics.
-        </div>
+      <div class="PRvisualCard" style="margin-top:14px;border-color:#fecaca;background:#fff7f7;">
+        <div style="font-size:18px;font-weight:950;color:#b91c1c;">Gauge data check failed</div>
+        <div class="PRmuted" style="font-size:11px;margin-top:4px;">Post-Round Intelligence loaded, but the exact gross handicap snapshot did not. Check console for "Exact handicap snapshot failed".</div>
       </div>
     `}
 
     <div class="PRsub" style="margin-top:12px;">
-      Benchmark: <b>${PR_escapeHtml(peerBand||"—")}</b>
-      · detailed evidence below
+      Benchmark: <b>${PR_escapeHtml(peerBand||"—")}</b> · detailed evidence below
       <span class="PRpill" style="margin-left:8px;">${(String(scoringMode)==="gross" ? "Gross strokes" : "Stableford points")} vs ${(__usingVirtualSameHcapPeer ? "Virtual same-handicap player" : (__effComparatorMode==="par" ? "Par baseline" : (__effComparatorMode==="field" ? "Field" : "Handicap band")))}</span>
     </div>
 
@@ -13093,18 +12992,16 @@ const visualIntel = (() => {
 
       <div class="PRintelCard" style="margin-top:10px;">
         <div class="PRintelLabel">Where the round was lost</div>
-        ${(visualIntel?.ok && visualIntel.latest?.losses?.length) ? `
+        ${(postRoundIntel?.exactHandicap?.ok && postRoundIntel.exactHandicap.losses.length) ? `
           <div style="font-weight:900;margin-top:4px;">
-            ${Number.isFinite(visualIntel.latest.damageShare)?`The three costliest holes produced ${(visualIntel.latest.damageShare*100).toFixed(0)}% of all shots lost to handicap target.`:""}
+            The three costliest holes produced ${(postRoundIntel.exactHandicap.damageShare*100).toFixed(0)}% of all strokes lost to handicap target.
           </div>
           <div style="margin-top:5px;line-height:1.6;">
-            ${visualIntel.latest.losses.slice(0,3).map(h=>`
-              <div>
-                <b>Hole ${h.hole}</b> (Par ${h.par}${Number.isFinite(h.si)?`, SI ${h.si}`:""}):
-                cost <span class="PRbad"><b>${Number(h.cost).toFixed(0)}</b></span> stroke${Number(h.cost)===1?"":"s"}
-                <span class="PRmuted" style="font-size:10px;"> · gross ${h.gross}, target ${h.targetGross}, receives ${h.recv}</span>
-              </div>
-            `).join("")}
+            ${postRoundIntel.exactHandicap.losses.slice(0,3).map(h=>`
+              <div><b>Hole ${h.hole}</b> (Par ${h.par}${Number.isFinite(h.si)?`, SI ${h.si}`:""}):
+                cost <span class="PRbad"><b>${h.cost.toFixed(0)}</b></span> stroke${h.cost===1?"":"s"}
+                <span class="PRmuted" style="font-size:10px;"> · gross ${h.gross}, target ${h.target}, receives ${h.strokes}</span>
+              </div>`).join("")}
           </div>
         ` : `<div class="PRmuted" style="margin-top:4px;">No meaningful damage holes identified.</div>`}
       </div>
