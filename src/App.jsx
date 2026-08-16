@@ -12980,11 +12980,36 @@ const scorecardIntel = (() => {
     .PRphaseBars{margin-top:10px}.PRphaseRow{display:grid;grid-template-columns:85px 1fr 58px;gap:8px;align-items:center;margin-top:7px}
     .PRphaseTrack{height:9px;background:#e2e8f0;border-radius:999px;overflow:hidden}
     .PRphaseFillGood{height:100%;background:#16a34a}.PRphaseFillBad{height:100%;background:#dc2626}
+    .PRopportunity{margin-top:14px;border-radius:20px;padding:16px 18px;background:linear-gradient(135deg,#7f1d1d,#b91c1c 58%,#ef4444);color:#fff;box-shadow:0 12px 28px rgba(185,28,28,.18)}
+    .PRoppK{font-size:10px;font-weight:950;letter-spacing:.12em;text-transform:uppercase;opacity:.78}
+    .PRoppV{font-size:22px;font-weight:950;letter-spacing:-.02em;margin-top:4px}
+    .PRoppS{font-size:11px;line-height:1.5;margin-top:5px;color:#fee2e2}
+    .PRfingerprint{display:grid;grid-template-columns:repeat(18,minmax(0,1fr));gap:4px;margin-top:10px}
+    .PRfinger{border-radius:8px;text-align:center;padding:8px 1px;border:1px solid rgba(15,23,42,.06)}
+    .PRfingerN{font-size:9px;font-weight:950}.PRfingerV{font-size:9px;font-weight:950;margin-top:2px}
+    .PRstrengthRows{margin-top:10px}
+    .PRstrengthRow{display:grid;grid-template-columns:110px 1fr 50px;gap:8px;align-items:center;margin-top:8px}
+    .PRstrengthLabel{font-size:10px;font-weight:900}
+    .PRstrengthTrack{position:relative;height:12px;background:#eef2f7;border-radius:999px;overflow:hidden}
+    .PRstrengthZero{position:absolute;left:50%;top:0;bottom:0;width:1px;background:#64748b;z-index:2}
+    .PRstrengthBar{position:absolute;top:1px;bottom:1px;border-radius:999px}
+    .PRstrengthValue{font-size:10px;font-weight:950;text-align:right}
+    .PRbadVerdict{margin-top:10px;border-radius:12px;padding:10px 12px;background:#0f172a;color:#fff}
+    .PRbadVerdictK{font-size:9px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8}
+    .PRbadVerdictV{font-size:14px;font-weight:950;margin-top:3px}
+    .PRbadVerdictS{font-size:10px;color:#cbd5e1;line-height:1.45;margin-top:4px}
+    .PRgamePlan{margin-top:14px;border-radius:20px;padding:15px;background:linear-gradient(135deg,#eff6ff,#f8fafc);border:1px solid #bfdbfe}
+    .PRplanGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
+    .PRplanCard{background:#fff;border:1px solid #dbeafe;border-radius:14px;padding:11px}
+    .PRplanK{font-size:9px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;color:#1d4ed8}
+    .PRplanV{font-size:14px;font-weight:950;margin-top:4px;line-height:1.3}
+    .PRplanS{font-size:10px;color:#64748b;line-height:1.45;margin-top:4px}
+    .PRcourseDnaPage{break-before:page;page-break-before:always}
     .PRscoreGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
     .PRscoreCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
     .PRscoreBig{font-size:20px;font-weight:950;margin-top:3px}
     .PRconf{display:inline-block;border:1px solid #cbd5e1;border-radius:999px;padding:2px 7px;font-size:10px;font-weight:950}
-    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples,.PRlatestGrid,.PRgeneralGrid{grid-template-columns:1fr}.PRcostAudit{padding-left:0}.PRholeStrip{grid-template-columns:repeat(9,minmax(0,1fr))}.PRdnaGrid{grid-template-columns:1fr}}
+    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples,.PRlatestGrid,.PRgeneralGrid{grid-template-columns:1fr}.PRcostAudit{padding-left:0}.PRholeStrip{grid-template-columns:repeat(9,minmax(0,1fr))}.PRdnaGrid,.PRplanGrid{grid-template-columns:1fr}.PRfingerprint{grid-template-columns:repeat(9,minmax(0,1fr))}}
   </style>
 
   <div class="PRr">
@@ -13134,56 +13159,72 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
   <div class="PRgeneralGrid">
     <div class="PRchartBox">
       <div class="PRvizTitle" style="font-size:12px;">Form trend — recent rounds</div>
-      <div class="PRvizSub">Green dots beat handicap target; red dots missed it.</div>
+      <div class="PRvizSub">Each dot is labelled in strokes versus handicap target. Dashed trend shows direction of travel.</div>
       ${(() => {
         const rs=postRoundIntel.exactCategories.roundSummaries.slice(-10);
         const vals=rs.map(r=>Number(r.delta||0));
-        const min=Math.min(-2,...vals),max=Math.max(2,...vals);
-        const W=620,H=230,L=38,R=14,T=18,B=34;
+        const min=Math.min(-2,...vals)-1,max=Math.max(2,...vals)+1;
+        const W=620,H=250,L=42,R=18,T=28,B=42;
         const x=i=>L+(rs.length===1?0.5:(i/(rs.length-1)))*(W-L-R);
         const y=v=>T+((max-v)/(max-min))*(H-T-B);
         const z=y(0);
         const pts=vals.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+
+        let slope=0,intercept=vals[0]||0;
+        if(vals.length>1){
+          const n=vals.length;
+          const sx=(n-1)*n/2;
+          const sy=vals.reduce((s,v)=>s+v,0);
+          const sxx=Array.from({length:n},(_,i)=>i*i).reduce((s,v)=>s+v,0);
+          const sxy=vals.reduce((s,v,i)=>s+i*v,0);
+          const den=n*sxx-sx*sx;
+          if(den){slope=(n*sxy-sx*sy)/den;intercept=(sy-slope*sx)/n;}
+        }
+        const trendStart=intercept;
+        const trendEnd=intercept+slope*Math.max(0,vals.length-1);
+
         return `<svg class="PRchartSvg" viewBox="0 0 ${W} ${H}">
           <line x1="${L}" y1="${z}" x2="${W-R}" y2="${z}" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 4"/>
-          <polyline points="${pts}" fill="none" stroke="#0f2747" stroke-width="4" stroke-linejoin="round"/>
-          ${rs.map((r,i)=>`<circle cx="${x(i)}" cy="${y(vals[i])}" r="5" fill="${vals[i]>=0?"#16a34a":"#dc2626"}"/>
-            <text x="${x(i)}" y="${H-10}" text-anchor="middle" font-size="8" fill="#64748b">${PR_escapeHtml(r.dateLabel)}</text>`).join("")}
+          <text x="${L}" y="${Math.max(11,z-6)}" font-size="8.5" fill="#64748b">HANDICAP TARGET</text>
+          <polyline points="${pts}" fill="none" stroke="#0f2747" stroke-width="3.5" stroke-linejoin="round"/>
+          ${vals.length>1?`<line x1="${x(0)}" y1="${y(trendStart)}" x2="${x(vals.length-1)}" y2="${y(trendEnd)}" stroke="${slope>=0?"#16a34a":"#dc2626"}" stroke-width="2.5" stroke-dasharray="7 5"/>`:""}
+          ${rs.map((r,i)=>{
+            const v=vals[i];
+            const c=v>=0?"#16a34a":"#dc2626";
+            return `<circle cx="${x(i)}" cy="${y(v)}" r="6" fill="${c}" stroke="#fff" stroke-width="2"/>
+              <text x="${x(i)}" y="${y(v)-10}" text-anchor="middle" font-size="9" font-weight="950" fill="${c}">${v>=0?"+":""}${v.toFixed(0)}</text>
+              <text x="${x(i)}" y="${H-12}" text-anchor="middle" font-size="8" fill="#64748b">${PR_escapeHtml(r.dateLabel)}</text>`;
+          }).join("")}
         </svg>`;
       })()}
     </div>
 
     <div class="PRchartBox">
-      <div class="PRvizTitle" style="font-size:12px;">Game shape radar</div>
-      <div class="PRvizSub">50 = handicap target. Further out = stronger than target.</div>
+      <div class="PRvizTitle" style="font-size:12px;">Strength profile vs handicap target</div>
+      <div class="PRvizSub">Sorted scoring profile. Green = stronger than target; red = weaker.</div>
       ${(() => {
-        const rows=postRoundIntel.exactCategories.rows||[];
-        const val=label=>rows.find(r=>r.displayLabel===label)?.avg;
-        const combine=(a,b)=>{
-          const xs=[a,b].map(Number).filter(Number.isFinite);
-          return xs.length?xs.reduce((s,v)=>s+v,0)/xs.length:NaN;
-        };
-        const axes=[
-          ["Par 3",val("Par: Par 3")],
-          ["Par 4",val("Par: Par 4")],
-          ["Par 5",val("Par: Par 5")],
-          ["<200",combine(val("Yardage: <150"),val("Yardage: 150–200"))],
-          ["201–350",val("Yardage: 201–350")],
-          ["351+",combine(val("Yardage: 351–420"),val("Yardage: 420+"))],
-          ["SI 1–6",val("Stroke Index: SI 1–6")],
-          ["SI 13–18",val("Stroke Index: SI 13–18")]
-        ];
-        const N=axes.length,cx=150,cy=140,maxR=104;
-        const p=(i,r)=>{const a=-Math.PI/2+i*2*Math.PI/N;return [cx+Math.cos(a)*r,cy+Math.sin(a)*r];};
-        const score=v=>Number.isFinite(Number(v))?Math.max(12,Math.min(92,50+Number(v)*45)):50;
-        const poly=axes.map(([l,v],i)=>p(i,maxR*score(v)/100).join(",")).join(" ");
-        return `<svg class="PRchartSvg" viewBox="0 0 300 290">
-          ${[25,50,75,100].map(q=>`<polygon points="${axes.map((_,i)=>p(i,maxR*q/100).join(",")).join(" ")}" fill="none" stroke="${q===50?"#94a3b8":"#e2e8f0"}" stroke-width="${q===50?1.5:1}"/>`).join("")}
-          ${axes.map((_,i)=>{const [x2,y2]=p(i,maxR);return `<line x1="${cx}" y1="${cy}" x2="${x2}" y2="${y2}" stroke="#e2e8f0"/>`;}).join("")}
-          <polygon points="${poly}" fill="rgba(15,106,80,.18)" stroke="#0f6a50" stroke-width="3"/>
-          ${axes.map(([label],i)=>{const [lx,ly]=p(i,maxR+20);return `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="8.5" font-weight="800" fill="#475569">${PR_escapeHtml(label)}</text>`;}).join("")}
-          <text x="${cx}" y="${cy+3}" text-anchor="middle" font-size="9" font-weight="900" fill="#64748b">50 = target</text>
-        </svg>`;
+        const rows=(postRoundIntel.exactCategories.rows||[])
+          .filter(r=>Number.isFinite(Number(r.avg)))
+          .slice()
+          .sort((a,b)=>Number(b.avg)-Number(a.avg))
+          .slice(0,8);
+        const maxAbs=Math.max(.25,...rows.map(r=>Math.abs(Number(r.avg))));
+        return `<div class="PRstrengthRows">
+          ${rows.map(r=>{
+            const v=Number(r.avg);
+            const width=Math.min(50,Math.abs(v)/maxAbs*48);
+            const left=v>=0?50:(50-width);
+            const bg=v>=0?"#16a34a":"#dc2626";
+            return `<div class="PRstrengthRow">
+              <div class="PRstrengthLabel">${PR_escapeHtml(r.displayLabel)}</div>
+              <div class="PRstrengthTrack">
+                <div class="PRstrengthZero"></div>
+                <div class="PRstrengthBar" style="left:${left}%;width:${width}%;background:${bg};"></div>
+              </div>
+              <div class="PRstrengthValue" style="color:${bg};">${v>=0?"+":""}${v.toFixed(2)}</div>
+            </div>`;
+          }).join("")}
+        </div>`;
       })()}
     </div>
   </div>
@@ -13193,8 +13234,27 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
       <div class="PRvizTitle" style="font-size:12px;">Good rounds vs poor rounds</div>
       <div class="PRvizSub">${postRoundIntel.exactCategories.goodBad ? PR_escapeHtml(postRoundIntel.exactCategories.goodBad.headline) : "Need at least four rounds for this comparison."}</div>
       ${postRoundIntel.exactCategories.goodBad ? (() => {
-        const ms=postRoundIntel.exactCategories.goodBad.metrics;
+        const gb=postRoundIntel.exactCategories.goodBad;
+        const ms=gb.metrics;
         const maxV=Math.max(1,...ms.flatMap(m=>[m.good,m.bad]));
+        const doubles=ms.find(m=>m.key==="doublesPlus");
+        const pars=ms.find(m=>m.key==="parsOrBetter");
+        const birds=ms.find(m=>m.key==="birdiesPlus");
+        const damage=ms.find(m=>m.key==="top3Loss");
+
+        let verdict=gb.headline;
+        let explanation=`The biggest measurable difference is ${gb.driver.label.toLowerCase()}.`;
+        if(doubles&&pars&&doubles.bad>doubles.good+0.75&&pars.good>pars.bad+1){
+          verdict="Poor rounds are being driven by extra damage and fewer solid holes";
+          explanation=`Better rounds average ${doubles.good.toFixed(1)} doubles+ and ${pars.good.toFixed(1)} pars+, versus ${doubles.bad.toFixed(1)} doubles+ and ${pars.bad.toFixed(1)} pars+ in poorer rounds.`;
+          if(birds&&Math.abs(birds.good-birds.bad)<1){
+            explanation+=` Birdie production changes far less, so chasing more birdies is not the main lever.`;
+          }
+        }else if(damage&&damage.bad>damage.good+1){
+          verdict="A few expensive holes are separating your good and bad rounds";
+          explanation=`Top-three-hole damage rises from ${damage.good.toFixed(1)} strokes in better rounds to ${damage.bad.toFixed(1)} in poorer rounds.`;
+        }
+
         return `<div class="PRgbGrid">
           <div></div><div class="PRgbHead">Better 30%</div><div class="PRgbHead">Poorer 30%</div>
           ${ms.map(m=>`
@@ -13202,6 +13262,11 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
             <div><div class="PRgbBar"><div class="PRgbGood" style="width:${Math.min(100,m.good/maxV*100)}%"></div></div><div class="PRgbVal">${m.good.toFixed(1)}</div></div>
             <div><div class="PRgbBar"><div class="PRgbBad" style="width:${Math.min(100,m.bad/maxV*100)}%"></div></div><div class="PRgbVal">${m.bad.toFixed(1)}</div></div>
           `).join("")}
+        </div>
+        <div class="PRbadVerdict">
+          <div class="PRbadVerdictK">Why your bad rounds are bad</div>
+          <div class="PRbadVerdictV">${PR_escapeHtml(verdict)}</div>
+          <div class="PRbadVerdictS">${PR_escapeHtml(explanation)}</div>
         </div>`;
       })() : ""}
     </div>
@@ -13230,11 +13295,94 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
 
 ${postRoundIntel.exactCategories?.courseDNA ? (() => {
   const dna=postRoundIntel.exactCategories.courseDNA;
+  const cats=postRoundIntel.exactCategories;
   const maxPhase=Math.max(1,...(dna.phases||[]).map(p=>Math.abs(Number(p.avgPerRound||0))));
+
+  // Rank the strongest actionable signal into ONE headline opportunity.
+  const opportunityCandidates=[];
+  if(dna.nemesis?.length){
+    const h=dna.nemesis[0];
+    opportunityCandidates.push({
+      score:Math.abs(h.avgDelta)*Math.max(.5,h.badRate)*Math.sqrt(h.appearances),
+      title:`Recurring Hole ${h.hole} damage`,
+      detail:`Hole ${h.hole} is below handicap target in ${h.badCount}/${h.appearances} rounds and has cost ${h.totalCost.toFixed(0)} strokes in total.`
+    });
+  }
+  if(dna.startPattern?.status==="PROBLEM" && dna.startPhase){
+    opportunityCandidates.push({
+      score:Math.abs(Number(dna.startPhase.avgPerRound||0))*1.25,
+      title:"Improve the start of the round",
+      detail:`Holes 1–3 average ${dna.startPhase.avgPerRound.toFixed(1)} strokes per round versus target and are below target in ${Math.round(dna.startPhase.badRoundRate*100)}% of rounds.`
+    });
+  }
+  if(cats.fix){
+    opportunityCandidates.push({
+      score:Math.abs(Number(cats.fix.avg||0))*Math.sqrt(Math.max(1,cats.fix.n))/3,
+      title:`Improve ${cats.fix.displayLabel}`,
+      detail:`This category averages ${cats.fix.avg.toFixed(2)} strokes per hole versus handicap target across ${cats.fix.n} holes.`
+    });
+  }
+  if(cats.goodBad?.driver){
+    const d=cats.goodBad.driver;
+    opportunityCandidates.push({
+      score:Math.max(0,Number(d.separation||0)),
+      title:`Reduce ${d.label.toLowerCase()}`,
+      detail:`This is the biggest measurable separator between the better and poorer 30% of rounds.`
+    });
+  }
+  const topOpportunity=opportunityCandidates.sort((a,b)=>b.score-a.score)[0]||{
+    title:"Protect the card",
+    detail:"No single recurring weakness dominates yet; focus on limiting costly holes."
+  };
+
+  const holeFingerprint=Array.from({length:18},(_,i)=>{
+    const h=dna.holeRows?.find(x=>x.hole===i+1);
+    return h||{hole:i+1,appearances:0,avgDelta:NaN,badRate:0,goodRate:0,totalCost:0};
+  });
+
+  const bestStrength=(cats.keep||[]).slice().sort((a,b)=>Number(b.avg)-Number(a.avg))[0]||null;
+  const startPlan=dna.startPattern?.status==="PROBLEM"
+    ? `Play holes 1–3 at no worse than handicap target.`
+    : `Start patiently: stay at or above handicap target through hole 3.`;
+  const damageMetric=cats.goodBad?.metrics?.find(m=>m.key==="doublesPlus");
+  const damagePlan=damageMetric
+    ? `Keep doubles+ at ${Math.max(1,Math.round(damageMetric.good))} or fewer.`
+    : `Keep the three costliest holes to 2 lost strokes or fewer.`;
+  const strengthPlan=bestStrength
+    ? `Keep exploiting ${bestStrength.displayLabel} (${bestStrength.avg>=0?"+":""}${bestStrength.avg.toFixed(2)}/hole).`
+    : `Keep creating pars-or-better without chasing extra risk.`;
+
   return `
-  <div class="PRvizSection">
+  <div class="PRvizSection PRcourseDnaPage">
     <div class="PRvizTitle">Course DNA — Recurring Patterns</div>
     <div class="PRvizSub">Repeated tendencies that may not be obvious from a single scorecard.</div>
+
+    <div class="PRopportunity">
+      <div class="PRoppK">#1 Scoring Opportunity</div>
+      <div class="PRoppV">${PR_escapeHtml(topOpportunity.title)}</div>
+      <div class="PRoppS">${PR_escapeHtml(topOpportunity.detail)}</div>
+    </div>
+
+    <div class="PRchartBox" style="margin-top:12px;">
+      <div class="PRvizTitle" style="font-size:12px;">18-hole course fingerprint</div>
+      <div class="PRvizSub">Recurring performance by hole number. Deep red = persistent cost; green = repeated strength.</div>
+      <div class="PRfingerprint">
+        ${holeFingerprint.map(h=>{
+          const v=Number(h.avgDelta);
+          let bg="#f1f5f9",fg="#64748b";
+          if(Number.isFinite(v)){
+            if(v<=-1) {bg="#fecaca";fg="#991b1b";}
+            else if(v<-.15) {bg="#ffedd5";fg="#c2410c";}
+            else if(v>=1) {bg="#bbf7d0";fg="#166534";}
+            else if(v>.15) {bg="#dcfce7";fg="#15803d";}
+          }
+          const label=Number.isFinite(v)?`${v>=0?"+":""}${v.toFixed(1)}`:"—";
+          return `<div class="PRfinger" style="background:${bg};color:${fg};" title="Hole ${h.hole}: ${h.appearances||0} appearances, ${Number.isFinite(v)?v.toFixed(2):"n/a"} strokes/round vs target">
+            <div class="PRfingerN">${h.hole}</div><div class="PRfingerV">${label}</div>
+          </div>`;
+        }).join("")}
+      </div>
+    </div>
 
     <div class="PRdnaGrid">
       <div class="PRdnaCard bad">
@@ -13307,6 +13455,28 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
             <div class="PRdnaS">${Math.round(h.badRate*100)}% below target · ${h.appearances} appearances · ${h.totalCost.toFixed(0)} strokes lost</div>
           </div>
         `).join("") : `<div class="PRdnaS" style="margin-top:8px;">No recurring problem hole has enough evidence yet.</div>`}
+      </div>
+    </div>
+
+    <div class="PRgamePlan">
+      <div class="PRvizTitle">Next Round Game Plan</div>
+      <div class="PRvizSub">Three things to remember on the first tee — no technical swing diagnosis required.</div>
+      <div class="PRplanGrid">
+        <div class="PRplanCard">
+          <div class="PRplanK">1 · Start</div>
+          <div class="PRplanV">${PR_escapeHtml(startPlan)}</div>
+          <div class="PRplanS">${dna.hole1Pattern ? "Hole 1 is already a proven recurring signal, so the opening target matters." : "Use the first three holes as a scoring-control checkpoint."}</div>
+        </div>
+        <div class="PRplanCard">
+          <div class="PRplanK">2 · Damage</div>
+          <div class="PRplanV">${PR_escapeHtml(damagePlan)}</div>
+          <div class="PRplanS">Your poorer rounds are separated from better rounds mainly by costly-hole damage when the data supports it.</div>
+        </div>
+        <div class="PRplanCard">
+          <div class="PRplanK">3 · Strength</div>
+          <div class="PRplanV">${PR_escapeHtml(strengthPlan)}</div>
+          <div class="PRplanS">Protect what is already working instead of trying to rebuild the whole game.</div>
+        </div>
       </div>
     </div>
   </div>
