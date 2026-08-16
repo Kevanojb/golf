@@ -13200,6 +13200,45 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
     </div>
 
     <div class="PRchartBox">
+      <div class="PRvizTitle" style="font-size:12px;">Game DNA — Spider Chart</div>
+      <div class="PRvizSub">Your overall game shape. 50 = playing to handicap; further out = stronger than target, further in = weaker.</div>
+      ${(() => {
+        const rows=postRoundIntel.exactCategories.rows||[];
+        const val=label=>rows.find(r=>r.displayLabel===label)?.avg;
+        const combine=(a,b)=>{
+          const xs=[a,b].map(Number).filter(Number.isFinite);
+          return xs.length?xs.reduce((s,v)=>s+v,0)/xs.length:NaN;
+        };
+        const axes=[
+          ["Par 3",val("Par: Par 3")],
+          ["Par 4",val("Par: Par 4")],
+          ["Par 5",val("Par: Par 5")],
+          ["<200",combine(val("Yardage: <150"),val("Yardage: 150–200"))],
+          ["201–350",val("Yardage: 201–350")],
+          ["351+",combine(val("Yardage: 351–420"),val("Yardage: 420+"))],
+          ["SI 1–6",val("Stroke Index: SI 1–6")],
+          ["SI 13–18",val("Stroke Index: SI 13–18")]
+        ];
+        const N=axes.length,cx=150,cy=140,maxR=104;
+        const p=(i,r)=>{const a=-Math.PI/2+i*2*Math.PI/N;return [cx+Math.cos(a)*r,cy+Math.sin(a)*r];};
+        const score=v=>Number.isFinite(Number(v))?Math.max(12,Math.min(92,50+Number(v)*45)):50;
+        const poly=axes.map(([l,v],i)=>p(i,maxR*score(v)/100).join(",")).join(" ");
+        return `<svg class="PRchartSvg" viewBox="0 0 300 290">
+          ${[25,50,75,100].map(q=>`<polygon points="${axes.map((_,i)=>p(i,maxR*q/100).join(",")).join(" ")}" fill="none" stroke="${q===50?"#64748b":"#e2e8f0"}" stroke-width="${q===50?1.8:1}" ${q===50?'stroke-dasharray="4 3"':""}/>`).join("")}
+          ${axes.map((_,i)=>{const [x2,y2]=p(i,maxR);return `<line x1="${cx}" y1="${cy}" x2="${x2}" y2="${y2}" stroke="#e2e8f0"/>`;}).join("")}
+          <polygon points="${poly}" fill="rgba(15,106,80,.18)" stroke="#0f6a50" stroke-width="3"/>
+          ${axes.map(([label,v],i)=>{
+            const [lx,ly]=p(i,maxR+20);
+            const [dx,dy]=p(i,maxR*score(v)/100);
+            return `<circle cx="${dx}" cy="${dy}" r="3.5" fill="${Number(v)>=0?"#16a34a":"#dc2626"}"/>
+              <text x="${lx}" y="${ly}" text-anchor="middle" font-size="8.5" font-weight="800" fill="#475569">${PR_escapeHtml(label)}</text>`;
+          }).join("")}
+          <text x="${cx}" y="${cy+3}" text-anchor="middle" font-size="9" font-weight="950" fill="#475569">50 = HANDICAP</text>
+        </svg>`;
+      })()}
+    </div>
+
+    <div class="PRchartBox">
       <div class="PRvizTitle" style="font-size:12px;">Strength profile vs handicap target</div>
       <div class="PRvizSub">Sorted scoring profile. Green = stronger than target; red = weaker.</div>
       ${(() => {
