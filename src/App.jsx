@@ -14397,28 +14397,48 @@ async function PR_downloadSeasonReportPDF(){
 
     const filename = `SeasonReport_${safePart(params.playerName, "player")}_${safePart(params.yearLabel, "season")}.pdf`;
 
+    // FINAL PDF STRATEGY:
+    // Render the report at a stable desktop width in normal document coordinates,
+    // then let html2pdf scale the COMPLETE canvas proportionally onto A4.
+    // Do not park the source at a huge negative X coordinate: html2canvas can
+    // treat that coordinate as part of the capture and crop one side of the report.
+    const PDF_SOURCE_WIDTH = 760;
+
     holder = document.createElement("div");
-    holder.style.position = "fixed";
-    holder.style.left = "-100000px";
+    holder.style.position = "absolute";
+    holder.style.left = "0";
     holder.style.top = "0";
-    holder.style.width = "680px";
+    holder.style.width = `${PDF_SOURCE_WIDTH}px`;
     holder.style.background = "#ffffff";
+    holder.style.zIndex = "-2147483000";
+    holder.style.pointerEvents = "none";
+    holder.style.overflow = "visible";
 
     const clone = body.cloneNode(true);
     clone.removeAttribute("id");
     clone.classList.add("PRpdfExportRoot");
-    clone.style.width = "660px";
-    clone.style.maxWidth = "660px";
+    clone.style.width = `${PDF_SOURCE_WIDTH}px`;
+    clone.style.maxWidth = `${PDF_SOURCE_WIDTH}px`;
+    clone.style.margin = "0";
     clone.style.background = "#ffffff";
-    clone.style.padding = "8px 10px 8px 8px";
+    clone.style.padding = "8px";
     clone.style.boxSizing = "border-box";
+    clone.style.overflow = "visible";
 
     holder.appendChild(clone);
     document.body.appendChild(holder);
 
+    // Wait for layout/fonts before html2canvas measures the clone.
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    if (document.fonts && document.fonts.ready) {
+      try { await document.fonts.ready; } catch (_) {}
+    }
+
+    const captureWidth = Math.max(PDF_SOURCE_WIDTH, Math.ceil(clone.scrollWidth || PDF_SOURCE_WIDTH));
+
     await html2pdf()
       .set({
-        margin: [7, 7, 7, 7],
+        margin: [5, 5, 5, 5],
         filename,
         image: { type: "jpeg", quality: 0.98 },
         html2canvas: {
@@ -14426,9 +14446,12 @@ async function PR_downloadSeasonReportPDF(){
           useCORS: true,
           backgroundColor: "#ffffff",
           logging: false,
-          windowWidth: 760,
+          windowWidth: Math.max(1200, captureWidth + 40),
+          width: captureWidth,
           scrollX: 0,
-          scrollY: 0
+          scrollY: 0,
+          x: 0,
+          y: 0
         },
         jsPDF: {
           unit: "mm",
@@ -14437,7 +14460,7 @@ async function PR_downloadSeasonReportPDF(){
         },
         pagebreak: {
           mode: ["css", "legacy"],
-          avoid: [".PRquickRead", ".PRvisualCard", ".PRgoodBadCard", ".PRheatmapCard", ".PRdnaCard", ".PRplanCard", ".PRpriorityBanner", ".PRopportunity", ".PRstory", ".PRpatternCallout", "tr"]
+          avoid: [".PRquickRead", ".PRvisualCard", ".PRgoodBadCard", ".PRheatmapCard", ".PRseasonEvidenceGrid", ".PRdnaCard", ".PRplanCard", ".PRpriorityBanner", ".PRopportunity", ".PRstory", ".PRpatternCallout", "tr"]
         }
       })
       .from(clone)
