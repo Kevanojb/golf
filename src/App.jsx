@@ -12895,7 +12895,23 @@ const scorecardIntel = (() => {
 
   const htmlFragment = `
   <style>
-    .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a}
+    .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a;max-width:100%;overflow:hidden;background:#fff}
+    .PRquickRead{margin-top:12px;border:1px solid #cbd5e1;border-radius:18px;padding:12px;background:linear-gradient(135deg,#f8fafc 0%,#ffffff 55%,#eef6f4 100%);box-shadow:0 8px 22px rgba(15,23,42,.05);break-inside:avoid;page-break-inside:avoid}
+    .PRquickHead{display:flex;align-items:flex-end;justify-content:space-between;gap:10px;margin-bottom:9px}
+    .PRquickEye{font-size:9px;font-weight:950;letter-spacing:.12em;text-transform:uppercase;color:#0f6a50}
+    .PRquickTitle{font-size:18px;font-weight:950;letter-spacing:-.02em;color:#0f172a}
+    .PRquickHint{font-size:9px;color:#64748b;font-weight:750;text-align:right}
+    .PRquickGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
+    .PRquickCard{min-width:0;border-radius:12px;padding:9px 10px;border:1px solid #e2e8f0;background:rgba(255,255,255,.86)}
+    .PRquickK{font-size:8px;font-weight:950;letter-spacing:.075em;text-transform:uppercase;color:#64748b}
+    .PRquickV{font-size:13px;font-weight:950;line-height:1.25;margin-top:3px;color:#0f172a}
+    .PRquickS{font-size:9px;color:#64748b;line-height:1.35;margin-top:3px}
+    .PRnetSummary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px;padding-top:9px;border-top:1px solid #e2e8f0}
+    .PRnetCell{border-radius:10px;padding:7px 8px;background:#f8fafc;border:1px solid #e2e8f0}
+    .PRnetK{font-size:8px;font-weight:950;text-transform:uppercase;letter-spacing:.06em;color:#64748b}
+    .PRnetV{font-size:13px;font-weight:950;margin-top:2px}
+    .PRsignGood{color:#166534}.PRsignBad{color:#b91c1c}
+    .PRsectionLead{font-size:10px;font-weight:800;color:#475569;line-height:1.45;margin-top:5px}
     .PRh1{font-size:22px;font-weight:950;margin:0 0 6px}
     .PRsub{color:#475569;font-size:13px;margin:0 0 14px}
     .PRbox{border:1px solid #e5e7eb;border-radius:14px;padding:12px 14px;background:#fff}
@@ -12945,9 +12961,9 @@ const scorecardIntel = (() => {
     .PRheroEye{font-size:10px;font-weight:950;letter-spacing:.14em;text-transform:uppercase;opacity:.72}
     .PRheroPlayer{font-size:31px;font-weight:950;letter-spacing:-.035em;margin-top:5px}
     .PRheroLine{font-size:12px;opacity:.86;margin-top:4px}
-    .PRvisualGrid{display:grid;grid-template-columns:minmax(300px,1.1fr) minmax(250px,.9fr);gap:14px;margin-top:14px}
-    .PRvisualCard{background:#fff;border:1px solid #dce5ef;border-radius:20px;padding:15px;box-shadow:0 8px 24px rgba(15,23,42,.06)}
-    .PRgauge{width:100%;max-width:420px;height:auto;display:block;margin:0 auto}
+    .PRvisualGrid{display:grid;grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr);gap:10px;margin-top:10px}
+    .PRvisualCard{min-width:0;overflow:hidden;background:#fff;border:1px solid #dce5ef;border-radius:18px;padding:12px;box-shadow:0 7px 20px rgba(15,23,42,.055)}
+    .PRgauge{width:100%;max-width:360px;max-height:170px;height:auto;display:block;margin:0 auto}
     .PRtriples{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-top:8px}
     .PRmini{border:1px solid #e2e8f0;background:#f8fafc;border-radius:12px;padding:8px}
     .PRminiK{font-size:9px;font-weight:950;letter-spacing:.07em;text-transform:uppercase;color:#64748b}
@@ -12956,8 +12972,8 @@ const scorecardIntel = (() => {
     .PRcostTrack{height:10px;background:#fee2e2;border-radius:999px;overflow:hidden}
     .PRcostFill{height:100%;background:linear-gradient(90deg,#ef4444,#991b1b);border-radius:999px}
     .PRcostAudit{grid-column:1/-1;font-size:9px;color:#64748b;margin-top:-4px;padding-left:63px}
-    .PRactions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}
-    .PRact{border-radius:16px;padding:12px;min-height:112px;border:1px solid}
+    .PRactions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px;margin-top:10px}
+    .PRact{min-width:0;border-radius:14px;padding:10px;min-height:96px;border:1px solid}
     .PRact.keep{background:#f0fdf4;border-color:#bbf7d0}.PRact.watch{background:#fff7ed;border-color:#fed7aa}.PRact.fix{background:#fff1f2;border-color:#fecaca}.PRact.target{background:#eff6ff;border-color:#bfdbfe}
     .PRactK{font-size:10px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;margin-bottom:7px}
     .PRact.keep .PRactK{color:#166534}.PRact.watch .PRactK{color:#c2410c}.PRact.fix .PRactK{color:#b91c1c}.PRact.target .PRactK{color:#1d4ed8}
@@ -12965,7 +12981,7 @@ const scorecardIntel = (() => {
     .PRstory{margin-top:14px;border-radius:18px;padding:14px 16px;background:#0f172a;color:#fff}
     .PRstoryK{font-size:10px;font-weight:950;letter-spacing:.09em;text-transform:uppercase;color:#94a3b8}
     .PRstoryV{font-size:18px;font-weight:950;margin-top:4px}.PRstoryS{font-size:11px;color:#cbd5e1;line-height:1.5;margin-top:5px}
-    .PRvizSection{margin-top:14px;background:#fff;border:1px solid #dce5ef;border-radius:20px;padding:15px;box-shadow:0 8px 24px rgba(15,23,42,.05)}
+    .PRvizSection{min-width:0;margin-top:11px;background:#fff;border:1px solid #dce5ef;border-radius:18px;padding:12px;box-shadow:0 7px 20px rgba(15,23,42,.045)}
     .PRvizTitle{font-size:15px;font-weight:950;color:#0f172a}
     .PRvizSub{font-size:10px;color:#64748b;margin-top:2px}
     .PRholeStrip{display:grid;grid-template-columns:repeat(18,minmax(0,1fr));gap:4px;margin-top:10px}
@@ -12974,16 +12990,16 @@ const scorecardIntel = (() => {
     .PRtileGreat{background:#dcfce7;color:#166534}.PRtileGood{background:#ecfdf5;color:#15803d}
     .PRtileEven{background:#f1f5f9;color:#475569}.PRtileBad{background:#ffedd5;color:#c2410c}.PRtileVeryBad{background:#fee2e2;color:#991b1b}
     .PRlatestGrid{display:grid;grid-template-columns:1.3fr .7fr;gap:12px;margin-top:12px}
-    .PRchartBox{border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#fbfdff}
+    .PRchartBox{min-width:0;overflow:hidden;border:1px solid #e2e8f0;border-radius:13px;padding:9px;background:#fbfdff}
     .PRchartSvg{display:block;width:100%;height:auto}
     .PRdamageWrap{display:flex;align-items:center;gap:14px}
     .PRdonutText{font-size:11px;color:#475569;line-height:1.5}
-    .PRgeneralGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+    .PRgeneralGrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px;margin-top:9px;break-inside:avoid;page-break-inside:avoid}
     .PRheat{overflow-x:auto;margin-top:10px}
     .PRheatGrid{display:grid;grid-template-columns:72px repeat(18,22px);gap:3px;align-items:center;min-width:520px}
     .PRheatHead{font-size:8px;text-align:center;color:#64748b;font-weight:900}.PRheatDate{font-size:9px;color:#475569;font-weight:800;white-space:nowrap}
     .PRheatCell{width:22px;height:22px;border-radius:5px;border:1px solid rgba(15,23,42,.05)}
-    .PRgbGrid{display:grid;grid-template-columns:120px 1fr 1fr;gap:5px 8px;align-items:center;margin-top:9px}
+    .PRgbGrid{display:grid;grid-template-columns:minmax(82px,1.05fr) minmax(0,1fr) minmax(0,1fr);gap:5px 6px;align-items:center;margin-top:8px}
     .PRgbHead{font-size:9px;font-weight:950;color:#64748b;text-transform:uppercase}.PRgbLabel{font-size:10px;font-weight:900}
     .PRgbBar{height:9px;background:#e2e8f0;border-radius:999px;overflow:hidden}.PRgbGood{height:100%;background:#16a34a}.PRgbBad{height:100%;background:#dc2626}
     .PRgbVal{font-size:9px;color:#475569;margin-top:2px}
@@ -13003,7 +13019,7 @@ const scorecardIntel = (() => {
     .PRfinger{border-radius:8px;text-align:center;padding:8px 1px;border:1px solid rgba(15,23,42,.06)}
     .PRfingerN{font-size:9px;font-weight:950}.PRfingerV{font-size:9px;font-weight:950;margin-top:2px}
     .PRstrengthRows{margin-top:10px}
-    .PRstrengthRow{display:grid;grid-template-columns:110px 1fr 50px;gap:8px;align-items:center;margin-top:8px}
+    .PRstrengthRow{display:grid;grid-template-columns:minmax(92px,1.05fr) minmax(0,1fr) 66px;gap:6px;align-items:center;margin-top:7px}
     .PRstrengthLabel{font-size:10px;font-weight:900}
     .PRstrengthTrack{position:relative;height:12px;background:#eef2f7;border-radius:999px;overflow:hidden}
     .PRstrengthZero{position:absolute;left:50%;top:0;bottom:0;width:1px;background:#64748b;z-index:2}
@@ -13039,8 +13055,8 @@ const scorecardIntel = (() => {
     .PRpartHeader{margin-top:14px;border-radius:16px;padding:10px 14px;background:#0f2747;color:#fff;display:flex;align-items:center;gap:10px;break-inside:avoid}
     .PRpartTag{font-size:10px;font-weight:950;letter-spacing:.10em;text-transform:uppercase;background:#fff;color:#0f2747;border-radius:999px;padding:4px 8px}
     .PRpartTitle{font-size:18px;font-weight:950;letter-spacing:-.02em}
-    .PRroundVisualGrid{display:grid;grid-template-columns:1.25fr .75fr;gap:12px;margin-top:12px}
-    .PRcompareGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+    .PRroundVisualGrid{display:none}
+    .PRcompareGrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px;margin-top:9px;break-inside:avoid;page-break-inside:avoid}
     .PRphaseCompare{margin-top:10px}
     .PRphaseCompareRow{display:grid;grid-template-columns:82px 1fr 1fr;gap:8px;align-items:center;margin-top:7px}
     .PRphaseCompareLabel{font-size:9px;font-weight:900;color:#475569}
@@ -13056,7 +13072,14 @@ const scorecardIntel = (() => {
     .PRscoreCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
     .PRscoreBig{font-size:20px;font-weight:950;margin-top:3px}
     .PRconf{display:inline-block;border:1px solid #cbd5e1;border-radius:999px;padding:2px 7px;font-size:10px;font-weight:950}
-    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples,.PRlatestGrid,.PRgeneralGrid{grid-template-columns:1fr}.PRcostAudit{padding-left:0}.PRholeStrip{grid-template-columns:repeat(9,minmax(0,1fr))}.PRdnaGrid,.PRplanGrid{grid-template-columns:1fr}.PRfingerprint{grid-template-columns:repeat(9,minmax(0,1fr))}.PRroundVisualGrid,.PRcompareGrid{grid-template-columns:1fr}}
+
+    .PRseasonTopGrid>.PRchartBox:nth-child(2){display:none}
+    .PRseasonTopGrid{grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr)}
+    .PRseasonTopGrid>.PRchartBox:nth-child(3){display:block}
+    .PRseasonTopGrid .PRchartSvg{max-height:210px}
+    .PRconfidenceLegend{margin-top:7px;font-size:9px;line-height:1.4;color:#64748b}
+    @media print{.PRr{-webkit-print-color-adjust:exact;print-color-adjust:exact}.PRvisualHero,.PRpriorityBanner,.PRopportunity,.PRstory,.PRpatternCallout{box-shadow:none}}
+    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples,.PRlatestGrid,.PRgeneralGrid,.PRquickGrid,.PRseasonTopGrid{grid-template-columns:1fr}.PRcostAudit{padding-left:0}.PRholeStrip{grid-template-columns:repeat(9,minmax(0,1fr))}.PRdnaGrid,.PRplanGrid{grid-template-columns:1fr}.PRfingerprint{grid-template-columns:repeat(9,minmax(0,1fr))}.PRcompareGrid{grid-template-columns:1fr}}
   </style>
 
   <div class="PRr">
@@ -13111,7 +13134,25 @@ const scorecardIntel = (() => {
           ? `${Math.round(eh.damageShare*100)}% of all strokes lost to handicap target came from the three costliest holes. The other holes combined were ${eh.restDelta>=0?`${eh.restDelta.toFixed(0)} strokes better than target`:`${Math.abs(eh.restDelta).toFixed(0)} strokes below target`}.`
           : d>0?`You beat your handicap target by ${d.toFixed(0)} strokes.`:d<0?`You finished ${Math.abs(d).toFixed(0)} strokes above handicap target.`:"You played exactly to handicap target.";
         const next=fix?`Keep total loss in ${fix.displayLabel} to 2 strokes or fewer next round.`:"Keep total damage from the three costliest holes to 2 strokes or fewer next round.";
+        const bestStrength=keep?.[0]||null;
+        const protectDriver=cats?.goodBad?.driver?.label || (nemesisTop?`Hole ${nemesisTop.hole}`:"Doubles+");
+        const latestSummary=d>0?`${Math.abs(d).toFixed(0)} strokes better than target`:d<0?`${Math.abs(d).toFixed(0)} strokes worse than target`:"Played exactly to target";
+        const latestTone=d>0?"PRsignGood":d<0?"PRsignBad":"";
+        const totalGain=(eh.holes||[]).reduce((sum,h)=>sum+Math.max(0,Number(h.delta||0)),0);
         return `
+        <div class="PRquickRead">
+          <div class="PRquickHead">
+            <div><div class="PRquickEye">Your golf in 30 seconds</div><div class="PRquickTitle">What matters most right now</div></div>
+            <div class="PRquickHint">Positive = better than handicap target</div>
+          </div>
+          <div class="PRquickGrid">
+            <div class="PRquickCard"><div class="PRquickK">Latest round</div><div class="PRquickV ${latestTone}">${PR_escapeHtml(latestSummary)}</div><div class="PRquickS">Gross ${eh.actual} vs target ${eh.target}</div></div>
+            <div class="PRquickCard"><div class="PRquickK">Biggest strength</div><div class="PRquickV">${bestStrength?PR_escapeHtml(bestStrength.displayLabel):"Still emerging"}</div><div class="PRquickS">${bestStrength?`GAIN +${Number(bestStrength.avg).toFixed(2)} strokes/hole`:`More rounds will sharpen this`}</div></div>
+            <div class="PRquickCard"><div class="PRquickK">Primary scoring focus</div><div class="PRquickV">${fix?PR_escapeHtml(fix.displayLabel):"Protect the card"}</div><div class="PRquickS">${fix?`LOSS ${Math.abs(Number(fix.avg)).toFixed(2)} strokes/hole`:`No category dominates yet`}</div></div>
+            <div class="PRquickCard"><div class="PRquickK">Score-protection focus</div><div class="PRquickV">${PR_escapeHtml(protectDriver)}</div><div class="PRquickS">Reduce expensive holes before chasing extra birdies</div></div>
+          </div>
+        </div>
+
         <div class="PRvisualGrid">
           <div class="PRvisualCard">
             <div class="PRsecTitle">Round vs Handicap</div>
@@ -13147,14 +13188,19 @@ const scorecardIntel = (() => {
               <div class="PRcostRow">
                 <div style="font-size:11px;font-weight:950;">Hole ${h.hole}</div>
                 <div class="PRcostTrack"><div class="PRcostFill" style="width:${Math.min(100,Math.max(18,h.cost*34))}%"></div></div>
-                <div style="font-size:12px;font-weight:950;color:#b91c1c;text-align:right;">-${h.cost.toFixed(0)}</div>
+                <div style="font-size:12px;font-weight:950;color:#b91c1c;text-align:right;">LOSS ${h.cost.toFixed(0)}</div>
                 <div class="PRcostAudit">Gross ${h.gross} · target ${h.target} · Par ${h.par} · SI ${Number.isFinite(h.si)?h.si:"—"} · receives ${h.strokes}</div>
               </div>`).join("")}
+            <div class="PRnetSummary">
+              <div class="PRnetCell"><div class="PRnetK">Shots gained</div><div class="PRnetV PRsignGood">${totalGain.toFixed(0)}</div></div>
+              <div class="PRnetCell"><div class="PRnetK">Shots lost</div><div class="PRnetV PRsignBad">${Math.max(0,Number(eh.totalLoss||0)).toFixed(0)}</div></div>
+              <div class="PRnetCell"><div class="PRnetK">Net vs target</div><div class="PRnetV ${d>=0?"PRsignGood":"PRsignBad"}">${d>=0?"GAIN ":"LOSS "}${Math.abs(d).toFixed(0)}</div></div>
+            </div>
           </div>
         </div>
 
         <div class="PRpriorityBanner">
-          <div class="PRpriorityK">#1 Scoring Opportunity</div>
+          <div class="PRpriorityK">Primary scoring focus</div>
           <div class="PRpriorityV">${PR_escapeHtml(executivePriority.title)}</div>
           <div class="PRpriorityS">${PR_escapeHtml(executivePriority.detail)}</div>
           <div class="PRpriorityMeta">
@@ -13170,14 +13216,14 @@ const scorecardIntel = (() => {
             ${keep.length?keep.map(x=>`
               <div style="margin-bottom:8px;">
                 <div class="PRactV">${PR_escapeHtml(x.displayLabel)}</div>
-                <div class="PRactS">+${x.avg.toFixed(2)}/hole vs handicap target · ${x.n} holes</div>
+                <div class="PRactS">GAIN +${Number(x.avg).toFixed(2)} strokes/hole · ${x.n} holes</div>
                 <span class="PRconfidence ${confidenceClass(x.status)}">${PR_escapeHtml(x.status||"EVIDENCE")}</span>
               </div>`).join(""):`<div class="PRactS">No category is clearly above handicap target yet.</div>`}
           </div>
           <div class="PRact watch"><div class="PRactK">Watch</div>
             ${watch?`
               <div class="PRactV">${PR_escapeHtml(watch.displayLabel)}</div>
-              <div class="PRactS">${watch.avg.toFixed(2)}/hole vs target · ${watch.n} holes</div>
+              <div class="PRactS">LOSS ${Math.abs(Number(watch.avg)).toFixed(2)} strokes/hole · ${watch.n} holes</div>
               <span class="PRconfidence ${confidenceClass(watch.status)}">${PR_escapeHtml(watch.status||"LOW EVIDENCE")}</span>
               ${Number.isFinite(watchImpact)?`<div class="PRimpact"><div class="PRimpactK">Potential upside</div><div class="PRimpactV">~${watchImpact.toFixed(1)} strokes/round</div></div>`:""}
             `:`<div class="PRactS">No second scoring leak needs attention.</div>`}
@@ -13185,13 +13231,13 @@ const scorecardIntel = (() => {
           <div class="PRact fix"><div class="PRactK">Fix first</div>
             ${fix?`
               <div class="PRactV">${PR_escapeHtml(fix.displayLabel)}</div>
-              <div class="PRactS">${fix.avg.toFixed(2)}/hole vs target · ${fix.n} holes</div>
+              <div class="PRactS">LOSS ${Math.abs(Number(fix.avg)).toFixed(2)} strokes/hole · ${fix.n} holes</div>
               <span class="PRconfidence ${confidenceClass(fix.status)}">${PR_escapeHtml(fix.status||"LOW EVIDENCE")}</span>
               ${Number.isFinite(fixImpact)?`<div class="PRimpact"><div class="PRimpactK">Impact if brought to target</div><div class="PRimpactV">~${fixImpact.toFixed(1)} strokes/round</div></div>`:""}
             `:`<div class="PRactS">No recurring area is currently below handicap target.</div>`}
           </div>
           <div class="PRact target"><div class="PRactK">Next-round target</div><div class="PRactV">${PR_escapeHtml(next)}</div><div class="PRactS">One measurable scoring job.</div></div>
-        </div>
+        </div><div class="PRconfidenceLegend"><b>Confidence:</b> Emerging = early signal; Confirmed = repeated evidence across the current sample.</div>
 
         
 <div class="PRstory"><div class="PRstoryK">The story of this round</div><div class="PRstoryV">${PR_escapeHtml(verdict)}</div><div class="PRstoryS">${PR_escapeHtml(story)}</div></div>
@@ -13300,10 +13346,10 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
     <span class="PRpartTag">Part 2</span>
     <span class="PRpartTitle">${PR_escapeHtml(reportPeriodLabel)}</span>
   </div>
-  <div class="PRvizTitle">Selected-Period Game DNA — Pattern & Trend</div>
-  <div class="PRvizSub">Everything below uses only the rounds included by the player's selected year/recent-games filter.</div>
+  <div class="PRvizTitle">Your Game — Pattern & Trend</div>
+  <div class="PRvizSub">${PR_num(postRoundIntel.exactCategories.roundSummaries.length,0)} rounds analysed · compared against the exact playing-to-handicap target for each round.</div>
 
-  <div class="PRgeneralGrid">
+  <div class="PRgeneralGrid PRseasonTopGrid">
     <div class="PRchartBox">
       <div class="PRvizTitle" style="font-size:12px;">Form trend — recent rounds</div>
       <div class="PRvizSub">Each dot is labelled in strokes versus handicap target. Dashed trend shows direction of travel.</div>
@@ -13387,7 +13433,7 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
 
     <div class="PRchartBox">
       <div class="PRvizTitle" style="font-size:12px;">Strength profile vs handicap target</div>
-      <div class="PRvizSub">Sorted scoring profile. Green = stronger than target; red = weaker.</div>
+      <div class="PRvizSub">Ranked by performance against handicap target. GAIN = better; LOSS = worse.</div>
       ${(() => {
         const rows=(postRoundIntel.exactCategories.rows||[])
           .filter(r=>Number.isFinite(Number(r.avg)))
@@ -13407,7 +13453,7 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
                 <div class="PRstrengthZero"></div>
                 <div class="PRstrengthBar" style="left:${left}%;width:${width}%;background:${bg};"></div>
               </div>
-              <div class="PRstrengthValue" style="color:${bg};">${v>=0?"+":""}${v.toFixed(2)}</div>
+              <div class="PRstrengthValue" style="color:${bg};">${v>=0?"GAIN ":"LOSS "}${Math.abs(v).toFixed(2)}</div>
             </div>`;
           }).join("")}
         </div>`;
@@ -13659,7 +13705,7 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
     <div class="PRvizSub">Repeated tendencies that may not be obvious from a single scorecard.</div>
 
     <div class="PRopportunity">
-      <div class="PRoppK">#1 Recurring Pattern</div>
+      <div class="PRoppK">Score-protection focus</div>
       <div class="PRoppV">${PR_escapeHtml(topOpportunity.title)}</div>
       <div class="PRoppS">${PR_escapeHtml(topOpportunity.detail)}</div>
       <div class="PRpriorityMeta">
@@ -14226,10 +14272,10 @@ async function PR_downloadSeasonReportPDF(){
 
     const clone = body.cloneNode(true);
     clone.removeAttribute("id");
-    clone.style.width = "760px";
-    clone.style.maxWidth = "760px";
+    clone.style.width = "720px";
+    clone.style.maxWidth = "720px";
     clone.style.background = "#ffffff";
-    clone.style.padding = "16px";
+    clone.style.padding = "10px";
     clone.style.boxSizing = "border-box";
 
     holder.appendChild(clone);
@@ -14237,7 +14283,7 @@ async function PR_downloadSeasonReportPDF(){
 
     await html2pdf()
       .set({
-        margin: [8, 8, 8, 8],
+        margin: [6, 6, 6, 6],
         filename,
         image: { type: "jpeg", quality: 0.98 },
         html2canvas: {
@@ -14253,7 +14299,7 @@ async function PR_downloadSeasonReportPDF(){
         },
         pagebreak: {
           mode: ["css", "legacy"],
-          avoid: [".PRbox", "tr"]
+          avoid: [".PRbox", ".PRgeneralGrid", ".PRcompareGrid", ".PRquickRead", ".PRvisualCard", ".PRchartBox", ".PRdnaCard", ".PRplanCard", ".PRactions", "tr"]
         }
       })
       .from(clone)
