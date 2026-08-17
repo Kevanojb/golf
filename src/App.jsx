@@ -13155,6 +13155,63 @@ const scorecardIntel = (() => {
     .PRpdfExportRoot svg{max-width:100%!important}
     .PRpdfExportRoot .PRchartSvg{width:100%!important;height:auto!important;overflow:hidden!important}
 
+    /* APP-41: single A4 coordinate system. Everything below is deliberately print-only. */
+    .PRpdfExportRoot{
+      width:100%!important;max-width:100%!important;
+      padding-right:22px!important;
+      overflow:hidden!important;
+    }
+    .PRpdfExportRoot .PRr, .PRpdfExportRoot .PRr *{min-width:0!important}
+    .PRpdfExportRoot .PRr{overflow:visible!important}
+    .PRpdfExportRoot .PRquickHead{min-width:0!important}
+    .PRpdfExportRoot .PRquickHint{max-width:180px!important;text-align:right!important;white-space:normal!important;overflow-wrap:anywhere!important}
+    .PRpdfExportRoot .PRquickCard,.PRpdfExportRoot .PRact,.PRpdfExportRoot .PRdnaCard,.PRpdfExportRoot .PRplanCard{overflow:hidden!important}
+    .PRpdfExportRoot .PRquickV,.PRpdfExportRoot .PRquickS,.PRpdfExportRoot .PRactV,.PRpdfExportRoot .PRactS,.PRpdfExportRoot .PRdnaV,.PRpdfExportRoot .PRdnaS,.PRpdfExportRoot .PRplanV,.PRpdfExportRoot .PRplanS{overflow-wrap:anywhere!important;word-break:normal!important}
+
+    /* Keep the right-hand audit/value columns inside their cards. */
+    .PRpdfExportRoot .PRcostRow{grid-template-columns:42px minmax(0,1fr) 44px!important;gap:4px!important}
+    .PRpdfExportRoot .PRcostAudit{padding-left:46px!important;font-size:7.5px!important}
+    .PRpdfExportRoot .PRstrengthRow{grid-template-columns:minmax(72px,.95fr) minmax(58px,1fr) 54px!important;gap:3px!important}
+    .PRpdfExportRoot .PRstrengthValue{font-size:7.8px!important;letter-spacing:-.01em!important}
+
+    /* Use explicit compact tracks instead of intrinsic square sizing: all 18 holes always render. */
+    .PRpdfExportRoot .PRholeStrip,.PRpdfExportRoot .PRfingerprint{grid-template-columns:repeat(18,minmax(0,1fr))!important;gap:1.5px!important}
+    .PRpdfExportRoot .PRholeTile,.PRpdfExportRoot .PRfinger{padding:5px 0!important;border-radius:5px!important}
+    .PRpdfExportRoot .PRholeN,.PRpdfExportRoot .PRholeD,.PRpdfExportRoot .PRfingerN,.PRpdfExportRoot .PRfingerV{font-size:6.8px!important}
+    .PRpdfExportRoot .PRheatGrid{grid-template-columns:22px repeat(18,minmax(0,1fr))!important;column-gap:1px!important;row-gap:2px!important}
+    .PRpdfExportRoot .PRheatCell{aspect-ratio:auto!important;height:10px!important;min-height:10px!important;border-radius:2px!important}
+    .PRpdfExportRoot .PRheatHead{font-size:5.2px!important}
+    .PRpdfExportRoot .PRheatDate{font-size:6px!important}
+
+    /* Evidence is short enough to stay together if compacted slightly. */
+    .PRpdfExportRoot .PRseasonEvidenceGrid{break-inside:avoid!important;page-break-inside:avoid!important;gap:7px!important}
+    .PRpdfExportRoot .PRseasonEvidenceGrid .PRchartBox{padding:7px!important}
+    .PRpdfExportRoot .PRseasonEvidenceGrid .PRvizTitle{font-size:11px!important}
+    .PRpdfExportRoot .PRseasonEvidenceGrid .PRvizSub{font-size:8px!important}
+    .PRpdfExportRoot .PRgbGrid{margin-top:5px!important}
+    .PRpdfExportRoot .PRgbBar{height:7px!important}
+    .PRpdfExportRoot .PRgbVal{font-size:7.5px!important}
+    .PRpdfExportRoot .PRbadVerdict{margin-top:6px!important;padding:6px 7px!important}
+    .PRpdfExportRoot .PRbadVerdictK{font-size:7px!important}
+    .PRpdfExportRoot .PRbadVerdictV{font-size:10.5px!important;line-height:1.22!important}
+    .PRpdfExportRoot .PRbadVerdictS{font-size:7.3px!important;line-height:1.3!important}
+
+    /* Trend chart: give the five round markers an internal safe gutter. */
+    .PRpdfExportRoot .PRseasonTopGrid .PRchartSvg{overflow:visible!important;padding-left:8px!important;padding-right:8px!important}
+
+    /* Course DNA: heading cannot be orphaned from the red focus banner. */
+    .PRpdfExportRoot .PRcourseDnaPage{break-before:page!important;page-break-before:always!important}
+    .PRpdfExportRoot .PRcourseDnaPage>.PRvizTitle:first-child{break-after:avoid!important;page-break-after:avoid!important}
+    .PRpdfExportRoot .PRcourseDnaPage>.PRvizSub{break-after:avoid!important;page-break-after:avoid!important}
+    .PRpdfExportRoot .PRcourseDnaPage>.PRopportunity{break-before:avoid!important;page-break-before:avoid!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRdnaGrid{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRdnaV{font-size:12px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRdnaS{font-size:8px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRgeneralGrid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRplanGrid{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRplanV{font-size:11.5px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRplanS{font-size:7.8px!important}
+
   </style>
 
   <div class="PRr">
@@ -13229,7 +13286,7 @@ const scorecardIntel = (() => {
           <div class="PRquickGrid">
             <div class="PRquickCard"><div class="PRquickK">Latest round</div><div class="PRquickV ${latestTone}">${PR_escapeHtml(latestSummary)}</div><div class="PRquickS">Gross ${eh.actual} vs target ${eh.target}</div></div>
             <div class="PRquickCard"><div class="PRquickK">Best area today</div><div class="PRquickV">${latestStrength?PR_escapeHtml(latestStrength.label):"No clear standout"}</div><div class="PRquickS">${latestStrength?`${latestStrength.avg>=0?"GAIN ":"LOSS "}${Math.abs(latestStrength.avg).toFixed(2)} strokes/hole · ${latestStrength.n} holes`:"This round was broadly even by category"}</div></div>
-            <div class="PRquickCard"><div class="PRquickK">Biggest leak today</div><div class="PRquickV">${latestWeakness?PR_escapeHtml(latestWeakness.label):"No clear leak"}</div><div class="PRquickS">${latestWeakness?`${latestWeakness.avg<0?"LOSS ":"GAIN "}${Math.abs(latestWeakness.avg).toFixed(2)} strokes/hole · ${latestWeakness.n} holes`:"No category was meaningfully below target"}</div></div>
+            <div class="PRquickCard"><div class="PRquickK">${latestWeakness&&latestWeakness.avg<-.05?"Biggest leak today":"Category check today"}</div><div class="PRquickV">${latestWeakness&&latestWeakness.avg<-.05?PR_escapeHtml(latestWeakness.label):"No category weakness"}</div><div class="PRquickS">${latestWeakness&&latestWeakness.avg<-.05?`LOSS ${Math.abs(latestWeakness.avg).toFixed(2)} strokes/hole · ${latestWeakness.n} holes`:"Every major category was at or above handicap target"}</div></div>
             <div class="PRquickCard"><div class="PRquickK">Costliest holes today</div><div class="PRquickV">${latestCostliest.length?PR_escapeHtml(latestCostliest.map(h=>`H${h.hole}`).join(" · ")):"None"}</div><div class="PRquickS">${latestCostliest.length?`${latestCostliest.reduce((sum,h)=>sum+Number(h.cost||0),0).toFixed(0)} total strokes lost on these holes`:"No holes finished below target"}</div></div>
           </div>
         </div>
@@ -14344,16 +14401,16 @@ async function PR_downloadSeasonReportPDF(){
     holder.style.position = "fixed";
     holder.style.left = "-100000px";
     holder.style.top = "0";
-    holder.style.width = "724px";
+    holder.style.width = "680px";
     holder.style.background = "#ffffff";
 
     const clone = body.cloneNode(true);
     clone.removeAttribute("id");
     clone.classList.add("PRpdfExportRoot");
-    clone.style.width = "700px";
-    clone.style.maxWidth = "700px";
+    clone.style.width = "660px";
+    clone.style.maxWidth = "660px";
     clone.style.background = "#ffffff";
-    clone.style.padding = "6px";
+    clone.style.padding = "8px 10px 8px 8px";
     clone.style.boxSizing = "border-box";
 
     holder.appendChild(clone);
@@ -14361,7 +14418,7 @@ async function PR_downloadSeasonReportPDF(){
 
     await html2pdf()
       .set({
-        margin: [6, 6, 6, 6],
+        margin: [7, 7, 7, 7],
         filename,
         image: { type: "jpeg", quality: 0.98 },
         html2canvas: {
@@ -14369,7 +14426,7 @@ async function PR_downloadSeasonReportPDF(){
           useCORS: true,
           backgroundColor: "#ffffff",
           logging: false,
-          windowWidth: 1200,
+          windowWidth: 760,
           scrollX: 0,
           scrollY: 0
         },
@@ -14380,7 +14437,7 @@ async function PR_downloadSeasonReportPDF(){
         },
         pagebreak: {
           mode: ["css", "legacy"],
-          avoid: [".PRquickRead", ".PRvisualCard", ".PRgoodBadCard", ".PRheatmapCard", ".PRseasonEvidenceGrid", ".PRdnaCard", ".PRplanCard", ".PRpriorityBanner", ".PRopportunity", ".PRstory", ".PRpatternCallout", "tr"]
+          avoid: [".PRquickRead", ".PRvisualCard", ".PRgoodBadCard", ".PRheatmapCard", ".PRdnaCard", ".PRplanCard", ".PRpriorityBanner", ".PRopportunity", ".PRstory", ".PRpatternCallout", "tr"]
         }
       })
       .from(clone)
