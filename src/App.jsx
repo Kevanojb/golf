@@ -11749,7 +11749,13 @@ const isGross = String(scoringMode) === "gross";
   });
 
   // Outcome mix (birdie+/par/bogey/bad)
-  const windowSeries = Array.isArray(cur?.roundSeries) ? cur.roundSeries : (__filterSeries(cur?.series));
+  // IMPORTANT: round-level report intelligence must use the REAL selected player,
+  // never the Overview aggregate (`cur`) which may not contain any scorecards.
+  // __selectedRoundsForSolo already resolves the real report window and includes
+  // the safe fallback for imported rounds that do not carry seasonId metadata.
+  const windowSeries = Array.isArray(__selectedRoundsForSolo)
+    ? __selectedRoundsForSolo.filter(Boolean).slice()
+    : [];
   const mix = PR_bucketOutcomeMix({ scoringMode, windowSeries });
 // Peer outcome mix derived from aggregated peer totals (fact-based)
 const holesMe = PR_num(meTotals?.holes, 0) || 0;
@@ -11961,7 +11967,7 @@ const postRoundIntel = (() => {
   try {
     // The report display window can be limited (e.g. Last 1 / Last 3), but
     // expectation needs the player's real historical hole-by-hole series.
-    // cur.series is the canonical series created by the season model.
+    // Use the preserved real player series; `cur` may be an Overview aggregate with no scorecards.
     const sortRounds = (arr) => (Array.isArray(arr) ? arr.filter(Boolean).slice() : []).sort((a,b) => {
       const ax = Number.isFinite(Number(a?.dateMs)) ? Number(a.dateMs) : Number(a?.idx || 0);
       const bx = Number.isFinite(Number(b?.dateMs)) ? Number(b.dateMs) : Number(b?.idx || 0);
@@ -11969,7 +11975,13 @@ const postRoundIntel = (() => {
     });
 
     const displaySeries = sortRounds(windowSeries);
-    const fullSeries = sortRounds(cur?.series);
+    // Historical scorecards also come from the real player object. `cur` may
+    // have been replaced by __snap.playerAgg and therefore have no series at all.
+    const fullSeries = sortRounds(
+      (Array.isArray(__sourcePlayer?.series) && __sourcePlayer.series.length)
+        ? __sourcePlayer.series
+        : (Array.isArray(__sourcePlayer?.roundSeries) ? __sourcePlayer.roundSeries : [])
+    );
 
     // Latest round follows the report's selected window where possible.
     const latest = displaySeries.length
@@ -13572,7 +13584,58 @@ const scorecardIntel = (() => {
   </div>
 </div>
 
-${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
+${(postRoundIntel.exactCategories?.roundSummaries?.length === 1) ? (() => {
+  const r0=postRoundIntel.exactCategories.roundSummaries[0];
+  const d0=Number(r0?.delta||0);
+  const pars0=Number(r0?.parsOrBetter||0);
+  const doubles0=Number(r0?.doublesPlus||0);
+  const damage0=Number(r0?.top3Loss||0);
+  return `
+  <div class="PRvizSection PRgameDnaPage">
+    <div class="PRpartHeader" style="margin-top:0;margin-bottom:12px;">
+      <span class="PRpartTag">Part 2</span>
+      <span class="PRpartTitle">${PR_escapeHtml(reportPeriodLabel)}</span>
+    </div>
+    <div class="PRvizTitle">Your Game — Baseline Established</div>
+    <div class="PRvizSub">1 round analysed · enough for a latest-round baseline, but not enough to call anything a recurring pattern yet.</div>
+
+    <div class="PRpatternCallout" style="margin-top:12px;">
+      <div class="PRpatternK">MORE ROUNDS NEEDED FOR RECURRING PATTERNS</div>
+      <div class="PRpatternV">Your first round gives us a starting point — not a trend.</div>
+      <div class="PRpatternS">After more rounds, this section will identify recurring holes, form direction and what separates your better and poorer scores. We deliberately do not label one-round results as confirmed strengths or weaknesses.</div>
+    </div>
+
+    <div class="PRgeneralGrid" style="margin-top:12px;">
+      <div class="PRchartBox">
+        <div class="PRvizTitle" style="font-size:12px;">Round 1 vs handicap target</div>
+        <div style="font-size:28px;font-weight:950;margin-top:8px;color:${d0>=0?"#15803d":"#b91c1c"};">${d0>=0?"+":""}${d0.toFixed(0)}</div>
+        <div class="PRvizSub" style="margin-top:4px;">${d0>=0?"strokes better than":"strokes below"} the playing-to-handicap target.</div>
+      </div>
+      <div class="PRchartBox">
+        <div class="PRvizTitle" style="font-size:12px;">Solid holes baseline</div>
+        <div style="font-size:28px;font-weight:950;margin-top:8px;">${pars0}</div>
+        <div class="PRvizSub" style="margin-top:4px;">Pars or better in this first recorded round.</div>
+      </div>
+      <div class="PRchartBox">
+        <div class="PRvizTitle" style="font-size:12px;">Big-number baseline</div>
+        <div style="font-size:28px;font-weight:950;margin-top:8px;">${doubles0}</div>
+        <div class="PRvizSub" style="margin-top:4px;">Double bogeys or worse. Future rounds will show whether this is typical.</div>
+      </div>
+      <div class="PRchartBox">
+        <div class="PRvizTitle" style="font-size:12px;">Top-3-hole damage</div>
+        <div style="font-size:28px;font-weight:950;margin-top:8px;">${damage0.toFixed(0)}</div>
+        <div class="PRvizSub" style="margin-top:4px;">strokes lost on the three costliest holes — your benchmark to beat next time.</div>
+      </div>
+    </div>
+
+    <div class="PRgamePlan" style="margin-top:12px;">
+      <div class="PRvizTitle">What happens next</div>
+      <div class="PRvizSub">Record another round and the report will start comparing Round 2 with this baseline. Recurring-pattern labels remain withheld until there is enough evidence.</div>
+    </div>
+  </div>`;
+})() : ""}
+
+${(postRoundIntel.exactCategories?.roundSummaries?.length >= 2) ? `
 <div class="PRvizSection PRgameDnaPage">
   <div class="PRpartHeader" style="margin-top:0;margin-bottom:12px;">
     <span class="PRpartTag">Part 2</span>
