@@ -11997,33 +11997,128 @@ const postRoundIntel = (() => {
     });
     const isGrossMode = String(scoringMode) === "gross";
 
+    // Robust round-array readers. Some imports create a placeholder 18-item
+    // grossPerHole array containing only NaN/0 values while the usable WHS-safe
+    // values live in imputedGrossPerHole. Never let an empty placeholder win.
+    const _pickArray = (candidates, validFn) => {
+      for (const x of candidates || []) {
+        if (!Array.isArray(x) || !x.length) continue;
+        const vals = x.slice(0,18).map(v => _safeNum(v, NaN));
+        if (vals.some(validFn)) return vals;
+      }
+      return [];
+    };
+
+    const _singleRoundPlayerFallbacks = r => {
+      // Only borrow player-level hole arrays when there is genuinely just one
+      // round in the player's source series, so data can never bleed between rounds.
+      const n = Array.isArray(__sourcePlayer?.series) ? __sourcePlayer.series.length
+        : (Array.isArray(__sourcePlayer?.roundSeries) ? __sourcePlayer.roundSeries.length : 0);
+      return n <= 1 ? [__sourcePlayer, __sourcePlayer?.parsed].filter(Boolean) : [];
+    };
+
     const arrPars = r => {
-      const x = r && (r.parsPerHole || r.parPerHole || r.parsArr || r.pars || r.parHoles || r.par);
-      return Array.isArray(x) ? x.map(Number) : [];
+      let vals = _pickArray([
+        r?.parsPerHole, r?.parPerHole, r?.parsArr, r?.pars, r?.parHoles, r?.par,
+        r?.teeLayout?.pars, r?.courseLayout?.pars, r?.parsed?.pars, r?.parsed?.parsPerHole,
+        ..._singleRoundPlayerFallbacks(r).flatMap(o => [o?.parsPerHole,o?.parPerHole,o?.parsArr,o?.pars,o?.parHoles,o?.par])
+      ], v => Number.isFinite(v) && v >= 3 && v <= 6);
+      if (!vals.length && typeof _tryGetParsSI === "function") {
+        try { const z=_tryGetParsSI(r); vals=_pickArray([z?.pArr,z?.pars], v=>Number.isFinite(v)&&v>=3&&v<=6); } catch(_) {}
+      }
+      return vals;
     };
     const arrSI = r => {
-      const x = r && (r.siPerHole || r.strokeIndexPerHole || r.siArr || r.si || r.strokeIndex);
-      return Array.isArray(x) ? x.map(Number) : [];
+      let vals = _pickArray([
+        r?.siPerHole, r?.strokeIndexPerHole, r?.siArr, r?.si, r?.strokeIndex,
+        r?.teeLayout?.si, r?.teeLayout?.sis, r?.courseLayout?.si, r?.parsed?.si, r?.parsed?.siPerHole,
+        ..._singleRoundPlayerFallbacks(r).flatMap(o => [o?.siPerHole,o?.strokeIndexPerHole,o?.siArr,o?.si,o?.strokeIndex,o?.sis])
+      ], v => Number.isFinite(v) && v >= 1 && v <= 18);
+      if (!vals.length && typeof _tryGetParsSI === "function") {
+        try { const z=_tryGetParsSI(r); vals=_pickArray([z?.sArr,z?.si,z?.sis], v=>Number.isFinite(v)&&v>=1&&v<=18); } catch(_) {}
+      }
+      return vals;
     };
     const arrYards = r => {
-      const x = r && (r.yardsPerHole || r.ydsPerHole || r.yardsArr || r.yards || r.holeYards || r.yardages || r.yardage);
-      return Array.isArray(x) ? x.map(Number) : [];
+      let vals = _pickArray([
+        r?.yardsPerHole, r?.ydsPerHole, r?.yardsArr, r?.yards, r?.holeYards, r?.yardages, r?.yardage,
+        r?.teeLayout?.yards, r?.courseLayout?.yards, r?.parsed?.yards, r?.parsed?.yardsPerHole,
+        ..._singleRoundPlayerFallbacks(r).flatMap(o => [o?.yardsPerHole,o?.ydsPerHole,o?.yardsArr,o?.yards,o?.holeYards,o?.yardages])
+      ], v => Number.isFinite(v) && v > 30);
+      if (!vals.length && typeof _getYardsArr === "function") {
+        try { vals=_pickArray([_getYardsArr(r)], v=>Number.isFinite(v)&&v>30); } catch(_) {}
+      }
+      return vals;
     };
-    const arrPts = r => {
-      const x = r && (r.perHole || r.perHolePts || r.pointsPerHole || r.ptsPerHole || r.stablefordPerHole || r.stablefordHoles);
-      return Array.isArray(x) ? x.map(Number) : [];
+    const arrPts = r => _pickArray([
+      r?.perHole, r?.perHolePts, r?.pointsPerHole, r?.ptsPerHole, r?.stablefordPerHole, r?.stablefordHoles,
+      r?.parsed?.perHole, r?.parsed?.pointsPerHole,
+      ..._singleRoundPlayerFallbacks(r).flatMap(o => [o?.perHole,o?.perHolePts,o?.pointsPerHole,o?.ptsPerHole,o?.stablefordPerHole])
+    ], v => Number.isFinite(v) && v >= 0 && v <= 8);
+
+    const _courseHandicapForRound = (r, ps) => {
+      const parTotal=(ps||[]).reduce((s,v)=>s+(Number.isFinite(Number(v))?Number(v):0),0);
+      const hi=Number.isFinite(Number(r?.startExact))?Number(r.startExact)
+        :Number.isFinite(Number(r?.handicapIndex))?Number(r.handicapIndex)
+        :Number.isFinite(Number(r?.handicap))?Number(r.handicap)
+        :Number.isFinite(Number(__sourcePlayer?.startExact))?Number(__sourcePlayer.startExact)
+        :Number.isFinite(Number(__sourcePlayer?.handicapIndex))?Number(__sourcePlayer.handicapIndex):NaN;
+      const slope=Number.isFinite(Number(r?.teeSlope))?Number(r.teeSlope)
+        :Number.isFinite(Number(r?.slope))?Number(r.slope)
+        :Number.isFinite(Number(r?.slopeRating))?Number(r.slopeRating):NaN;
+      const rating=Number.isFinite(Number(r?.teeRating))?Number(r.teeRating)
+        :Number.isFinite(Number(r?.rating))?Number(r.rating)
+        :Number.isFinite(Number(r?.courseRating))?Number(r.courseRating):NaN;
+      let ch=NaN;
+      if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0){
+        try { ch=WHS_courseHandicap(hi,slope,rating,parTotal); } catch(_) {}
+      }
+      if(!Number.isFinite(ch)){
+        ch=Number.isFinite(Number(r?.courseHandicap))?Number(r.courseHandicap)
+          :Number.isFinite(Number(r?.playingHcap))?Number(r.playingHcap)
+          :Number.isFinite(Number(r?.hcap))?Number(r.hcap)
+          :Number.isFinite(Number(__sourcePlayer?.courseHandicap))?Number(__sourcePlayer.courseHandicap)
+          :Number.isFinite(Number(__sourcePlayer?.playingHcap))?Number(__sourcePlayer.playingHcap)
+          :Number.isFinite(Number(__sourcePlayer?.hcap))?Number(__sourcePlayer.hcap):NaN;
+      }
+      return ch;
     };
+
     const arrGross = r => {
-      // Prefer a real gross hole array. For Stableford-only imports the season
-      // model may already have produced a WHS-safe/imputed gross array; use it
-      // as the fallback so a player with only one recorded round can still get
-      // the exact playing-to-handicap snapshot/gauge.
-      const x = r && (
-        r.grossPerHole || r.imputedGrossPerHole || r.grossHoles || r.holeGross ||
-        r.scoresPerHole || r.scores || r.grossArr ||
-        r?.parsed?.grossPerHole || r?.parsed?.imputedGrossPerHole
-      );
-      return Array.isArray(x) ? x.map(v => _safeNum(v, NaN)) : [];
+      // 1) Prefer an array that actually contains usable gross values. This fixes
+      // single-round Stableford imports where grossPerHole exists but is all NaN.
+      let vals = _pickArray([
+        r?.grossPerHole, r?.imputedGrossPerHole, r?.grossHoles, r?.holeGross,
+        r?.scoresPerHole, r?.scores, r?.grossArr,
+        r?.parsed?.grossPerHole, r?.parsed?.imputedGrossPerHole,
+        ..._singleRoundPlayerFallbacks(r).flatMap(o => [o?.grossPerHole,o?.imputedGrossPerHole,o?.grossHoles,o?.holeGross,o?.scoresPerHole,o?.scores])
+      ], v => Number.isFinite(v) && v > 0);
+      if (vals.length) return vals;
+
+      // 2) If only Stableford points were stored, reconstruct a WHS-safe gross
+      // score per hole. For 1+ points this is exact; for a 0-point hole we use
+      // net double bogey (the correct cap for handicap/scoring analysis).
+      const pts=arrPts(r), ps=arrPars(r), sis=arrSI(r);
+      if (pts.length && ps.length && sis.length) {
+        const ch=_courseHandicapForRound(r,ps);
+        if(Number.isFinite(ch)){
+          const receive=si=>{
+            const h=Math.max(0,Math.round(ch)), s=Number(si);
+            if(!Number.isFinite(s)||s<1||s>18)return 0;
+            return Math.floor(h/18)+((h%18)>0&&s<=(h%18)?1:0);
+          };
+          const out=[];
+          const n=Math.min(18,Math.max(pts.length,ps.length,sis.length));
+          for(let i=0;i<n;i++){
+            const p=Number(pts[i]), par=Number(ps[i]), si=Number(sis[i]);
+            if(!Number.isFinite(p)||!Number.isFinite(par)||par<=0){ out.push(NaN); continue; }
+            const target=par+receive(si);
+            out.push(p<=0 ? target+2 : Math.max(1,target+2-p));
+          }
+          if(out.some(v=>Number.isFinite(v)&&v>0)) return out;
+        }
+      }
+      return [];
     };
 
     // Is this latest round a true solo event?
@@ -14371,101 +14466,146 @@ function PR_loadHtml2Pdf(){
 
 async function PR_downloadSeasonReportPDF(){
   const btn = document.getElementById("PR_downloadSeasonReportPDF");
-  let holder = null;
+  let stage = null;
 
   try{
     const body = document.getElementById("PR_seasonReportBody");
-    if(!body){
-      alert("Generate the season report first.");
-      return;
-    }
+    if(!body){ alert("Generate the season report first."); return; }
 
-    if(btn){
-      btn.disabled = true;
-      btn.textContent = "Creating PDF...";
-      btn.style.opacity = "0.65";
-    }
+    if(btn){ btn.disabled=true; btn.textContent="Creating PDF..."; btn.style.opacity="0.65"; }
 
-    const html2pdf = await PR_loadHtml2Pdf();
-    const params = (typeof window !== "undefined" && window.__dslSeasonReportParams)
-      ? window.__dslSeasonReportParams : {};
+    // Load the existing bundle first. We use its html2canvas/jsPDF dependencies,
+    // but DO NOT use html2pdf's DOM pagination (that is what was clipping detail).
+    await PR_loadHtml2Pdf();
 
-    const safePart = (value, fallback) => {
-      const raw = String(value || fallback || "");
-      if(typeof PR_safeSlug === "function"){ try { return PR_safeSlug(raw); } catch(e) {} }
-      return raw.trim().replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || fallback || "report";
+    const loadScript = (id, src, ready) => new Promise((resolve,reject)=>{
+      try{
+        if(ready()) return resolve();
+        const old=document.getElementById(id);
+        if(old){
+          const t=Date.now(); const timer=setInterval(()=>{
+            if(ready()){clearInterval(timer);resolve();}
+            else if(Date.now()-t>15000){clearInterval(timer);reject(new Error(`Timed out loading ${id}`));}
+          },100); return;
+        }
+        const sc=document.createElement("script"); sc.id=id; sc.src=src; sc.async=true;
+        sc.onload=()=>ready()?resolve():reject(new Error(`${id} loaded but API unavailable`));
+        sc.onerror=()=>reject(new Error(`Could not load ${id}`)); document.head.appendChild(sc);
+      }catch(e){reject(e);}
+    });
+
+    await loadScript("PR_html2canvas_direct","https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js",()=>typeof window.html2canvas==="function");
+    await loadScript("PR_jspdf_direct","https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js",()=>!!(window.jspdf&&window.jspdf.jsPDF));
+
+    const params=(typeof window!=="undefined"&&window.__dslSeasonReportParams)?window.__dslSeasonReportParams:{};
+    const safePart=(value,fallback)=>{
+      const raw=String(value||fallback||"");
+      if(typeof PR_safeSlug==="function"){try{return PR_safeSlug(raw);}catch(e){}}
+      return raw.trim().replace(/[^a-z0-9_-]+/gi,"_").replace(/^_+|_+$/g,"")||fallback||"report";
     };
-    const filename = `SeasonReport_${safePart(params.playerName, "player")}_${safePart(params.yearLabel, "season")}.pdf`;
+    const filename=`SeasonReport_${safePart(params.playerName,"player")}_${safePart(params.yearLabel,"season")}.pdf`;
 
-    // Use the last KNOWN-GOOD capture strategy (the one that produced a visible,
-    // centred PDF), while retaining the later component-level print fixes.
-    // Do not use negative z-index or html2canvas x/y/width overrides: those
-    // caused blank or shifted PDFs on Safari/iOS.
-    holder = document.createElement("div");
-    holder.style.position = "fixed";
-    holder.style.left = "-100000px";
-    holder.style.top = "0";
-    holder.style.width = "794px";
-    holder.style.background = "#ffffff";
-    holder.style.pointerEvents = "none";
-
-    const clone = body.cloneNode(true);
+    // Render a real, on-page desktop-width copy. Keeping it at normal coordinates
+    // avoids Safari's off-screen/negative-coordinate canvas bugs. A white stage
+    // covers the app only while the canvas is being created, then disappears.
+    stage=document.createElement("div");
+    stage.id="PR_pdfRenderStage";
+    Object.assign(stage.style,{
+      position:"fixed",left:"0",top:"0",right:"0",bottom:"0",zIndex:"2147483000",
+      background:"#ffffff",overflow:"auto",padding:"0",margin:"0",pointerEvents:"none"
+    });
+    const clone=body.cloneNode(true);
     clone.removeAttribute("id");
     clone.classList.add("PRpdfExportRoot");
-    clone.style.width = "748px";
-    clone.style.maxWidth = "748px";
-    clone.style.margin = "0";
-    clone.style.background = "#ffffff";
-    clone.style.padding = "8px";
-    clone.style.boxSizing = "border-box";
-    clone.style.overflow = "visible";
+    Object.assign(clone.style,{
+      width:"760px",maxWidth:"760px",minWidth:"760px",margin:"0 auto",padding:"14px",
+      boxSizing:"border-box",background:"#ffffff",overflow:"visible"
+    });
 
-    holder.appendChild(clone);
-    document.body.appendChild(holder);
+    // PDF-only geometry: preserve all detail but fit wide micro-grids inside cards.
+    const st=document.createElement("style");
+    st.textContent=`
+      .PRpdfExportRoot,.PRpdfExportRoot *{box-sizing:border-box!important;min-width:0}
+      .PRpdfExportRoot .PRholeStrip{display:grid!important;grid-template-columns:repeat(18,minmax(0,1fr))!important;gap:3px!important;width:100%!important;overflow:visible!important}
+      .PRpdfExportRoot .PRholeTile{min-width:0!important;padding:5px 1px!important}
+      .PRpdfExportRoot .PRheatGrid{display:grid!important;grid-template-columns:30px repeat(18,minmax(0,1fr))!important;gap:2px!important;width:100%!important;overflow:visible!important}
+      .PRpdfExportRoot .PRheatCell{min-width:0!important;height:14px!important}
+      .PRpdfExportRoot .PRheatHead{font-size:6px!important;min-width:0!important}
+      .PRpdfExportRoot .PRdnaHoleGrid{display:grid!important;grid-template-columns:repeat(18,minmax(0,1fr))!important;gap:3px!important;width:100%!important;overflow:visible!important}
+      .PRpdfExportRoot .PRstrengthValue{width:72px!important;min-width:72px!important;text-align:right!important;font-size:9px!important}
+      .PRpdfExportRoot .PRcostRow{grid-template-columns:64px minmax(0,1fr) 58px!important}
+      .PRpdfExportRoot .PRgeneralGrid,.PRpdfExportRoot .PRcompareGrid,.PRpdfExportRoot .PRvisualGrid{min-width:0!important}
+      .PRpdfExportRoot svg{max-width:100%!important}
+    `;
+    clone.prepend(st); stage.appendChild(clone); document.body.appendChild(stage);
 
-    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    if(document.fonts && document.fonts.ready){ try { await document.fonts.ready; } catch(_) {} }
+    await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+    if(document.fonts&&document.fonts.ready){try{await document.fonts.ready;}catch(_){}}
 
-    await html2pdf()
-      .set({
-        margin: [5, 5, 5, 5],
-        filename,
-        image: { type: "jpeg", quality: 0.98 },
-        html2canvas: {
-          scale: 2,
-          useCORS: true,
-          backgroundColor: "#ffffff",
-          logging: false,
-          windowWidth: 1200,
-          scrollX: 0,
-          scrollY: 0
-        },
-        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-        pagebreak: {
-          mode: ["css", "legacy"],
-          avoid: [
-            ".PRquickRead", ".PRvisualCard", ".PRgoodBadCard", ".PRheatmapCard",
-            ".PRseasonEvidenceGrid", ".PRdnaCard", ".PRplanCard", ".PRpriorityBanner",
-            ".PRopportunity", ".PRstory", ".PRpatternCallout", "tr"
-          ]
-        }
-      })
-      .from(clone)
-      .save();
+    const canvas=await window.html2canvas(clone,{
+      scale:2,useCORS:true,backgroundColor:"#ffffff",logging:false,
+      width:clone.scrollWidth,height:clone.scrollHeight,windowWidth:760,
+      scrollX:0,scrollY:0
+    });
+    if(!canvas||!canvas.width||!canvas.height) throw new Error("PDF canvas was empty.");
+
+    const {jsPDF}=window.jspdf;
+    const pdf=new jsPDF({orientation:"portrait",unit:"mm",format:"a4",compress:true});
+    const pageW=210,pageH=297,margin=5,drawW=pageW-margin*2,drawH=pageH-margin*2;
+    const cssW=clone.scrollWidth||760;
+    const cssPerPage=cssW*(drawH/drawW); // natural CSS px represented by one A4 page
+    const scalePx=canvas.width/cssW;
+
+    // Prevent important cards/panels being sliced in half. If a planned page cut
+    // lands inside one, move the cut to just before that element when practical.
+    const avoidSel=[
+      ".PRquickRead",".PRvisualGrid",".PRpriorityBanner",".PRactions",".PRstory",
+      ".PRchartBox",".PRbadVerdict",".PRpatternCallout",".PRgamePlan",".PRplanCard",
+      ".PRdnaCard",".PRnetSummary",".PRpartHeader"
+    ].join(",");
+    const rootRect=clone.getBoundingClientRect();
+    const avoids=Array.from(clone.querySelectorAll(avoidSel)).map(el=>{
+      const r=el.getBoundingClientRect(); return {top:r.top-rootRect.top,bottom:r.bottom-rootRect.top};
+    }).filter(x=>x.bottom>x.top+2).sort((a,b)=>a.top-b.top);
+
+    const cuts=[0]; let top=0; const totalCss=clone.scrollHeight;
+    while(top<totalCss-2){
+      let bottom=Math.min(totalCss,top+cssPerPage);
+      if(bottom<totalCss){
+        const hit=avoids.find(a=>a.top<bottom-2&&a.bottom>bottom+2&&(a.bottom-a.top)<cssPerPage*0.92);
+        if(hit && hit.top-top>cssPerPage*0.45) bottom=Math.max(top+100,hit.top-8);
+        // Avoid orphaning a major section heading in the final ~80px of a page.
+        const nearHeading=Array.from(clone.querySelectorAll(".PRpartHeader,.PRvizTitle")).map(el=>{
+          const r=el.getBoundingClientRect();return r.top-rootRect.top;
+        }).find(y=>y>bottom-85&&y<bottom);
+        if(Number.isFinite(nearHeading)&&nearHeading-top>cssPerPage*0.45) bottom=nearHeading-8;
+      }
+      if(bottom<=top+50) bottom=Math.min(totalCss,top+cssPerPage);
+      cuts.push(bottom); top=bottom;
+    }
+
+    for(let i=0;i<cuts.length-1;i++){
+      const yCss=cuts[i], hCss=cuts[i+1]-cuts[i];
+      const yPx=Math.max(0,Math.round(yCss*scalePx));
+      const hPx=Math.min(canvas.height-yPx,Math.max(1,Math.round(hCss*scalePx)));
+      const slice=document.createElement("canvas"); slice.width=canvas.width; slice.height=hPx;
+      const ctx=slice.getContext("2d"); ctx.fillStyle="#fff"; ctx.fillRect(0,0,slice.width,slice.height);
+      ctx.drawImage(canvas,0,yPx,canvas.width,hPx,0,0,canvas.width,hPx);
+      const img=slice.toDataURL("image/jpeg",0.96);
+      const imgH=drawW*(hPx/canvas.width);
+      if(i>0) pdf.addPage();
+      pdf.addImage(img,"JPEG",margin,margin,drawW,Math.min(drawH,imgH),undefined,"FAST");
+    }
+    pdf.save(filename);
 
   }catch(e){
-    try { console.error("PDF export failed:", e); } catch(_) {}
-    alert("Could not create the PDF report.");
+    try{console.error("PDF export failed:",e);}catch(_){}
+    alert("Could not create the PDF report. Check the console for PDF export failed.");
   }finally{
-    if(holder && holder.parentNode){ try { holder.parentNode.removeChild(holder); } catch(e) {} }
-    if(btn){
-      btn.disabled = false;
-      btn.textContent = "Download PDF";
-      btn.style.opacity = "1";
-    }
+    if(stage&&stage.parentNode){try{stage.parentNode.removeChild(stage);}catch(e){}}
+    if(btn){btn.disabled=false;btn.textContent="Download PDF";btn.style.opacity="1";}
   }
 }
-
 
 
 function PR_generateAllGolfersReportHTML({ model, yearLabel, seasonLimit, scoringMode, lensMode, comparatorMode }){
