@@ -12014,8 +12014,16 @@ const postRoundIntel = (() => {
       return Array.isArray(x) ? x.map(Number) : [];
     };
     const arrGross = r => {
-      const x = r && (r.grossPerHole || r.grossHoles || r.holeGross || r.scoresPerHole || r.scores || r.grossArr);
-      return Array.isArray(x) ? x.map(Number) : [];
+      // Prefer a real gross hole array. For Stableford-only imports the season
+      // model may already have produced a WHS-safe/imputed gross array; use it
+      // as the fallback so a player with only one recorded round can still get
+      // the exact playing-to-handicap snapshot/gauge.
+      const x = r && (
+        r.grossPerHole || r.imputedGrossPerHole || r.grossHoles || r.holeGross ||
+        r.scoresPerHole || r.scores || r.grossArr ||
+        r?.parsed?.grossPerHole || r?.parsed?.imputedGrossPerHole
+      );
+      return Array.isArray(x) ? x.map(v => _safeNum(v, NaN)) : [];
     };
 
     // Is this latest round a true solo event?
@@ -14379,46 +14387,33 @@ async function PR_downloadSeasonReportPDF(){
     }
 
     const html2pdf = await PR_loadHtml2Pdf();
-
     const params = (typeof window !== "undefined" && window.__dslSeasonReportParams)
-      ? window.__dslSeasonReportParams
-      : {};
+      ? window.__dslSeasonReportParams : {};
 
     const safePart = (value, fallback) => {
       const raw = String(value || fallback || "");
-      if(typeof PR_safeSlug === "function"){
-        try { return PR_safeSlug(raw); } catch(e) {}
-      }
-      return raw
-        .trim()
-        .replace(/[^a-z0-9_-]+/gi, "_")
-        .replace(/^_+|_+$/g, "") || fallback || "report";
+      if(typeof PR_safeSlug === "function"){ try { return PR_safeSlug(raw); } catch(e) {} }
+      return raw.trim().replace(/[^a-z0-9_-]+/gi, "_").replace(/^_+|_+$/g, "") || fallback || "report";
     };
-
     const filename = `SeasonReport_${safePart(params.playerName, "player")}_${safePart(params.yearLabel, "season")}.pdf`;
 
-    // FINAL PDF STRATEGY:
-    // Render the report at a stable desktop width in normal document coordinates,
-    // then let html2pdf scale the COMPLETE canvas proportionally onto A4.
-    // Do not park the source at a huge negative X coordinate: html2canvas can
-    // treat that coordinate as part of the capture and crop one side of the report.
-    const PDF_SOURCE_WIDTH = 760;
-
+    // Use the last KNOWN-GOOD capture strategy (the one that produced a visible,
+    // centred PDF), while retaining the later component-level print fixes.
+    // Do not use negative z-index or html2canvas x/y/width overrides: those
+    // caused blank or shifted PDFs on Safari/iOS.
     holder = document.createElement("div");
-    holder.style.position = "absolute";
-    holder.style.left = "0";
+    holder.style.position = "fixed";
+    holder.style.left = "-100000px";
     holder.style.top = "0";
-    holder.style.width = `${PDF_SOURCE_WIDTH}px`;
+    holder.style.width = "794px";
     holder.style.background = "#ffffff";
-    holder.style.zIndex = "-2147483000";
     holder.style.pointerEvents = "none";
-    holder.style.overflow = "visible";
 
     const clone = body.cloneNode(true);
     clone.removeAttribute("id");
     clone.classList.add("PRpdfExportRoot");
-    clone.style.width = `${PDF_SOURCE_WIDTH}px`;
-    clone.style.maxWidth = `${PDF_SOURCE_WIDTH}px`;
+    clone.style.width = "748px";
+    clone.style.maxWidth = "748px";
     clone.style.margin = "0";
     clone.style.background = "#ffffff";
     clone.style.padding = "8px";
@@ -14428,13 +14423,8 @@ async function PR_downloadSeasonReportPDF(){
     holder.appendChild(clone);
     document.body.appendChild(holder);
 
-    // Wait for layout/fonts before html2canvas measures the clone.
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-    if (document.fonts && document.fonts.ready) {
-      try { await document.fonts.ready; } catch (_) {}
-    }
-
-    const captureWidth = Math.max(PDF_SOURCE_WIDTH, Math.ceil(clone.scrollWidth || PDF_SOURCE_WIDTH));
+    if(document.fonts && document.fonts.ready){ try { await document.fonts.ready; } catch(_) {} }
 
     await html2pdf()
       .set({
@@ -14446,21 +14436,18 @@ async function PR_downloadSeasonReportPDF(){
           useCORS: true,
           backgroundColor: "#ffffff",
           logging: false,
-          windowWidth: Math.max(1200, captureWidth + 40),
-          width: captureWidth,
+          windowWidth: 1200,
           scrollX: 0,
-          scrollY: 0,
-          x: 0,
-          y: 0
+          scrollY: 0
         },
-        jsPDF: {
-          unit: "mm",
-          format: "a4",
-          orientation: "portrait"
-        },
+        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
         pagebreak: {
           mode: ["css", "legacy"],
-          avoid: [".PRquickRead", ".PRvisualCard", ".PRgoodBadCard", ".PRheatmapCard", ".PRseasonEvidenceGrid", ".PRdnaCard", ".PRplanCard", ".PRpriorityBanner", ".PRopportunity", ".PRstory", ".PRpatternCallout", "tr"]
+          avoid: [
+            ".PRquickRead", ".PRvisualCard", ".PRgoodBadCard", ".PRheatmapCard",
+            ".PRseasonEvidenceGrid", ".PRdnaCard", ".PRplanCard", ".PRpriorityBanner",
+            ".PRopportunity", ".PRstory", ".PRpatternCallout", "tr"
+          ]
         }
       })
       .from(clone)
@@ -14470,9 +14457,7 @@ async function PR_downloadSeasonReportPDF(){
     try { console.error("PDF export failed:", e); } catch(_) {}
     alert("Could not create the PDF report.");
   }finally{
-    if(holder && holder.parentNode){
-      try { holder.parentNode.removeChild(holder); } catch(e) {}
-    }
+    if(holder && holder.parentNode){ try { holder.parentNode.removeChild(holder); } catch(e) {} }
     if(btn){
       btn.disabled = false;
       btn.textContent = "Download PDF";
