@@ -13080,20 +13080,80 @@ const scorecardIntel = (() => {
     .PRconfidenceLegend{margin-top:7px;font-size:9px;line-height:1.4;color:#64748b}
     @media print{.PRr{-webkit-print-color-adjust:exact;print-color-adjust:exact}.PRvisualHero,.PRpriorityBanner,.PRopportunity,.PRstory,.PRpatternCallout{box-shadow:none}}
     @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples,.PRlatestGrid,.PRgeneralGrid,.PRquickGrid,.PRseasonTopGrid{grid-template-columns:1fr}.PRcostAudit{padding-left:0}.PRholeStrip{grid-template-columns:repeat(9,minmax(0,1fr))}.PRdnaGrid,.PRplanGrid{grid-template-columns:1fr}.PRfingerprint{grid-template-columns:repeat(9,minmax(0,1fr))}.PRcompareGrid{grid-template-columns:1fr}}
-    /* PDF export must use the report's desktop composition even when generated on a phone. */
+    /* PDF export: lock to a safe A4 desktop composition on every device. */
+    .PRpdfExportRoot,.PRpdfExportRoot *{box-sizing:border-box}
+    .PRpdfExportRoot{width:100%!important;max-width:100%!important;overflow:visible!important}
+    .PRpdfExportRoot .PRr{width:100%!important;max-width:100%!important;overflow:hidden!important}
+    .PRpdfExportRoot .PRr>*{max-width:100%!important}
     .PRpdfExportRoot .PRquickGrid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
     .PRpdfExportRoot .PRvisualGrid{grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr)!important}
-    .PRpdfExportRoot .PRstory{break-before:page!important;page-break-before:always!important}
+    .PRpdfExportRoot .PRstory{break-before:page!important;page-break-before:always!important;break-inside:avoid!important;page-break-inside:avoid!important}
     .PRpdfExportRoot .PRactions{grid-template-columns:repeat(4,minmax(0,1fr))!important}
     .PRpdfExportRoot .PRtriples{grid-template-columns:repeat(3,minmax(0,1fr))!important}
     .PRpdfExportRoot .PRlatestGrid{grid-template-columns:1.3fr .7fr!important}
     .PRpdfExportRoot .PRgeneralGrid,.PRpdfExportRoot .PRcompareGrid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important}
     .PRpdfExportRoot .PRdnaGrid,.PRpdfExportRoot .PRplanGrid{grid-template-columns:repeat(3,minmax(0,1fr))!important}
-    .PRpdfExportRoot .PRfingerprint,.PRpdfExportRoot .PRholeStrip{grid-template-columns:repeat(18,minmax(0,1fr))!important}
     .PRpdfExportRoot .PRseasonTopGrid{grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr)!important}
-    .PRpdfExportRoot .PRcostAudit{padding-left:63px!important}
-    .PRpdfExportRoot .PRgauge{max-width:330px;max-height:160px}
+    .PRpdfExportRoot .PRcostAudit{padding-left:54px!important}
+    .PRpdfExportRoot .PRgauge{max-width:305px;max-height:150px}
     .PRpdfExportRoot .PRvizSection{box-shadow:none}
+
+    /* Never allow fixed/min-content widths to push content through the A4 right edge. */
+    .PRpdfExportRoot .PRvisualCard,.PRpdfExportRoot .PRchartBox,.PRpdfExportRoot .PRact,.PRpdfExportRoot .PRdnaCard,.PRpdfExportRoot .PRplanCard{min-width:0!important;max-width:100%!important;overflow:hidden!important}
+    .PRpdfExportRoot .PRcostRow{grid-template-columns:48px minmax(0,1fr) 54px!important;gap:5px!important}
+    .PRpdfExportRoot .PRcostAudit{font-size:8px!important}
+    .PRpdfExportRoot .PRactions{gap:5px!important}
+    .PRpdfExportRoot .PRact{padding:8px!important}
+    .PRpdfExportRoot .PRactV{font-size:12px!important}
+    .PRpdfExportRoot .PRactS{font-size:9px!important}
+
+    /* Strength profile: reserve a compact value column so GAIN / LOSS never clips. */
+    .PRpdfExportRoot .PRstrengthRow{grid-template-columns:minmax(78px,.95fr) minmax(70px,1fr) 68px!important;gap:4px!important}
+    .PRpdfExportRoot .PRstrengthLabel{font-size:8.5px!important;line-height:1.15!important;overflow-wrap:anywhere}
+    .PRpdfExportRoot .PRstrengthValue{font-size:8.5px!important;white-space:nowrap!important}
+
+    /* Full 18-hole strips must always fit in their card. */
+    .PRpdfExportRoot .PRholeStrip,.PRpdfExportRoot .PRfingerprint{grid-template-columns:repeat(18,minmax(0,1fr))!important;gap:2px!important;width:100%!important;max-width:100%!important;overflow:hidden!important}
+    .PRpdfExportRoot .PRholeTile,.PRpdfExportRoot .PRfinger{min-width:0!important;padding-left:0!important;padding-right:0!important}
+    .PRpdfExportRoot .PRholeN,.PRpdfExportRoot .PRholeD,.PRpdfExportRoot .PRfingerN,.PRpdfExportRoot .PRfingerV{font-size:7.5px!important;white-space:nowrap!important}
+
+    /* Heatmap: 18 holes plus row label in one fixed-width grid, no horizontal overflow. */
+    .PRpdfExportRoot .PRheat{overflow:hidden!important;width:100%!important}
+    .PRpdfExportRoot .PRheatGrid{grid-template-columns:30px repeat(18,minmax(0,1fr))!important;gap:1px!important;width:100%!important;max-width:100%!important;min-width:0!important}
+    .PRpdfExportRoot .PRheatHead{font-size:5.8px!important;min-width:0!important}
+    .PRpdfExportRoot .PRheatDate{font-size:6.5px!important;overflow:hidden!important;text-overflow:ellipsis!important}
+    .PRpdfExportRoot .PRheatCell{min-width:0!important;min-height:7px!important;border-radius:3px!important}
+
+    /* Keep evidence cards together. If they do not fit at the foot of a page, move them as a pair. */
+    .PRpdfExportRoot .PRseasonEvidenceGrid{break-inside:avoid!important;page-break-inside:avoid!important}
+    .PRpdfExportRoot .PRgoodBadCard,.PRpdfExportRoot .PRheatmapCard{break-inside:avoid!important;page-break-inside:avoid!important}
+    .PRpdfExportRoot .PRgbGrid{grid-template-columns:minmax(66px,.9fr) minmax(0,1fr) minmax(0,1fr)!important;gap:4px!important}
+    .PRpdfExportRoot .PRgbLabel,.PRpdfExportRoot .PRgbHead{font-size:8px!important}
+    .PRpdfExportRoot .PRbadVerdict{padding:8px 9px!important}
+    .PRpdfExportRoot .PRbadVerdictV{font-size:12px!important}
+    .PRpdfExportRoot .PRbadVerdictS{font-size:8.5px!important}
+
+    /* Course DNA starts cleanly on its own final page; compact spacing keeps the 4-page format. */
+    .PRpdfExportRoot .PRcourseDnaPage{break-before:page!important;page-break-before:always!important;padding:10px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRopportunity{margin-top:9px!important;padding:12px 14px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRchartBox{margin-top:8px!important;padding:8px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRdnaGrid{margin-top:8px!important;gap:7px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRdnaCard{padding:8px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRgeneralGrid{margin-top:7px!important;gap:7px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRgamePlan{margin-top:9px!important;padding:10px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRplanGrid{margin-top:7px!important;gap:7px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRplanCard{padding:8px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRplanV{font-size:13px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRplanS{font-size:8.5px!important}
+    .PRpdfExportRoot .PRcourseDnaPage .PRphaseRow{grid-template-columns:76px minmax(0,1fr) 44px!important;gap:5px!important}
+
+    /* Recurring-hole values stay visible rather than falling through the right edge. */
+    .PRpdfExportRoot .PRcourseDnaPage .PRchartBox{min-width:0!important}
+    .PRpdfExportRoot .PRcourseDnaPage [style*="justify-content:space-between"]{min-width:0!important}
+
+    /* SVGs scale to the card, never to their intrinsic pixel width. */
+    .PRpdfExportRoot svg{max-width:100%!important}
+    .PRpdfExportRoot .PRchartSvg{width:100%!important;height:auto!important;overflow:hidden!important}
 
   </style>
 
@@ -13473,8 +13533,8 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
     </div>
   </div>
 
-  <div class="PRgeneralGrid">
-    <div class="PRchartBox">
+  <div class="PRgeneralGrid PRseasonEvidenceGrid">
+    <div class="PRchartBox PRgoodBadCard">
       <div class="PRvizTitle" style="font-size:12px;">Good rounds vs poor rounds</div>
       <div class="PRvizSub">${postRoundIntel.exactCategories.goodBad ? PR_escapeHtml(postRoundIntel.exactCategories.goodBad.headline) : "Need at least four rounds for this comparison."}</div>
       ${postRoundIntel.exactCategories.goodBad ? (() => {
@@ -13515,7 +13575,7 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
       })() : ""}
     </div>
 
-    <div class="PRchartBox">
+    <div class="PRchartBox PRheatmapCard">
       <div class="PRvizTitle" style="font-size:12px;">Recent-round consistency heatmap</div>
       <div class="PRvizSub">Repeated red columns reveal recurring hole problems immediately.</div>
       <div class="PRheat">
@@ -14284,16 +14344,16 @@ async function PR_downloadSeasonReportPDF(){
     holder.style.position = "fixed";
     holder.style.left = "-100000px";
     holder.style.top = "0";
-    holder.style.width = "794px";
+    holder.style.width = "724px";
     holder.style.background = "#ffffff";
 
     const clone = body.cloneNode(true);
     clone.removeAttribute("id");
     clone.classList.add("PRpdfExportRoot");
-    clone.style.width = "748px";
-    clone.style.maxWidth = "748px";
+    clone.style.width = "700px";
+    clone.style.maxWidth = "700px";
     clone.style.background = "#ffffff";
-    clone.style.padding = "8px";
+    clone.style.padding = "6px";
     clone.style.boxSizing = "border-box";
 
     holder.appendChild(clone);
@@ -14301,7 +14361,7 @@ async function PR_downloadSeasonReportPDF(){
 
     await html2pdf()
       .set({
-        margin: [5, 5, 5, 5],
+        margin: [6, 6, 6, 6],
         filename,
         image: { type: "jpeg", quality: 0.98 },
         html2canvas: {
@@ -14320,7 +14380,7 @@ async function PR_downloadSeasonReportPDF(){
         },
         pagebreak: {
           mode: ["css", "legacy"],
-          avoid: [".PRquickRead", ".PRvisualCard", ".PRchartBox", ".PRdnaCard", ".PRplanCard", ".PRpriorityBanner", ".PRopportunity", ".PRstory", ".PRpatternCallout", "tr"]
+          avoid: [".PRquickRead", ".PRvisualCard", ".PRgoodBadCard", ".PRheatmapCard", ".PRseasonEvidenceGrid", ".PRdnaCard", ".PRplanCard", ".PRpriorityBanner", ".PRopportunity", ".PRstory", ".PRpatternCallout", "tr"]
         }
       })
       .from(clone)
