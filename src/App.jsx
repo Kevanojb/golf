@@ -13101,41 +13101,47 @@ const scorecardIntel = (() => {
         const capped=Math.max(-8,Math.min(8,d));
         const angle=-90+((capped+8)/16)*180;
         const cats=postRoundIntel.exactCategories||{};
-        const fix=cats.fix||null, watch=cats.watch||null, keep=Array.isArray(cats.keep)?cats.keep:[];
-        const reportRoundCount=Math.max(1,Number(cats.roundSummaries?.length||rounds||1));
-        const impactEstimate=x=>{
-          if(!x||!Number.isFinite(Number(x.avg))||!Number.isFinite(Number(x.n)))return NaN;
-          const occurrencesPerRound=Number(x.n)/reportRoundCount;
-          return Math.max(0,Math.abs(Number(x.avg))*occurrencesPerRound);
-        };
-        const fixImpact=impactEstimate(fix);
-        const watchImpact=impactEstimate(watch);
-        const confidenceClass=s=>String(s||"").toUpperCase()==="CONFIRMED"?"confirmed":String(s||"").toUpperCase()==="EMERGING"?"emerging":"low";
 
-        const cdna=cats.courseDNA||null;
-        const nemesisTop=cdna?.nemesis?.[0]||null;
-        const nemesisImpact=nemesisTop?Math.abs(Number(nemesisTop.avgDelta||0)):NaN;
-        let executivePriority={
-          title:fix?`Improve ${fix.displayLabel}`:"Protect the card",
-          detail:fix?`${fix.displayLabel} is the strongest recurring category below your playing-to-handicap target.`:"No recurring category currently dominates the scoring loss.",
-          impact:Number.isFinite(fixImpact)?fixImpact:NaN,
-          confidence:fix?.status||"LOW EVIDENCE"
-        };
-        if(nemesisTop && (!Number.isFinite(fixImpact) || nemesisImpact>fixImpact*0.75)){
-          executivePriority={
-            title:`Recurring Hole ${nemesisTop.hole} damage`,
-            detail:`Hole ${nemesisTop.hole} is below handicap target in ${nemesisTop.badCount}/${nemesisTop.appearances} rounds and has cost ${nemesisTop.totalCost.toFixed(0)} strokes in total.`,
-            impact:nemesisImpact,
-            confidence:nemesisTop.appearances>=4?"CONFIRMED":nemesisTop.appearances>=3?"EMERGING":"LOW EVIDENCE"
-          };
-        }
+        // Latest-round-only categories for Part 1.
+        // IMPORTANT: do not use cats.fix/watch/keep here because those are selected-period / historical signals.
+        const latestHoles=Array.isArray(eh.holes)?eh.holes:[];
+        const avgLatest=(arr)=>arr.length?arr.reduce((sum,h)=>sum+Number(h.delta||0),0)/arr.length:NaN;
+        const makeLatestArea=(label,arr)=>({label,n:arr.length,avg:avgLatest(arr)});
+        const latestAreas=[
+          makeLatestArea("Par 3",latestHoles.filter(h=>Number(h.par)===3)),
+          makeLatestArea("Par 4",latestHoles.filter(h=>Number(h.par)===4)),
+          makeLatestArea("Par 5",latestHoles.filter(h=>Number(h.par)===5)),
+          makeLatestArea("SI 1–6",latestHoles.filter(h=>Number(h.si)>=1&&Number(h.si)<=6)),
+          makeLatestArea("SI 7–12",latestHoles.filter(h=>Number(h.si)>=7&&Number(h.si)<=12)),
+          makeLatestArea("SI 13–18",latestHoles.filter(h=>Number(h.si)>=13&&Number(h.si)<=18)),
+          makeLatestArea("Under 200 yards",latestHoles.filter(h=>Number.isFinite(Number(h.yard))&&Number(h.yard)<200)),
+          makeLatestArea("201–350 yards",latestHoles.filter(h=>Number.isFinite(Number(h.yard))&&Number(h.yard)>=201&&Number(h.yard)<=350)),
+          makeLatestArea("351+ yards",latestHoles.filter(h=>Number.isFinite(Number(h.yard))&&Number(h.yard)>=351))
+        ].filter(x=>x.n>=2&&Number.isFinite(x.avg));
+
+        const latestStrength=latestAreas.slice().sort((a,b)=>b.avg-a.avg)[0]||null;
+        const latestWeakness=latestAreas.slice().sort((a,b)=>a.avg-b.avg)[0]||null;
+        const latestSecondWeakness=latestAreas.slice().sort((a,b)=>a.avg-b.avg)[1]||null;
+        const latestCostliest=Array.isArray(eh.losses)?eh.losses.slice(0,3):[];
+
+        const latestPriority=latestWeakness&&latestWeakness.avg<-.05
+          ? {
+              title:`Today's biggest leak: ${latestWeakness.label}`,
+              detail:`This round, ${latestWeakness.label} averaged ${Math.abs(latestWeakness.avg).toFixed(2)} strokes per hole worse than your handicap target across ${latestWeakness.n} holes.`
+            }
+          : latestCostliest.length
+            ? {
+                title:`Today's damage was concentrated on ${latestCostliest.length===1?`Hole ${latestCostliest[0].hole}`:`Holes ${latestCostliest.map(h=>h.hole).join(", ")}`}`,
+                detail:`Those holes accounted for ${latestCostliest.reduce((sum,h)=>sum+Number(h.cost||0),0).toFixed(0)} strokes lost to your handicap target in this round.`
+              }
+            : {
+                title:"No clear scoring leak today",
+                detail:"No area of this round finished meaningfully below your playing-to-handicap target."
+              };
         const verdict=d>=2?"Beat handicap target":d>0?"Slightly better than handicap":d<=-3&&eh.damageShare>=.65?"Good golf, damaged by a few holes":d<0?"Below handicap target":"Played to handicap";
         const story=eh.losses.length&&eh.damageShare>=.65
           ? `${Math.round(eh.damageShare*100)}% of all strokes lost to handicap target came from the three costliest holes. The other holes combined were ${eh.restDelta>=0?`${eh.restDelta.toFixed(0)} strokes better than target`:`${Math.abs(eh.restDelta).toFixed(0)} strokes below target`}.`
           : d>0?`You beat your handicap target by ${d.toFixed(0)} strokes.`:d<0?`You finished ${Math.abs(d).toFixed(0)} strokes above handicap target.`:"You played exactly to handicap target.";
-        const next=fix?`Keep total loss in ${fix.displayLabel} to 2 strokes or fewer next round.`:"Keep total damage from the three costliest holes to 2 strokes or fewer next round.";
-        const bestStrength=keep?.[0]||null;
-        const protectDriver=cats?.goodBad?.driver?.label || (nemesisTop?`Hole ${nemesisTop.hole}`:"Doubles+");
         const latestSummary=d>0?`${Math.abs(d).toFixed(0)} strokes better than target`:d<0?`${Math.abs(d).toFixed(0)} strokes worse than target`:"Played exactly to target";
         const latestTone=d>0?"PRsignGood":d<0?"PRsignBad":"";
         const totalGain=(eh.holes||[]).reduce((sum,h)=>sum+Math.max(0,Number(h.delta||0)),0);
@@ -13147,9 +13153,9 @@ const scorecardIntel = (() => {
           </div>
           <div class="PRquickGrid">
             <div class="PRquickCard"><div class="PRquickK">Latest round</div><div class="PRquickV ${latestTone}">${PR_escapeHtml(latestSummary)}</div><div class="PRquickS">Gross ${eh.actual} vs target ${eh.target}</div></div>
-            <div class="PRquickCard"><div class="PRquickK">Biggest strength</div><div class="PRquickV">${bestStrength?PR_escapeHtml(bestStrength.displayLabel):"Still emerging"}</div><div class="PRquickS">${bestStrength?`GAIN +${Number(bestStrength.avg).toFixed(2)} strokes/hole`:`More rounds will sharpen this`}</div></div>
-            <div class="PRquickCard"><div class="PRquickK">Primary scoring focus</div><div class="PRquickV">${fix?PR_escapeHtml(fix.displayLabel):"Protect the card"}</div><div class="PRquickS">${fix?`LOSS ${Math.abs(Number(fix.avg)).toFixed(2)} strokes/hole`:`No category dominates yet`}</div></div>
-            <div class="PRquickCard"><div class="PRquickK">Score-protection focus</div><div class="PRquickV">${PR_escapeHtml(protectDriver)}</div><div class="PRquickS">Reduce expensive holes before chasing extra birdies</div></div>
+            <div class="PRquickCard"><div class="PRquickK">Best area today</div><div class="PRquickV">${latestStrength?PR_escapeHtml(latestStrength.label):"No clear standout"}</div><div class="PRquickS">${latestStrength?`${latestStrength.avg>=0?"GAIN ":"LOSS "}${Math.abs(latestStrength.avg).toFixed(2)} strokes/hole · ${latestStrength.n} holes`:"This round was broadly even by category"}</div></div>
+            <div class="PRquickCard"><div class="PRquickK">Biggest leak today</div><div class="PRquickV">${latestWeakness?PR_escapeHtml(latestWeakness.label):"No clear leak"}</div><div class="PRquickS">${latestWeakness?`${latestWeakness.avg<0?"LOSS ":"GAIN "}${Math.abs(latestWeakness.avg).toFixed(2)} strokes/hole · ${latestWeakness.n} holes`:"No category was meaningfully below target"}</div></div>
+            <div class="PRquickCard"><div class="PRquickK">Costliest holes today</div><div class="PRquickV">${latestCostliest.length?PR_escapeHtml(latestCostliest.map(h=>`H${h.hole}`).join(" · ")):"None"}</div><div class="PRquickS">${latestCostliest.length?`${latestCostliest.reduce((sum,h)=>sum+Number(h.cost||0),0).toFixed(0)} total strokes lost on these holes`:"No holes finished below target"}</div></div>
           </div>
         </div>
 
@@ -13200,43 +13206,34 @@ const scorecardIntel = (() => {
         </div>
 
         <div class="PRpriorityBanner">
-          <div class="PRpriorityK">Primary scoring focus</div>
-          <div class="PRpriorityV">${PR_escapeHtml(executivePriority.title)}</div>
-          <div class="PRpriorityS">${PR_escapeHtml(executivePriority.detail)}</div>
+          <div class="PRpriorityK">This round's biggest opportunity</div>
+          <div class="PRpriorityV">${PR_escapeHtml(latestPriority.title)}</div>
+          <div class="PRpriorityS">${PR_escapeHtml(latestPriority.detail)}</div>
           <div class="PRpriorityMeta">
-            <span class="PRpriorityChip">${PR_escapeHtml(executivePriority.confidence||"LOW EVIDENCE")}</span>
-            ${Number.isFinite(executivePriority.impact)
-              ? `<span class="PRpriorityChip">Estimated upside: ~${executivePriority.impact.toFixed(1)} stroke${executivePriority.impact<1.5?"":"s"}/round if brought to target</span>`
-              : ""}
+            <span class="PRpriorityChip">LATEST ROUND ONLY</span>
           </div>
         </div>
 
         <div class="PRactions">
-          <div class="PRact keep"><div class="PRactK">Keep doing</div>
-            ${keep.length?keep.map(x=>`
-              <div style="margin-bottom:8px;">
-                <div class="PRactV">${PR_escapeHtml(x.displayLabel)}</div>
-                <div class="PRactS">GAIN +${Number(x.avg).toFixed(2)} strokes/hole · ${x.n} holes</div>
-                <span class="PRconfidence ${confidenceClass(x.status)}">${PR_escapeHtml(x.status||"EVIDENCE")}</span>
-              </div>`).join(""):`<div class="PRactS">No category is clearly above handicap target yet.</div>`}
+          <div class="PRact keep"><div class="PRactK">What went well today</div>
+            ${latestStrength&&latestStrength.avg>0?`
+              <div class="PRactV">${PR_escapeHtml(latestStrength.label)}</div>
+              <div class="PRactS">GAIN ${latestStrength.avg.toFixed(2)} strokes/hole vs target · ${latestStrength.n} holes</div>
+            `:`<div class="PRactS">No single category clearly stood out above target today.</div>`}
           </div>
-          <div class="PRact watch"><div class="PRactK">Watch</div>
-            ${watch?`
-              <div class="PRactV">${PR_escapeHtml(watch.displayLabel)}</div>
-              <div class="PRactS">LOSS ${Math.abs(Number(watch.avg)).toFixed(2)} strokes/hole · ${watch.n} holes</div>
-              <span class="PRconfidence ${confidenceClass(watch.status)}">${PR_escapeHtml(watch.status||"LOW EVIDENCE")}</span>
-              ${Number.isFinite(watchImpact)?`<div class="PRimpact"><div class="PRimpactK">Potential upside</div><div class="PRimpactV">~${watchImpact.toFixed(1)} strokes/round</div></div>`:""}
-            `:`<div class="PRactS">No second scoring leak needs attention.</div>`}
+          <div class="PRact watch"><div class="PRactK">Secondary leak today</div>
+            ${latestSecondWeakness&&latestSecondWeakness.avg<0?`
+              <div class="PRactV">${PR_escapeHtml(latestSecondWeakness.label)}</div>
+              <div class="PRactS">LOSS ${Math.abs(latestSecondWeakness.avg).toFixed(2)} strokes/hole vs target · ${latestSecondWeakness.n} holes</div>
+            `:`<div class="PRactS">No second category was meaningfully below target today.</div>`}
           </div>
-          <div class="PRact fix"><div class="PRactK">Fix first</div>
-            ${fix?`
-              <div class="PRactV">${PR_escapeHtml(fix.displayLabel)}</div>
-              <div class="PRactS">LOSS ${Math.abs(Number(fix.avg)).toFixed(2)} strokes/hole · ${fix.n} holes</div>
-              <span class="PRconfidence ${confidenceClass(fix.status)}">${PR_escapeHtml(fix.status||"LOW EVIDENCE")}</span>
-              ${Number.isFinite(fixImpact)?`<div class="PRimpact"><div class="PRimpactK">Impact if brought to target</div><div class="PRimpactV">~${fixImpact.toFixed(1)} strokes/round</div></div>`:""}
-            `:`<div class="PRactS">No recurring area is currently below handicap target.</div>`}
+          <div class="PRact fix"><div class="PRactK">Costliest damage today</div>
+            ${latestCostliest.length?`
+              <div class="PRactV">${PR_escapeHtml(latestCostliest.map(h=>`Hole ${h.hole}`).join(", "))}</div>
+              <div class="PRactS">LOSS ${latestCostliest.reduce((sum,h)=>sum+Number(h.cost||0),0).toFixed(0)} strokes in total on the costliest holes.</div>
+            `:`<div class="PRactS">No below-target holes to flag.</div>`}
           </div>
-          <div class="PRact target"><div class="PRactK">Next-round target</div><div class="PRactV">${PR_escapeHtml(next)}</div><div class="PRactS">One measurable scoring job.</div></div>
+          <div class="PRact target"><div class="PRactK">What this round tells us</div><div class="PRactV">${PR_escapeHtml(d>0?"A strong round overall":d<0?"The score was held back by identifiable damage":"A round right on handicap target")}</div><div class="PRactS">Longer-term priorities are shown separately in Part 2 and the final game plan.</div></div>
         </div><div class="PRconfidenceLegend"><b>Confidence:</b> Emerging = early signal; Confirmed = repeated evidence across the current sample.</div>
 
         
