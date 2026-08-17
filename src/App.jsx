@@ -12878,6 +12878,21 @@ const scorecardIntel = (() => {
   }
 })();
 
+  const reportPeriodLabel = (() => {
+    try{
+      const yr=String(yearLabel||"All").trim();
+      const lim=String(seasonLimit||"All").trim();
+      if(lim && lim.toLowerCase()!=="all"){
+        const n=Number(lim);
+        if(Number.isFinite(n)&&n>0) return `YOUR LAST ${n} ROUND${n===1?"":"S"}`;
+      }
+      if(yr && yr.toLowerCase()!=="all") return `YOUR ${yr} GAME`;
+      return "YOUR SELECTED-PERIOD GAME";
+    }catch(e){
+      return "YOUR SELECTED-PERIOD GAME";
+    }
+  })();
+
   const htmlFragment = `
   <style>
     .PRr{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#0f172a}
@@ -13021,11 +13036,27 @@ const scorecardIntel = (() => {
     .PRpriorityMeta{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}
     .PRpriorityChip{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.24);border-radius:999px;padding:4px 8px;font-size:9px;font-weight:900}
     .PRvizSection,.PRvisualCard,.PRchartBox,.PRdnaCard,.PRplanCard,.PRact{break-inside:avoid;page-break-inside:avoid}
+    .PRpartHeader{margin-top:14px;border-radius:16px;padding:10px 14px;background:#0f2747;color:#fff;display:flex;align-items:center;gap:10px;break-inside:avoid}
+    .PRpartTag{font-size:10px;font-weight:950;letter-spacing:.10em;text-transform:uppercase;background:#fff;color:#0f2747;border-radius:999px;padding:4px 8px}
+    .PRpartTitle{font-size:18px;font-weight:950;letter-spacing:-.02em}
+    .PRroundVisualGrid{display:grid;grid-template-columns:1.25fr .75fr;gap:12px;margin-top:12px}
+    .PRcompareGrid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px}
+    .PRphaseCompare{margin-top:10px}
+    .PRphaseCompareRow{display:grid;grid-template-columns:82px 1fr 1fr;gap:8px;align-items:center;margin-top:7px}
+    .PRphaseCompareLabel{font-size:9px;font-weight:900;color:#475569}
+    .PRphaseMini{border-radius:8px;padding:6px 7px;font-size:9px;font-weight:950;text-align:center}
+    .PRlatestBox{background:#ecfdf5;color:#166534;border:1px solid #bbf7d0}
+    .PRperiodBox{background:#eff6ff;color:#1d4ed8;border:1px solid #bfdbfe}
+    .PRpatternCallout{margin-top:10px;border-radius:14px;padding:11px 12px;background:linear-gradient(135deg,#0f172a,#17385f);color:#fff}
+    .PRpatternK{font-size:9px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8}
+    .PRpatternV{font-size:15px;font-weight:950;margin-top:3px}
+    .PRpatternS{font-size:10px;color:#cbd5e1;line-height:1.45;margin-top:4px}
+    .PRlegacyEvidence{display:none!important}
     .PRscoreGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
     .PRscoreCard{border:1px solid #e2e8f0;border-radius:12px;padding:10px;background:#fff}
     .PRscoreBig{font-size:20px;font-weight:950;margin-top:3px}
     .PRconf{display:inline-block;border:1px solid #cbd5e1;border-radius:999px;padding:2px 7px;font-size:10px;font-weight:950}
-    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples,.PRlatestGrid,.PRgeneralGrid{grid-template-columns:1fr}.PRcostAudit{padding-left:0}.PRholeStrip{grid-template-columns:repeat(9,minmax(0,1fr))}.PRdnaGrid,.PRplanGrid{grid-template-columns:1fr}.PRfingerprint{grid-template-columns:repeat(9,minmax(0,1fr))}}
+    @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples,.PRlatestGrid,.PRgeneralGrid{grid-template-columns:1fr}.PRcostAudit{padding-left:0}.PRholeStrip{grid-template-columns:repeat(9,minmax(0,1fr))}.PRdnaGrid,.PRplanGrid{grid-template-columns:1fr}.PRfingerprint{grid-template-columns:repeat(9,minmax(0,1fr))}.PRroundVisualGrid,.PRcompareGrid{grid-template-columns:1fr}}
   </style>
 
   <div class="PRr">
@@ -13033,6 +13064,11 @@ const scorecardIntel = (() => {
       <div class="PRheroEye">Den Golf · Performance Intelligence</div>
       <div class="PRheroPlayer">${PR_escapeHtml(playerName||"")}</div>
       <div class="PRheroLine">${PR_escapeHtml(String(yearLabel||"All"))} · ${PR_num(rounds,0)} rounds · ${PR_num(holes,0)} holes · ${String(scoringMode)==="gross"?"Gross scoring":"Stableford"}</div>
+    </div>
+
+    <div class="PRpartHeader">
+      <span class="PRpartTag">Part 1</span>
+      <span class="PRpartTitle">Your Latest Round</span>
     </div>
 
     ${(postRoundIntel?.exactHandicap?.ok) ? `
@@ -13161,8 +13197,8 @@ const scorecardIntel = (() => {
 <div class="PRstory"><div class="PRstoryK">The story of this round</div><div class="PRstoryV">${PR_escapeHtml(verdict)}</div><div class="PRstoryS">${PR_escapeHtml(story)}</div></div>
 
 <div class="PRvizSection">
-  <div class="PRvizTitle">Latest Round Pattern</div>
-  <div class="PRvizSub">Every hole versus its exact playing-to-handicap gross target.</div>
+  <div class="PRvizTitle">Latest Round — Pattern & DNA</div>
+  <div class="PRvizSub">How this round unfolded, plus its own scoring fingerprint against the exact playing-to-handicap target.</div>
 
   <div class="PRholeStrip">
     ${eh.holes.map(h=>{
@@ -13174,9 +13210,9 @@ const scorecardIntel = (() => {
     }).join("")}
   </div>
 
-  <div class="PRlatestGrid">
+  <div class="PRroundVisualGrid">
     <div class="PRchartBox">
-      <div class="PRvizTitle" style="font-size:12px;">Momentum through the round</div>
+      <div class="PRvizTitle" style="font-size:12px;">Round momentum</div>
       <div class="PRvizSub">Cumulative strokes versus handicap target. Above zero = ahead of target.</div>
       ${(() => {
         const vals=[0]; let c=0;
@@ -13198,24 +13234,61 @@ const scorecardIntel = (() => {
     </div>
 
     <div class="PRchartBox">
-      <div class="PRvizTitle" style="font-size:12px;">Damage concentration</div>
-      <div class="PRvizSub">Share of all lost strokes caused by the three costliest holes.</div>
-      <div class="PRdamageWrap" style="margin-top:10px;">
-        ${(() => {
-          const pct=Math.max(0,Math.min(100,Math.round((eh.damageShare||0)*100)));
-          const r=52,circ=2*Math.PI*r,dash=circ*pct/100;
-          return `<svg width="130" height="130" viewBox="0 0 130 130">
-            <circle cx="65" cy="65" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="15"/>
-            <circle cx="65" cy="65" r="${r}" fill="none" stroke="#dc2626" stroke-width="15"
-              stroke-dasharray="${dash} ${circ-dash}" stroke-linecap="round" transform="rotate(-90 65 65)"/>
-            <text x="65" y="61" text-anchor="middle" font-size="25" font-weight="950" fill="#0f172a">${pct}%</text>
-            <text x="65" y="79" text-anchor="middle" font-size="9" font-weight="800" fill="#64748b">TOP 3 HOLES</text>
-          </svg>`;
-        })()}
-        <div class="PRdonutText">
-          <b>${eh.top3Loss.toFixed(0)} strokes</b> lost on the three costliest holes.<br/>
-          <b>${Math.max(0,eh.totalLoss-eh.top3Loss).toFixed(0)} strokes</b> lost across the other holes.
-        </div>
+      <div class="PRvizTitle" style="font-size:12px;">Round DNA — Spider Chart</div>
+      <div class="PRvizSub">This round only. 50 = handicap target; further out = stronger.</div>
+      ${(() => {
+        const hs=eh.holes||[];
+        const avg=arr=>arr.length?arr.reduce((s,v)=>s+v,0)/arr.length:NaN;
+        const parAvg=p=>avg(hs.filter(h=>Number(h.par)===p).map(h=>Number(h.delta)));
+        const siAvg=(lo,hi)=>avg(hs.filter(h=>Number(h.si)>=lo&&Number(h.si)<=hi).map(h=>Number(h.delta)));
+        const ydAvg=(lo,hi)=>avg(hs.filter(h=>Number.isFinite(Number(h.yard))&&Number(h.yard)>=lo&&Number(h.yard)<=hi).map(h=>Number(h.delta)));
+        const axes=[
+          ["Par 3",parAvg(3)],
+          ["Par 4",parAvg(4)],
+          ["Par 5",parAvg(5)],
+          ["<200",ydAvg(0,200)],
+          ["201–350",ydAvg(201,350)],
+          ["351+",ydAvg(351,9999)],
+          ["SI 1–6",siAvg(1,6)],
+          ["SI 13–18",siAvg(13,18)]
+        ];
+        const N=axes.length,cx=150,cy=140,maxR=104;
+        const pt=(i,r)=>{const a=-Math.PI/2+i*2*Math.PI/N;return [cx+Math.cos(a)*r,cy+Math.sin(a)*r];};
+        const score=v=>Number.isFinite(Number(v))?Math.max(12,Math.min(92,50+Number(v)*32)):50;
+        const poly=axes.map(([l,v],i)=>pt(i,maxR*score(v)/100).join(",")).join(" ");
+        return `<svg class="PRchartSvg" viewBox="0 0 300 290">
+          ${[25,50,75,100].map(q=>`<polygon points="${axes.map((_,i)=>pt(i,maxR*q/100).join(",")).join(" ")}" fill="none" stroke="${q===50?"#64748b":"#e2e8f0"}" stroke-width="${q===50?1.8:1}" ${q===50?'stroke-dasharray="4 3"':""}/>`).join("")}
+          ${axes.map((_,i)=>{const [x2,y2]=pt(i,maxR);return `<line x1="${cx}" y1="${cy}" x2="${x2}" y2="${y2}" stroke="#e2e8f0"/>`;}).join("")}
+          <polygon points="${poly}" fill="rgba(22,163,74,.18)" stroke="#16a34a" stroke-width="3"/>
+          ${axes.map(([label,v],i)=>{
+            const [lx,ly]=pt(i,maxR+20),[dx,dy]=pt(i,maxR*score(v)/100);
+            return `<circle cx="${dx}" cy="${dy}" r="3.5" fill="${Number(v)>=0?"#16a34a":"#dc2626"}"/>
+              <text x="${lx}" y="${ly}" text-anchor="middle" font-size="8.5" font-weight="800" fill="#475569">${PR_escapeHtml(label)}</text>`;
+          }).join("")}
+          <text x="${cx}" y="${cy+3}" text-anchor="middle" font-size="9" font-weight="950" fill="#475569">50 = TARGET</text>
+        </svg>`;
+      })()}
+    </div>
+  </div>
+
+  <div class="PRchartBox" style="margin-top:12px;">
+    <div class="PRvizTitle" style="font-size:12px;">Damage concentration</div>
+    <div class="PRvizSub">How much of the round's lost-score damage came from the three costliest holes.</div>
+    <div class="PRdamageWrap" style="margin-top:10px;">
+      ${(() => {
+        const pct=Math.max(0,Math.min(100,Math.round((eh.damageShare||0)*100)));
+        const r=52,circ=2*Math.PI*r,dash=circ*pct/100;
+        return `<svg width="130" height="130" viewBox="0 0 130 130">
+          <circle cx="65" cy="65" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="15"/>
+          <circle cx="65" cy="65" r="${r}" fill="none" stroke="#dc2626" stroke-width="15"
+            stroke-dasharray="${dash} ${circ-dash}" stroke-linecap="round" transform="rotate(-90 65 65)"/>
+          <text x="65" y="61" text-anchor="middle" font-size="25" font-weight="950" fill="#0f172a">${pct}%</text>
+          <text x="65" y="79" text-anchor="middle" font-size="9" font-weight="800" fill="#64748b">TOP 3 HOLES</text>
+        </svg>`;
+      })()}
+      <div class="PRdonutText">
+        <b>${eh.top3Loss.toFixed(0)} strokes</b> lost on the three costliest holes.<br/>
+        <b>${Math.max(0,eh.totalLoss-eh.top3Loss).toFixed(0)} strokes</b> lost across the other holes.
       </div>
     </div>
   </div>
@@ -13223,8 +13296,12 @@ const scorecardIntel = (() => {
 
 ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
 <div class="PRvizSection PRgameDnaPage">
-  <div class="PRvizTitle">Your Game DNA — Pattern & Trend</div>
-  <div class="PRvizSub">Longer-term scoring shape using the same exact handicap target on every round.</div>
+  <div class="PRpartHeader" style="margin-top:0;margin-bottom:12px;">
+    <span class="PRpartTag">Part 2</span>
+    <span class="PRpartTitle">${PR_escapeHtml(reportPeriodLabel)}</span>
+  </div>
+  <div class="PRvizTitle">Selected-Period Game DNA — Pattern & Trend</div>
+  <div class="PRvizSub">Everything below uses only the rounds included by the player's selected year/recent-games filter.</div>
 
   <div class="PRgeneralGrid">
     <div class="PRchartBox">
@@ -13270,8 +13347,8 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
     </div>
 
     <div class="PRchartBox">
-      <div class="PRvizTitle" style="font-size:12px;">Game DNA — Spider Chart</div>
-      <div class="PRvizSub">Your overall game shape. 50 = playing to handicap; further out = stronger than target, further in = weaker.</div>
+      <div class="PRvizTitle" style="font-size:12px;">Selected-Period DNA — Spider Chart</div>
+      <div class="PRvizSub">The overall game shape for the selected period. 50 = playing to handicap; further out = stronger, further in = weaker.</div>
       ${(() => {
         const rows=postRoundIntel.exactCategories.rows||[];
         const val=label=>rows.find(r=>r.displayLabel===label)?.avg;
@@ -13400,6 +13477,109 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length) ? `
 
     </div>
   </div>
+</div>
+
+
+<div class="PRvizSection">
+  <div class="PRvizTitle">Latest Round vs ${PR_escapeHtml(reportPeriodLabel.replace(/^YOUR\s+/,""))}</div>
+  <div class="PRvizSub">This tests whether the latest round repeated your normal patterns or looked meaningfully different.</div>
+
+  <div class="PRcompareGrid">
+    <div class="PRchartBox">
+      <div class="PRvizTitle" style="font-size:12px;">Pattern overlay — Spider Chart</div>
+      <div class="PRvizSub">Green = latest round · Blue = selected period · dashed ring = handicap target.</div>
+      ${(() => {
+        const hs=eh.holes||[];
+        const rows=postRoundIntel.exactCategories?.rows||[];
+        const avg=arr=>arr.length?arr.reduce((s,v)=>s+v,0)/arr.length:NaN;
+        const latestPar=p=>avg(hs.filter(h=>Number(h.par)===p).map(h=>Number(h.delta)));
+        const latestSI=(lo,hi)=>avg(hs.filter(h=>Number(h.si)>=lo&&Number(h.si)<=hi).map(h=>Number(h.delta)));
+        const latestYD=(lo,hi)=>avg(hs.filter(h=>Number.isFinite(Number(h.yard))&&Number(h.yard)>=lo&&Number(h.yard)<=hi).map(h=>Number(h.delta)));
+        const periodVal=label=>rows.find(r=>r.displayLabel===label)?.avg;
+        const combine=(a,b)=>{const xs=[a,b].map(Number).filter(Number.isFinite);return xs.length?xs.reduce((s,v)=>s+v,0)/xs.length:NaN;};
+        const axes=[
+          ["Par 3",latestPar(3),periodVal("Par: Par 3")],
+          ["Par 4",latestPar(4),periodVal("Par: Par 4")],
+          ["Par 5",latestPar(5),periodVal("Par: Par 5")],
+          ["<200",latestYD(0,200),combine(periodVal("Yardage: <150"),periodVal("Yardage: 150–200"))],
+          ["201–350",latestYD(201,350),periodVal("Yardage: 201–350")],
+          ["351+",latestYD(351,9999),combine(periodVal("Yardage: 351–420"),periodVal("Yardage: 420+"))],
+          ["SI 1–6",latestSI(1,6),periodVal("Stroke Index: SI 1–6")],
+          ["SI 13–18",latestSI(13,18),periodVal("Stroke Index: SI 13–18")]
+        ];
+        const N=axes.length,cx=150,cy=140,maxR=104;
+        const pt=(i,r)=>{const a=-Math.PI/2+i*2*Math.PI/N;return [cx+Math.cos(a)*r,cy+Math.sin(a)*r];};
+        const score=v=>Number.isFinite(Number(v))?Math.max(12,Math.min(92,50+Number(v)*32)):50;
+        const latestPoly=axes.map(([l,a],i)=>pt(i,maxR*score(a)/100).join(",")).join(" ");
+        const periodPoly=axes.map(([l,a,b],i)=>pt(i,maxR*score(b)/100).join(",")).join(" ");
+        return `<svg class="PRchartSvg" viewBox="0 0 300 290">
+          ${[25,50,75,100].map(q=>`<polygon points="${axes.map((_,i)=>pt(i,maxR*q/100).join(",")).join(" ")}" fill="none" stroke="${q===50?"#64748b":"#e2e8f0"}" stroke-width="${q===50?1.8:1}" ${q===50?'stroke-dasharray="4 3"':""}/>`).join("")}
+          ${axes.map((_,i)=>{const [x2,y2]=pt(i,maxR);return `<line x1="${cx}" y1="${cy}" x2="${x2}" y2="${y2}" stroke="#e2e8f0"/>`;}).join("")}
+          <polygon points="${periodPoly}" fill="rgba(37,99,235,.10)" stroke="#2563eb" stroke-width="2.5"/>
+          <polygon points="${latestPoly}" fill="rgba(22,163,74,.12)" stroke="#16a34a" stroke-width="3"/>
+          ${axes.map(([label],i)=>{const [lx,ly]=pt(i,maxR+20);return `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="8.5" font-weight="800" fill="#475569">${PR_escapeHtml(label)}</text>`;}).join("")}
+          <text x="16" y="272" font-size="9" font-weight="900" fill="#16a34a">LATEST ROUND</text>
+          <text x="105" y="272" font-size="9" font-weight="900" fill="#2563eb">SELECTED PERIOD</text>
+        </svg>`;
+      })()}
+    </div>
+
+    <div class="PRchartBox">
+      <div class="PRvizTitle" style="font-size:12px;">Round-phase comparison</div>
+      <div class="PRvizSub">Are starts, middles or finishes different from your normal pattern?</div>
+      ${(() => {
+        const phases=[
+          {key:"start",label:"1–3",from:1,to:3},
+          {key:"early",label:"4–6",from:4,to:6},
+          {key:"middle",label:"7–12",from:7,to:12},
+          {key:"late",label:"13–15",from:13,to:15},
+          {key:"finish",label:"16–18",from:16,to:18}
+        ];
+        const seasonPh=postRoundIntel.exactCategories?.courseDNA?.phases||[];
+        const rows=phases.map(p=>{
+          const lh=(eh.holes||[]).filter(h=>h.hole>=p.from&&h.hole<=p.to);
+          const latest=lh.reduce((s,h)=>s+Number(h.delta||0),0);
+          const season=Number(seasonPh.find(x=>x.key===p.key)?.avgPerRound);
+          return {...p,latest,season};
+        });
+        const biggest=rows.filter(r=>Number.isFinite(r.season)).sort((a,b)=>Math.abs((b.latest-b.season))-Math.abs((a.latest-a.season)))[0];
+        return `<div class="PRphaseCompare">
+          <div class="PRphaseCompareRow"><div></div><div style="font-size:8px;font-weight:950;color:#166534;text-align:center;">LATEST</div><div style="font-size:8px;font-weight:950;color:#1d4ed8;text-align:center;">PERIOD AVG</div></div>
+          ${rows.map(r=>`<div class="PRphaseCompareRow">
+            <div class="PRphaseCompareLabel">Holes ${r.label}</div>
+            <div class="PRphaseMini PRlatestBox">${r.latest>=0?"+":""}${r.latest.toFixed(1)}</div>
+            <div class="PRphaseMini PRperiodBox">${Number.isFinite(r.season)?`${r.season>=0?"+":""}${r.season.toFixed(1)}`:"—"}</div>
+          </div>`).join("")}
+          ${biggest?`<div class="PRpatternCallout">
+            <div class="PRpatternK">Biggest difference this round</div>
+            <div class="PRpatternV">Holes ${PR_escapeHtml(biggest.label)}</div>
+            <div class="PRpatternS">Latest: ${biggest.latest>=0?"+":""}${biggest.latest.toFixed(1)} vs selected-period average ${biggest.season>=0?"+":""}${biggest.season.toFixed(1)} strokes to handicap target.</div>
+          </div>`:""}
+        </div>`;
+      })()}
+    </div>
+  </div>
+
+  ${(() => {
+    try{
+      const rows=postRoundIntel.exactCategories?.rows||[];
+      const hs=eh.holes||[];
+      const avg=arr=>arr.length?arr.reduce((s,v)=>s+v,0)/arr.length:NaN;
+      const latestCats=[
+        {label:"Par 3",v:avg(hs.filter(h=>h.par===3).map(h=>h.delta)),p:rows.find(r=>r.displayLabel==="Par: Par 3")?.avg},
+        {label:"Par 4",v:avg(hs.filter(h=>h.par===4).map(h=>h.delta)),p:rows.find(r=>r.displayLabel==="Par: Par 4")?.avg},
+        {label:"Par 5",v:avg(hs.filter(h=>h.par===5).map(h=>h.delta)),p:rows.find(r=>r.displayLabel==="Par: Par 5")?.avg}
+      ].filter(x=>Number.isFinite(x.v)&&Number.isFinite(Number(x.p)));
+      if(!latestCats.length)return "";
+      const strongest=latestCats.slice().sort((a,b)=>(b.v-Number(b.p))-(a.v-Number(a.p)))[0];
+      const weakest=latestCats.slice().sort((a,b)=>(a.v-Number(a.p))-(b.v-Number(b.p)))[0];
+      return `<div class="PRpatternCallout">
+        <div class="PRpatternK">Pattern interpretation</div>
+        <div class="PRpatternV">${PR_escapeHtml(strongest.label)} was better than your normal pattern; ${PR_escapeHtml(weakest.label)} was the biggest relative drop.</div>
+        <div class="PRpatternS">This comparison separates a one-round event from a recurring weakness, so the action plan can focus on what actually repeats.</div>
+      </div>`;
+    }catch(e){return "";}
+  })()}
 </div>
 
 ${postRoundIntel.exactCategories?.courseDNA ? (() => {
@@ -13620,7 +13800,8 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
       </div>
     `}
 
-    <div class="PRsub PRdetailsPage" style="margin-top:12px;padding-top:4px;">
+    <div class="PRlegacyEvidence">
+<div class="PRsub PRdetailsPage" style="margin-top:12px;padding-top:4px;">
       <b style="font-size:14px;color:#0f172a;">Detailed Evidence</b><br/>
       Benchmark: <b>${PR_escapeHtml(peerBand||"—")}</b> · supporting analysis below
       <span class="PRpill" style="margin-left:8px;">${(String(scoringMode)==="gross" ? "Gross strokes" : "Stableford points")} vs ${(__usingVirtualSameHcapPeer ? "Virtual same-handicap player" : (__effComparatorMode==="par" ? "Par baseline" : (__effComparatorMode==="field" ? "Field" : "Handicap band")))}</span>
@@ -13952,6 +14133,7 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
       <div style="margin-top:14px;font-weight:900;">By Yardage</div>
       ${PR_renderTableBare(byYd, scoringMode, __effComparatorMode, rounds)}
     </div>
+</div>
   </div>
   `;
 
