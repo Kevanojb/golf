@@ -12978,7 +12978,7 @@ const scorecardIntel = (() => {
     .PRactK{font-size:10px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;margin-bottom:7px}
     .PRact.keep .PRactK{color:#166534}.PRact.watch .PRactK{color:#c2410c}.PRact.fix .PRactK{color:#b91c1c}.PRact.target .PRactK{color:#1d4ed8}
     .PRactV{font-size:14px;font-weight:950;line-height:1.3}.PRactS{font-size:10px;color:#64748b;line-height:1.45;margin-top:4px}
-    .PRstory{margin-top:14px;border-radius:18px;padding:14px 16px;background:#0f172a;color:#fff}
+    .PRstory{margin-top:14px;break-inside:avoid;page-break-inside:avoid;border-radius:18px;padding:14px 16px;background:#0f172a;color:#fff}
     .PRstoryK{font-size:10px;font-weight:950;letter-spacing:.09em;text-transform:uppercase;color:#94a3b8}
     .PRstoryV{font-size:18px;font-weight:950;margin-top:4px}.PRstoryS{font-size:11px;color:#cbd5e1;line-height:1.5;margin-top:5px}
     .PRvizSection{min-width:0;margin-top:11px;background:#fff;border:1px solid #dce5ef;border-radius:18px;padding:12px;box-shadow:0 7px 20px rgba(15,23,42,.045)}
@@ -12991,14 +12991,14 @@ const scorecardIntel = (() => {
     .PRtileEven{background:#f1f5f9;color:#475569}.PRtileBad{background:#ffedd5;color:#c2410c}.PRtileVeryBad{background:#fee2e2;color:#991b1b}
     .PRlatestGrid{display:grid;grid-template-columns:1.3fr .7fr;gap:12px;margin-top:12px}
     .PRchartBox{min-width:0;overflow:hidden;border:1px solid #e2e8f0;border-radius:13px;padding:9px;background:#fbfdff}
-    .PRchartSvg{display:block;width:100%;height:auto}
+    .PRchartSvg{display:block;width:100%;height:auto;max-width:100%}.PRtrendSvg{overflow:visible}
     .PRdamageWrap{display:flex;align-items:center;gap:14px}
     .PRdonutText{font-size:11px;color:#475569;line-height:1.5}
     .PRgeneralGrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px;margin-top:9px}
-    .PRheat{overflow-x:auto;margin-top:10px}
-    .PRheatGrid{display:grid;grid-template-columns:72px repeat(18,22px);gap:3px;align-items:center;min-width:520px}
-    .PRheatHead{font-size:8px;text-align:center;color:#64748b;font-weight:900}.PRheatDate{font-size:9px;color:#475569;font-weight:800;white-space:nowrap}
-    .PRheatCell{width:22px;height:22px;border-radius:5px;border:1px solid rgba(15,23,42,.05)}
+    .PRheat{overflow:hidden;margin-top:10px;width:100%}
+    .PRheatGrid{display:grid;grid-template-columns:44px repeat(18,minmax(0,1fr));gap:2px;align-items:center;width:100%;min-width:0}
+    .PRheatHead{font-size:7px;text-align:center;color:#64748b;font-weight:900}.PRheatDate{font-size:8px;color:#475569;font-weight:800;white-space:nowrap}
+    .PRheatCell{width:100%;height:auto;aspect-ratio:1/1;min-height:12px;border-radius:4px;border:1px solid rgba(15,23,42,.05)}
     .PRgbGrid{display:grid;grid-template-columns:minmax(82px,1.05fr) minmax(0,1fr) minmax(0,1fr);gap:5px 6px;align-items:center;margin-top:8px}
     .PRgbHead{font-size:9px;font-weight:950;color:#64748b;text-transform:uppercase}.PRgbLabel{font-size:10px;font-weight:900}
     .PRgbBar{height:9px;background:#e2e8f0;border-radius:999px;overflow:hidden}.PRgbGood{height:100%;background:#16a34a}.PRgbBad{height:100%;background:#dc2626}
@@ -13083,6 +13083,7 @@ const scorecardIntel = (() => {
     /* PDF export must use the report's desktop composition even when generated on a phone. */
     .PRpdfExportRoot .PRquickGrid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
     .PRpdfExportRoot .PRvisualGrid{grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr)!important}
+    .PRpdfExportRoot .PRstory{break-before:page!important;page-break-before:always!important}
     .PRpdfExportRoot .PRactions{grid-template-columns:repeat(4,minmax(0,1fr))!important}
     .PRpdfExportRoot .PRtriples{grid-template-columns:repeat(3,minmax(0,1fr))!important}
     .PRpdfExportRoot .PRlatestGrid{grid-template-columns:1.3fr .7fr!important}
@@ -13280,7 +13281,7 @@ const scorecardIntel = (() => {
         const y=v=>T+((max-v)/(max-min))*(H-T-B);
         const z=y(0);
         const pts=vals.map((v,i)=>`${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
-        return `<svg class="PRchartSvg" viewBox="0 0 ${W} ${H}">
+        return `<svg class="PRchartSvg PRtrendSvg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="xMidYMid meet">
           <line x1="${L}" y1="${z}" x2="${W-R}" y2="${z}" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="5 4"/>
           <polyline points="${pts}" fill="none" stroke="#0f2747" stroke-width="4" stroke-linejoin="round" stroke-linecap="round"/>
           ${vals.map((v,i)=>`<circle cx="${x(i)}" cy="${y(v)}" r="${i===vals.length-1?5:3}" fill="${v>=0?"#16a34a":"#dc2626"}"/>`).join("")}
@@ -13729,6 +13730,7 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
           ? `<span class="PRpriorityChip">Estimated impact: ~${Number(topOpportunity.impact).toFixed(1)} strokes/round</span>`
           : ""}
       </div>
+      ${damageMetric ? `<div style="margin-top:9px;padding-top:9px;border-top:1px solid rgba(255,255,255,.22);font-size:10px;line-height:1.45;color:#fff;"><b>WHY THIS MATTERS</b> · Your better rounds average ${damageMetric.good.toFixed(1)} doubles+ versus ${damageMetric.bad.toFixed(1)} in poorer rounds. The improvement is coming mainly from fewer big numbers, not from needing more birdies.</div>` : ""}
     </div>
 
     <div class="PRchartBox" style="margin-top:12px;">
