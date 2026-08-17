@@ -12901,7 +12901,7 @@ const scorecardIntel = (() => {
     .PRquickEye{font-size:9px;font-weight:950;letter-spacing:.12em;text-transform:uppercase;color:#0f6a50}
     .PRquickTitle{font-size:18px;font-weight:950;letter-spacing:-.02em;color:#0f172a}
     .PRquickHint{font-size:9px;color:#64748b;font-weight:750;text-align:right}
-    .PRquickGrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:7px}
+    .PRquickGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px}
     .PRquickCard{min-width:0;border-radius:12px;padding:9px 10px;border:1px solid #e2e8f0;background:rgba(255,255,255,.86)}
     .PRquickK{font-size:8px;font-weight:950;letter-spacing:.075em;text-transform:uppercase;color:#64748b}
     .PRquickV{font-size:13px;font-weight:950;line-height:1.25;margin-top:3px;color:#0f172a}
@@ -12968,7 +12968,7 @@ const scorecardIntel = (() => {
     .PRmini{border:1px solid #e2e8f0;background:#f8fafc;border-radius:12px;padding:8px}
     .PRminiK{font-size:9px;font-weight:950;letter-spacing:.07em;text-transform:uppercase;color:#64748b}
     .PRminiV{font-size:19px;font-weight:950;margin-top:2px}
-    .PRcostRow{display:grid;grid-template-columns:55px 1fr 42px;gap:8px;align-items:center;margin-top:8px}
+    .PRcostRow{display:grid;grid-template-columns:55px minmax(0,1fr) 64px;gap:8px;align-items:center;margin-top:8px}
     .PRcostTrack{height:10px;background:#fee2e2;border-radius:999px;overflow:hidden}
     .PRcostFill{height:100%;background:linear-gradient(90deg,#ef4444,#991b1b);border-radius:999px}
     .PRcostAudit{grid-column:1/-1;font-size:9px;color:#64748b;margin-top:-4px;padding-left:63px}
@@ -12994,7 +12994,7 @@ const scorecardIntel = (() => {
     .PRchartSvg{display:block;width:100%;height:auto}
     .PRdamageWrap{display:flex;align-items:center;gap:14px}
     .PRdonutText{font-size:11px;color:#475569;line-height:1.5}
-    .PRgeneralGrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px;margin-top:9px;break-inside:avoid;page-break-inside:avoid}
+    .PRgeneralGrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px;margin-top:9px}
     .PRheat{overflow-x:auto;margin-top:10px}
     .PRheatGrid{display:grid;grid-template-columns:72px repeat(18,22px);gap:3px;align-items:center;min-width:520px}
     .PRheatHead{font-size:8px;text-align:center;color:#64748b;font-weight:900}.PRheatDate{font-size:9px;color:#475569;font-weight:800;white-space:nowrap}
@@ -13019,7 +13019,7 @@ const scorecardIntel = (() => {
     .PRfinger{border-radius:8px;text-align:center;padding:8px 1px;border:1px solid rgba(15,23,42,.06)}
     .PRfingerN{font-size:9px;font-weight:950}.PRfingerV{font-size:9px;font-weight:950;margin-top:2px}
     .PRstrengthRows{margin-top:10px}
-    .PRstrengthRow{display:grid;grid-template-columns:minmax(92px,1.05fr) minmax(0,1fr) 66px;gap:6px;align-items:center;margin-top:7px}
+    .PRstrengthRow{display:grid;grid-template-columns:minmax(92px,1.05fr) minmax(0,1fr) 92px;gap:6px;align-items:center;margin-top:7px}
     .PRstrengthLabel{font-size:10px;font-weight:900}
     .PRstrengthTrack{position:relative;height:12px;background:#eef2f7;border-radius:999px;overflow:hidden}
     .PRstrengthZero{position:absolute;left:50%;top:0;bottom:0;width:1px;background:#64748b;z-index:2}
@@ -13035,9 +13035,9 @@ const scorecardIntel = (() => {
     .PRplanK{font-size:9px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;color:#1d4ed8}
     .PRplanV{font-size:14px;font-weight:950;margin-top:4px;line-height:1.3}
     .PRplanS{font-size:10px;color:#64748b;line-height:1.45;margin-top:4px}
-    .PRcourseDnaPage{break-before:page;page-break-before:always}
-    .PRgameDnaPage{break-before:page;page-break-before:always}
-    .PRdetailsPage{break-before:page;page-break-before:always}
+    .PRcourseDnaPage{break-before:auto;page-break-before:auto}
+    .PRgameDnaPage{break-before:auto;page-break-before:auto}
+    .PRdetailsPage{break-before:auto;page-break-before:auto}
     .PRconfidence{display:inline-flex;align-items:center;border-radius:999px;padding:3px 7px;font-size:8px;font-weight:950;letter-spacing:.06em;text-transform:uppercase;margin-top:5px}
     .PRconfidence.confirmed{background:#dcfce7;color:#166534;border:1px solid #86efac}
     .PRconfidence.emerging{background:#ffedd5;color:#c2410c;border:1px solid #fdba74}
@@ -13051,12 +13051,12 @@ const scorecardIntel = (() => {
     .PRpriorityS{font-size:11px;line-height:1.5;margin-top:5px;color:#fee2e2}
     .PRpriorityMeta{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}
     .PRpriorityChip{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.24);border-radius:999px;padding:4px 8px;font-size:9px;font-weight:900}
-    .PRvizSection,.PRvisualCard,.PRchartBox,.PRdnaCard,.PRplanCard,.PRact{break-inside:avoid;page-break-inside:avoid}
-    .PRpartHeader{margin-top:14px;border-radius:16px;padding:10px 14px;background:#0f2747;color:#fff;display:flex;align-items:center;gap:10px;break-inside:avoid}
+    .PRvisualCard,.PRchartBox,.PRdnaCard,.PRplanCard,.PRact,.PRquickRead,.PRpriorityBanner,.PRopportunity,.PRstory,.PRpatternCallout,.PRgamePlan{break-inside:avoid;page-break-inside:avoid}
+    .PRpartHeader{margin-top:14px;border-radius:16px;padding:10px 14px;background:#0f2747;color:#fff;display:flex;align-items:center;gap:10px;break-inside:avoid;page-break-inside:avoid;break-after:avoid;page-break-after:avoid}
     .PRpartTag{font-size:10px;font-weight:950;letter-spacing:.10em;text-transform:uppercase;background:#fff;color:#0f2747;border-radius:999px;padding:4px 8px}
     .PRpartTitle{font-size:18px;font-weight:950;letter-spacing:-.02em}
     .PRroundVisualGrid{display:none}
-    .PRcompareGrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px;margin-top:9px;break-inside:avoid;page-break-inside:avoid}
+    .PRcompareGrid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:9px;margin-top:9px}
     .PRphaseCompare{margin-top:10px}
     .PRphaseCompareRow{display:grid;grid-template-columns:82px 1fr 1fr;gap:8px;align-items:center;margin-top:7px}
     .PRphaseCompareLabel{font-size:9px;font-weight:900;color:#475569}
@@ -13080,6 +13080,20 @@ const scorecardIntel = (() => {
     .PRconfidenceLegend{margin-top:7px;font-size:9px;line-height:1.4;color:#64748b}
     @media print{.PRr{-webkit-print-color-adjust:exact;print-color-adjust:exact}.PRvisualHero,.PRpriorityBanner,.PRopportunity,.PRstory,.PRpatternCallout{box-shadow:none}}
     @media(max-width:700px){.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples,.PRlatestGrid,.PRgeneralGrid,.PRquickGrid,.PRseasonTopGrid{grid-template-columns:1fr}.PRcostAudit{padding-left:0}.PRholeStrip{grid-template-columns:repeat(9,minmax(0,1fr))}.PRdnaGrid,.PRplanGrid{grid-template-columns:1fr}.PRfingerprint{grid-template-columns:repeat(9,minmax(0,1fr))}.PRcompareGrid{grid-template-columns:1fr}}
+    /* PDF export must use the report's desktop composition even when generated on a phone. */
+    .PRpdfExportRoot .PRquickGrid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+    .PRpdfExportRoot .PRvisualGrid{grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr)!important}
+    .PRpdfExportRoot .PRactions{grid-template-columns:repeat(4,minmax(0,1fr))!important}
+    .PRpdfExportRoot .PRtriples{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+    .PRpdfExportRoot .PRlatestGrid{grid-template-columns:1.3fr .7fr!important}
+    .PRpdfExportRoot .PRgeneralGrid,.PRpdfExportRoot .PRcompareGrid{grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important}
+    .PRpdfExportRoot .PRdnaGrid,.PRpdfExportRoot .PRplanGrid{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+    .PRpdfExportRoot .PRfingerprint,.PRpdfExportRoot .PRholeStrip{grid-template-columns:repeat(18,minmax(0,1fr))!important}
+    .PRpdfExportRoot .PRseasonTopGrid{grid-template-columns:minmax(0,1.15fr) minmax(0,.85fr)!important}
+    .PRpdfExportRoot .PRcostAudit{padding-left:63px!important}
+    .PRpdfExportRoot .PRgauge{max-width:330px;max-height:160px}
+    .PRpdfExportRoot .PRvizSection{box-shadow:none}
+
   </style>
 
   <div class="PRr">
@@ -13689,9 +13703,13 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
     ? `Play holes 1–3 at no worse than handicap target.`
     : `Start patiently: stay at or above handicap target through hole 3.`;
   const damageMetric=cats.goodBad?.metrics?.find(m=>m.key==="doublesPlus");
+  const damageTarget=damageMetric ? Math.max(1,Math.round(damageMetric.good)) : NaN;
   const damagePlan=damageMetric
-    ? `Keep doubles+ at ${Math.max(1,Math.round(damageMetric.good))} or fewer.`
+    ? `Keep doubles+ at ${damageTarget} or fewer.`
     : `Keep the three costliest holes to 2 lost strokes or fewer.`;
+  const damagePlanWhy=damageMetric
+    ? `Your better rounds average ${damageMetric.good.toFixed(1)} doubles+ versus ${damageMetric.bad.toFixed(1)} in poorer rounds. ${damageTarget} or fewer puts you around your better-round level.`
+    : `Your poorer rounds are separated from better rounds mainly by costly-hole damage when the data supports it.`;
   const strengthPlan=bestStrength
     ? `Keep exploiting ${bestStrength.displayLabel} (${bestStrength.avg>=0?"+":""}${bestStrength.avg.toFixed(2)}/hole).`
     : `Keep creating pars-or-better without chasing extra risk.`;
@@ -13822,7 +13840,7 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
         <div class="PRplanCard">
           <div class="PRplanK">2 · Damage</div>
           <div class="PRplanV">${PR_escapeHtml(damagePlan)}</div>
-          <div class="PRplanS">Your poorer rounds are separated from better rounds mainly by costly-hole damage when the data supports it.</div>
+          <div class="PRplanS">${PR_escapeHtml(damagePlanWhy)}</div>
         </div>
         <div class="PRplanCard">
           <div class="PRplanK">3 · Strength</div>
@@ -14269,10 +14287,11 @@ async function PR_downloadSeasonReportPDF(){
 
     const clone = body.cloneNode(true);
     clone.removeAttribute("id");
-    clone.style.width = "720px";
-    clone.style.maxWidth = "720px";
+    clone.classList.add("PRpdfExportRoot");
+    clone.style.width = "748px";
+    clone.style.maxWidth = "748px";
     clone.style.background = "#ffffff";
-    clone.style.padding = "10px";
+    clone.style.padding = "8px";
     clone.style.boxSizing = "border-box";
 
     holder.appendChild(clone);
@@ -14280,14 +14299,17 @@ async function PR_downloadSeasonReportPDF(){
 
     await html2pdf()
       .set({
-        margin: [6, 6, 6, 6],
+        margin: [5, 5, 5, 5],
         filename,
         image: { type: "jpeg", quality: 0.98 },
         html2canvas: {
           scale: 2,
           useCORS: true,
           backgroundColor: "#ffffff",
-          logging: false
+          logging: false,
+          windowWidth: 1200,
+          scrollX: 0,
+          scrollY: 0
         },
         jsPDF: {
           unit: "mm",
@@ -14296,7 +14318,7 @@ async function PR_downloadSeasonReportPDF(){
         },
         pagebreak: {
           mode: ["css", "legacy"],
-          avoid: [".PRbox", ".PRgeneralGrid", ".PRcompareGrid", ".PRquickRead", ".PRvisualCard", ".PRchartBox", ".PRdnaCard", ".PRplanCard", ".PRactions", "tr"]
+          avoid: [".PRquickRead", ".PRvisualCard", ".PRchartBox", ".PRdnaCard", ".PRplanCard", ".PRpriorityBanner", ".PRopportunity", ".PRstory", ".PRpatternCallout", "tr"]
         }
       })
       .from(clone)
