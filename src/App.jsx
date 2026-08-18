@@ -3297,24 +3297,60 @@ function Home({
           </button>
 
 
+          <style>{`
+            @media (max-width: 760px) {
+              .wp-home-mode-grid { grid-template-columns: 1fr !important; }
+            }
+          `}</style>
+
           {/* PRE-ROUND INTELLIGENCE */}
-          <button className="hm-card heroish" onClick={() => setView("pre_round")} style={{ textAlign: "left", cursor: "pointer", color:"#0f172a", border:"1px solid rgba(5,150,105,.35)", background:"linear-gradient(135deg,#ecfdf5 0%,#ffffff 55%,#eff6ff 100%)", boxShadow:"0 14px 34px rgba(15,23,42,.08)" }}>
-            <div className="hm-card-inner">
-              <div style={{ minWidth: 0 }}>
+          <button
+            className="hm-card heroish"
+            onClick={() => setView("pre_round")}
+            style={{
+              textAlign:"left",
+              cursor:"pointer",
+              color:"#0f172a",
+              border:"1px solid rgba(5,150,105,.35)",
+              background:"linear-gradient(135deg,#ecfdf5 0%,#ffffff 48%,#eff6ff 100%)",
+              boxShadow:"0 16px 38px rgba(15,23,42,.10)"
+            }}
+          >
+            <div className="hm-card-inner" style={{alignItems:"stretch"}}>
+              <div style={{ minWidth:0, flex:1 }}>
                 <div style={{display:"inline-flex",alignItems:"center",gap:7,padding:"5px 9px",borderRadius:999,background:"rgba(5,150,105,.10)",color:"#047857",fontSize:10,fontWeight:900,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8}}>⛳ Pre-Round Intelligence</div>
-                <h3 style={{color:"#0f172a"}}>Winning Game Plan</h3>
-                <div className="hm-desc" style={{color:"#475569"}}>Know exactly what a winning score looks like before you tee off.</div>
-                <ul>
-                  <li><span className="hm-ico2">🏆</span><span style={{color:"#334155"}}>See what won at the course last time</span></li>
-                  <li><span className="hm-ico2">🎯</span><span style={{color:"#334155"}}>Target one point more than the previous winner</span></li>
-                  <li><span className="hm-ico2">🧠</span><span style={{color:"#334155"}}>Get a personalised hole-by-hole route for each golfer</span></li>
-                </ul>
+                <h3 style={{color:"#0f172a",marginBottom:4}}>Winning Game Plan</h3>
+                <div className="hm-desc" style={{color:"#475569",maxWidth:760}}>
+                  Build the smartest 18-hole route for the score you actually want to achieve — using your handicap, the course and your own playing history.
+                </div>
+
+                <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8,marginTop:14}} className="wp-home-mode-grid">
+                  <div style={{border:"1px solid #bbf7d0",background:"#f0fdf4",borderRadius:14,padding:"10px 11px"}}>
+                    <div style={{fontSize:18,lineHeight:1}}>🏆</div>
+                    <div style={{fontSize:12,fontWeight:900,color:"#14532d",marginTop:5}}>WIN THE COMPETITION</div>
+                    <div style={{fontSize:10,color:"#475569",marginTop:3,lineHeight:1.35}}>Estimate the score likely to win, then build your safest route to beat it.</div>
+                  </div>
+                  <div style={{border:"1px solid #bfdbfe",background:"#eff6ff",borderRadius:14,padding:"10px 11px"}}>
+                    <div style={{fontSize:18,lineHeight:1}}>🎯</div>
+                    <div style={{fontSize:12,fontWeight:900,color:"#1e3a8a",marginTop:5}}>TARGET STABLEFORD POINTS</div>
+                    <div style={{fontSize:10,color:"#475569",marginTop:3,lineHeight:1.35}}>Choose the points you want and get the most realistic hole-by-hole route to that total.</div>
+                  </div>
+                  <div style={{border:"1px solid #fde68a",background:"#fffbeb",borderRadius:14,padding:"10px 11px"}}>
+                    <div style={{fontSize:18,lineHeight:1}}>⛳</div>
+                    <div style={{fontSize:12,fontWeight:900,color:"#78350f",marginTop:5}}>TARGET A GROSS SCORE</div>
+                    <div style={{fontSize:10,color:"#475569",marginTop:3,lineHeight:1.35}}>Choose the gross score you want to shoot and let the system map out the most likely way to get there.</div>
+                  </div>
+                </div>
+
+                <div style={{marginTop:10,fontSize:10,color:"#64748b",fontWeight:700}}>
+                  Uses all-years course history, your latest handicap or a temporary handicap, plus exact-hole, SI, Par and yardage performance.
+                </div>
               </div>
-              <div className="hm-card-action">
-                <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("pre_round"); }} style={{background:"linear-gradient(180deg,#10b981,#047857)",color:"white"}}>
-                  <span>→ Plan Next Round</span>
+              <div className="hm-card-action" style={{alignSelf:"center"}}>
+                <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("pre_round"); }} style={{background:"linear-gradient(180deg,#10b981,#047857)",color:"white",minWidth:170}}>
+                  <span>→ Build My Game Plan</span>
                 </button>
-                <div className="hm-pill">NEW</div>
+                <div className="hm-pill">3 MODES</div>
               </div>
             </div>
           </button>
