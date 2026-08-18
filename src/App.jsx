@@ -15184,115 +15184,226 @@ function WP_latestPlayerHcap(p, handicapMap){
 function WP_roundHasLayout(r){
   const ps=WP_pars(r), si=WP_si(r); return ps.filter(Number.isFinite).length>=9&&si.filter(Number.isFinite).length>=9;
 }
-function WP_layoutForPlayer(model,event,p,courseKey,handicapMap){
+function WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI){
   const mineInEvent=event?.entries?.find(x=>String(x.player?.name||"")===String(p?.name||""))?.round||null;
   const sameCourse=WP_series(p).filter(r=>WP_norm(WP_course(r))===WP_norm(courseKey)).reverse();
   let base=[mineInEvent,...sameCourse,event?.winnerRound,...(event?.entries||[]).map(x=>x.round)].find(r=>r&&WP_roundHasLayout(r))||mineInEvent||sameCourse[0]||event?.winnerRound||event?.entries?.[0]?.round||null;
   if(!base) return null;
   const ps=WP_pars(base), sis=WP_si(base), ys=WP_yards(base);
-  const parTotal=ps.reduce((s,v)=>s+(Number.isFinite(v)?v:0),0);
-  const hi=WP_latestPlayerHcap(p,handicapMap);
+  const parTotal=ps.reduce((sum,v)=>sum+(Number.isFinite(v)?v:0),0);
+  const latestHI=WP_latestPlayerHcap(p,handicapMap);
+  const override=Number(tempHI);
+  const hi=Number.isFinite(override)&&override>=0 ? override : latestHI;
   const slope=WP_num(base?.teeSlope,base?.slope,base?.slopeRating,base?.courseSlope);
   const rating=WP_num(base?.teeRating,base?.rating,base?.courseRating);
   let ch=NaN;
   try{ if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0&&typeof WHS_courseHandicap==="function") ch=WHS_courseHandicap(hi,slope,rating,parTotal); }catch(_){ }
   if(!Number.isFinite(ch)) ch=Math.round(WP_num(base?.courseHandicap,base?.playingHcap,base?.hcap,hi,0));
   ch=Math.max(0,Math.round(ch||0));
-  return {round:base,pars:ps,si:sis,yards:ys,parTotal,hi,ch,teeName:WP_tee(base),slope,rating};
+  return {round:base,pars:ps,si:sis,yards:ys,parTotal,hi,ch,teeName:WP_tee(base),slope,rating,temporaryHI:Number.isFinite(override)&&override>=0};
 }
 function WP_strokesReceived(ch,si){
   const h=Math.max(0,Math.round(Number(ch)||0)), s=Number(si);
   if(!Number.isFinite(s)||s<1||s>18) return Math.floor(h/18);
   return Math.floor(h/18)+((h%18)>0&&s<=(h%18)?1:0);
 }
-function WP_playerHistorySignals(p,courseKey){
-  const exact=Array.from({length:18},()=>[]); const parMap=new Map();
-  for(const r of WP_series(p)){
-    const pts=WP_holePts(r), ps=WP_pars(r); if(!pts.length) continue;
-    for(let i=0;i<Math.min(18,pts.length);i++){
-      const v=Number(pts[i]); if(!Number.isFinite(v)) continue;
-      if(WP_norm(WP_course(r))===WP_norm(courseKey)) exact[i].push(v);
-      const par=Number(ps[i]); if(Number.isFinite(par)){ if(!parMap.has(par))parMap.set(par,[]); parMap.get(par).push(v); }
-    }
-  }
-  const avg=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:NaN;
-  return {holeAvg:exact.map(avg),parAvg:new Map(Array.from(parMap.entries()).map(([k,v])=>[k,avg(v)]))};
+function WP_avg(a){
+  const x=(a||[]).map(Number).filter(Number.isFinite); return x.length?x.reduce((s,v)=>s+v,0)/x.length:NaN;
 }
-function WP_makePlayerPlan(model,event,p,courseKey,handicapMap){
-  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap); if(!layout) return null;
+function WP_playerHistorySignals(p,courseKey){
+  const exactPts=Array.from({length:18},()=>[]), exactGross=Array.from({length:18},()=>[]);
+  const parPts=new Map(), siPts=new Map(), parGrossRel=new Map(), siGrossRel=new Map(), yardPts=new Map();
+  const recentPts=[];
+  const add=(m,k,v)=>{ if(!Number.isFinite(v)||k==null)return; if(!m.has(k))m.set(k,[]); m.get(k).push(v); };
+  const yardBand=y=>!Number.isFinite(y)?null:(y<150?'<150':y<=200?'150-200':y<=300?'201-300':y<=350?'301-350':y<=420?'351-420':'421+');
+  const rounds=WP_series(p);
+  rounds.forEach((r,ri)=>{
+    const pts=WP_holePts(r), gross=WP_gross(r), ps=WP_pars(r), sis=WP_si(r), ys=WP_yards(r);
+    for(let i=0;i<18;i++){
+      const pt=Number(pts[i]), g=Number(gross[i]), par=Number(ps[i]), si=Number(sis[i]), y=Number(ys[i]);
+      const same=WP_norm(WP_course(r))===WP_norm(courseKey);
+      if(Number.isFinite(pt)){
+        if(same) exactPts[i].push(pt);
+        add(parPts,Number.isFinite(par)?par:null,pt);
+        add(siPts,Number.isFinite(si)?si:null,pt);
+        add(yardPts,yardBand(y),pt);
+        if(ri>=Math.max(0,rounds.length-5)) recentPts.push(pt);
+      }
+      if(Number.isFinite(g)&&Number.isFinite(par)){
+        const rel=g-par;
+        if(same) exactGross[i].push(rel);
+        add(parGrossRel,par,rel);
+        add(siGrossRel,Number.isFinite(si)?si:null,rel);
+      }
+    }
+  });
+  return {
+    exactPts,exactGross,
+    parPts:new Map(Array.from(parPts.entries()).map(([k,v])=>[k,WP_avg(v)])),
+    siPts:new Map(Array.from(siPts.entries()).map(([k,v])=>[k,WP_avg(v)])),
+    yardPts:new Map(Array.from(yardPts.entries()).map(([k,v])=>[k,WP_avg(v)])),
+    parGrossRel:new Map(Array.from(parGrossRel.entries()).map(([k,v])=>[k,WP_avg(v)])),
+    siGrossRel:new Map(Array.from(siGrossRel.entries()).map(([k,v])=>[k,WP_avg(v)])),
+    recentPts:WP_avg(recentPts),
+    yardBand
+  };
+}
+function WP_expectedHoleProfile(sig,hole,par,si,yard,strokes){
+  const hp=WP_avg(sig.exactPts[hole-1]);
+  const sp=Number(sig.siPts.get(si)), pp=Number(sig.parPts.get(par)), yp=Number(sig.yardPts.get(sig.yardBand(yard))), rp=Number(sig.recentPts);
+  const ptsParts=[];
+  if(Number.isFinite(hp))ptsParts.push([hp,5]);
+  if(Number.isFinite(sp))ptsParts.push([sp,2.2]);
+  if(Number.isFinite(pp))ptsParts.push([pp,2]);
+  if(Number.isFinite(yp))ptsParts.push([yp,1]);
+  if(Number.isFinite(rp))ptsParts.push([rp,.8]);
+  const sw=ptsParts.reduce((s,x)=>s+x[1],0);
+  let expectedPts=sw?ptsParts.reduce((s,x)=>s+x[0]*x[1],0)/sw:2;
+  expectedPts=Math.max(.2,Math.min(4.2,expectedPts));
+
+  const exactRel=WP_avg(sig.exactGross[hole-1]);
+  const siRel=Number(sig.siGrossRel.get(si)), parRel=Number(sig.parGrossRel.get(par));
+  const grossParts=[];
+  if(Number.isFinite(exactRel))grossParts.push([exactRel,5]);
+  if(Number.isFinite(siRel))grossParts.push([siRel,2.2]);
+  if(Number.isFinite(parRel))grossParts.push([parRel,2]);
+  const gsw=grossParts.reduce((s,x)=>s+x[1],0);
+  let expectedGross=gsw?par+grossParts.reduce((s,x)=>s+x[0]*x[1],0)/gsw:(par+strokes);
+  if(!Number.isFinite(expectedGross)) expectedGross=par+strokes;
+  return {expectedPts,expectedGross,exactPtsN:sig.exactPts[hole-1].length,exactGrossN:sig.exactGross[hole-1].length};
+}
+function WP_dpExact(holes,target,candidateFn){
+  let states=new Map([[0,{cost:0,choices:[]}]]);
+  for(const h of holes){
+    const next=new Map();
+    for(const [sum,state] of states){
+      for(const c of candidateFn(h)){
+        const ns=sum+c.value;
+        if(ns<0||ns>target+30) continue;
+        const nc=state.cost+c.cost;
+        const prev=next.get(ns);
+        if(!prev||nc<prev.cost) next.set(ns,{cost:nc,choices:[...state.choices,c]});
+      }
+    }
+    states=next;
+  }
+  if(states.has(target)) return states.get(target);
+  let best=null,bd=Infinity;
+  for(const [sum,state] of states){
+    const d=Math.abs(sum-target);
+    if(d<bd||(d===bd&&(!best||state.cost<best.cost))){best={...state,sum};bd=d;}
+  }
+  return best;
+}
+function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
+  const mode=String(options?.mode||'winning');
+  const tempHI=options?.tempHI;
+  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI); if(!layout) return null;
   const sig=WP_playerHistorySignals(p,courseKey); const holes=[];
   for(let i=0;i<18;i++){
     const par=Number(layout.pars[i]), si=Number(layout.si[i]), yard=Number(layout.yards[i]);
     if(!Number.isFinite(par)) continue;
     const strokes=WP_strokesReceived(layout.ch,si);
-    const hAvg=Number(sig.holeAvg[i]), pAvg=Number(sig.parAvg.get(par));
-    let opp=0;
-    if(Number.isFinite(hAvg)) opp+=(hAvg-2)*3.5;
-    if(Number.isFinite(pAvg)) opp+=(pAvg-2)*1.4;
-    opp+=Math.min(2,strokes)*0.5;
-    if(Number.isFinite(si)) opp+=((si-1)/17)*0.35;
-    if(Number.isFinite(yard)){ if(yard<180)opp+=0.18; else if(yard>420)opp-=0.12; }
-    holes.push({hole:i+1,par,si,yard,strokes,opp,hAvg,pAvg,targetPts:2});
+    const prof=WP_expectedHoleProfile(sig,i+1,par,si,yard,strokes);
+    holes.push({hole:i+1,par,si,yard,strokes,...prof});
   }
   if(holes.length<9) return null;
-  const desired=Math.max(0,Math.min(72,Math.round(Number(event?.targetPoints)||37)));
-  let diff=desired-holes.length*2;
-  if(diff>0){
-    const candidates=[];
-    holes.forEach(h=>{
-      candidates.push({h,to:3,score:h.opp});
-      candidates.push({h,to:4,score:h.opp-1.35});
+
+  if(mode==='gross'){
+    const target=Math.max(holes.length,Math.min(200,Math.round(Number(options?.target)||layout.parTotal||90)));
+    const solved=WP_dpExact(holes,target,h=>{
+      const lo=Math.max(1,h.par-2), hi=Math.max(lo+3,Math.ceil(h.expectedGross+4),h.par+5);
+      const arr=[];
+      for(let g=lo;g<=hi;g++){
+        const dev=g-h.expectedGross;
+        let cost=dev*dev*1.25;
+        if(g<h.par-1) cost+=2.5*(h.par-1-g);
+        if(g>h.par+3) cost+=.7*(g-(h.par+3));
+        arr.push({value:g,cost,gross:g});
+      }
+      return arr;
     });
-    candidates.sort((a,b)=>b.score-a.score);
-    for(const c of candidates){ if(diff<=0)break; if(c.h.targetPts===c.to-1){c.h.targetPts++;diff--;} }
-  }else if(diff<0){
-    const candidates=[];
-    holes.forEach(h=>{ candidates.push({h,to:1,score:h.opp}); candidates.push({h,to:0,score:h.opp+1.2}); });
-    candidates.sort((a,b)=>a.score-b.score);
-    for(const c of candidates){ if(diff>=0)break; if(c.h.targetPts===c.to+1){c.h.targetPts--;diff++;} }
+    if(!solved) return null;
+    holes.forEach((h,i)=>{
+      const c=solved.choices[i]; h.targetGross=c.gross;
+      h.targetPts=Math.max(0,Math.min(6,2+h.par+h.strokes-h.targetGross));
+      const diff=h.targetGross-h.expectedGross;
+      h.strategy=diff<=-.65?'ATTACK':(diff<=.65?'PROTECT':(diff<=1.6?'ACCEPT':'RESET'));
+      h.opp=-diff;
+      h.reason=h.exactGrossN?`Based on ${h.exactGrossN} previous score${h.exactGrossN===1?'':'s'} on this hole`:
+        `Built from your Par ${h.par} and SI ${Number.isFinite(h.si)?h.si:'—'} scoring history`;
+    });
+    const totalGross=holes.reduce((s,h)=>s+h.targetGross,0);
+    const pointsTotal=holes.reduce((s,h)=>s+h.targetPts,0);
+    const frontGross=holes.filter(h=>h.hole<=9).reduce((s,h)=>s+h.targetGross,0), backGross=totalGross-frontGross;
+    const frontPts=holes.filter(h=>h.hole<=9).reduce((s,h)=>s+h.targetPts,0), backPts=pointsTotal-frontPts;
+    const attacks=holes.filter(h=>h.strategy==='ATTACK').sort((a,b)=>b.opp-a.opp);
+    const dangers=holes.slice().sort((a,b)=>a.opp-b.opp).slice(0,3);
+    return {player:p,layout,holes,mode,total:totalGross,totalGross,pointsTotal,attacks,dangers,front:frontGross,back:backGross,frontPts,backPts,targetRequested:target};
   }
-  holes.forEach(h=>{
+
+  const desired=Math.max(0,Math.min(72,Math.round(Number(options?.target ?? event?.targetPoints)||37)));
+  const solved=WP_dpExact(holes,desired,h=>{
+    const arr=[];
+    for(let pts=0;pts<=5;pts++){
+      const dev=pts-h.expectedPts;
+      let cost=dev*dev*1.45;
+      if(pts>=4) cost+=(pts-3)*1.2;
+      if(pts===0) cost+=.25;
+      arr.push({value:pts,cost,pts});
+    }
+    return arr;
+  });
+  if(!solved) return null;
+  holes.forEach((h,i)=>{
+    const pts=solved.choices[i].pts;
+    h.targetPts=pts;
     h.targetGross=h.par+h.strokes+2-h.targetPts;
-    h.strategy=h.targetPts>=3?"ATTACK":(h.targetPts===2?"PROTECT":(h.targetPts===1?"ACCEPT":"RESET"));
-    h.reason=Number.isFinite(h.hAvg)&&h.hAvg>2.05?`You average ${h.hAvg.toFixed(1)} pts here`
-      : (h.strokes>0?`You receive ${h.strokes} shot${h.strokes===1?"":"s"}`
-      : (Number.isFinite(h.pAvg)&&h.pAvg>2.05?`Strong Par ${h.par} profile`:"Best fit for the target"));
+    const gain=pts-h.expectedPts;
+    h.opp=gain;
+    h.strategy=h.targetPts>=3?'ATTACK':(h.targetPts===2?'PROTECT':(h.targetPts===1?'ACCEPT':'RESET'));
+    h.reason=h.exactPtsN?`You average ${WP_avg(sig.exactPts[h.hole-1]).toFixed(1)} pts here from ${h.exactPtsN} previous round${h.exactPtsN===1?'':'s'}`:
+      `Most likely fit from your Par ${h.par} and SI ${Number.isFinite(h.si)?h.si:'—'} history`;
   });
   const total=holes.reduce((s,h)=>s+h.targetPts,0);
-  const attacks=holes.filter(h=>h.targetPts>=3).sort((a,b)=>b.opp-a.opp);
-  const dangers=holes.slice().sort((a,b)=>a.opp-b.opp).slice(0,3);
+  const attacks=holes.filter(h=>h.targetPts>=3).sort((a,b)=>b.expectedPts-a.expectedPts);
+  const dangers=holes.slice().sort((a,b)=>a.expectedPts-b.expectedPts).slice(0,3);
   const front=holes.filter(h=>h.hole<=9).reduce((s,h)=>s+h.targetPts,0), back=total-front;
-  return {player:p,layout,holes,total,attacks,dangers,front,back};
+  const totalGross=holes.reduce((s,h)=>s+h.targetGross,0);
+  return {player:p,layout,holes,mode,total,pointsTotal:total,totalGross,attacks,dangers,front,back,targetRequested:desired};
 }
 function WP_escape(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
-function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap}){
+function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mode='winning',customTarget,tempHandicaps={}}){
   try{
     const event=WP_findLatestEventAtCourse(model,courseKey); if(!event)return{ok:false,error:"No previous Stableford event was found for that course."};
     const players=(Array.isArray(model?.players)?model.players:[]).filter(p=>(playerNames||[]).includes(String(p?.name||"")));
     if(!players.length)return{ok:false,error:"Choose at least one player."};
-    const plans=players.map(p=>WP_makePlayerPlan(model,event,p,courseKey,handicapMap)).filter(Boolean);
+    const target=(mode==='winning')?event.targetPoints:Number(customTarget);
+    if(!Number.isFinite(target)) return {ok:false,error:'Enter a valid target score.'};
+    const plans=players.map(p=>WP_makePlayerPlan(model,event,p,courseKey,handicapMap,{mode,target,tempHI:tempHandicaps?.[String(p?.name||'')]})).filter(Boolean);
     if(!plans.length)return{ok:false,error:"The selected course does not have enough Par / Stroke Index data to build a plan."};
     const c=event.courseName||courseKey;
     const css=`<style>
-      .WP{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#0b1f36;background:#fff;max-width:760px;margin:0 auto}.WP *{box-sizing:border-box}.WPhdr{background:linear-gradient(120deg,#0b2747 0%,#123c61 58%,#0b7a6e 100%);color:white;border-radius:28px;padding:28px 30px;position:relative;overflow:hidden}.WPhdr:after{content:"";position:absolute;width:240px;height:240px;border-radius:50%;right:-70px;top:-110px;background:rgba(255,255,255,.08)}.WPeyebrow{font-size:11px;font-weight:900;letter-spacing:.16em;text-transform:uppercase;opacity:.75}.WPtitle{font-size:38px;line-height:1;font-weight:950;letter-spacing:-.045em;margin-top:9px}.WPsub{font-size:13px;margin-top:9px;opacity:.85}.WPbenchmark{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:14px 0 10px}.WPstat{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:linear-gradient(180deg,#fff,#f7fafc)}.WPk{font-size:9px;letter-spacing:.11em;text-transform:uppercase;font-weight:900;color:#64748b}.WPv{font-size:20px;font-weight:950;margin-top:4px;letter-spacing:-.02em}.WPplayer{margin-top:20px;border:1px solid #dbe5ee;border-radius:24px;padding:16px;background:#fff;break-inside:auto}.WPplayer+.WPplayer{break-before:page}.WPplayerHead{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;border-bottom:1px solid #e6edf3;padding-bottom:12px}.WPname{font-size:28px;font-weight:950;letter-spacing:-.035em}.WPmeta{font-size:11px;color:#64748b;margin-top:4px}.WPtarget{font-size:34px;font-weight:950;color:#08775f;line-height:1}.WPribbon{margin:14px 0;background:#0b1f36;color:#fff;border-radius:18px;padding:13px 15px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px}.WPribbon b{font-size:18px}.WPsmall{font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.08em;font-weight:800}.WPholes{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px}.WPhole{border-radius:15px;padding:10px;border:1px solid #dfe7ef;min-height:142px;position:relative;overflow:hidden}.WPscoreLine{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:7px}.WPscoreLabel{font-size:8px;letter-spacing:.12em;text-transform:uppercase;font-weight:950;color:#64748b}.WPgrossBig{font-size:38px;font-weight:950;line-height:.95;letter-spacing:-.04em;color:#0b1f36}.WPpointsPill{font-size:16px;font-weight:950;line-height:1;padding:8px 9px;border-radius:11px;background:#0b1f36;color:#fff;white-space:nowrap}.WPscoreEq{font-size:9px;font-weight:850;margin-top:7px;color:#334155}.WPhole.attack{background:linear-gradient(160deg,#ecfdf5,#d8fae9);border-color:#9ee7c8}.WPhole.protect{background:linear-gradient(160deg,#f8fafc,#eef4f8)}.WPhole.accept{background:linear-gradient(160deg,#fff8e8,#fff0c7);border-color:#f4d38f}.WPhole.reset{background:#fff1f2;border-color:#fecdd3}.WPhn{font-size:10px;font-weight:950;color:#64748b}.WPpts{font-size:27px;font-weight:950;line-height:1;margin-top:6px}.WPpts span{font-size:9px;color:#64748b}.WPgross{font-size:11px;font-weight:900;margin-top:6px}.WPtag{display:inline-block;margin-top:6px;font-size:8px;letter-spacing:.08em;font-weight:950;padding:4px 6px;border-radius:999px;background:#0b1f36;color:white}.WPwhy{font-size:8px;color:#64748b;margin-top:5px;line-height:1.2}.WPsection{margin-top:14px}.WPsectionTitle{font-size:18px;font-weight:950;letter-spacing:-.02em}.WPrules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:8px}.WPrule{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:#f8fafc}.WPrule strong{display:block;font-size:13px;margin-top:4px}.WPdanger{color:#b42318}.WPattack{color:#08775f}.WPfoot{font-size:9px;color:#64748b;margin-top:12px;padding-top:9px;border-top:1px solid #e6edf3}.WPprintNote{font-size:11px;color:#475569;margin:9px 0 0}.WPbar{height:8px;background:#e8eef3;border-radius:999px;overflow:hidden;margin-top:7px}.WPbar>span{display:block;height:100%;background:linear-gradient(90deg,#0ea36f,#0b7a6e)}.WPbenchNote{border-radius:16px;padding:11px 13px;margin:0 0 18px;border:1px solid #dbe5ee;background:#f8fafc;font-size:10px;line-height:1.45;color:#475569}.WPbenchNote strong{color:#0b1f36}.WPstatus{display:inline-block;padding:4px 7px;border-radius:999px;font-size:8px;font-weight:950;letter-spacing:.08em;margin-left:6px}.WPstatus.warn{background:#fff0d6;color:#9a5a00}.WPstatus.good{background:#e8f8f1;color:#08775f}
+      .WP{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#0b1f36;background:#fff;max-width:760px;margin:0 auto}.WP *{box-sizing:border-box}.WPhdr{background:linear-gradient(120deg,#0b2747 0%,#123c61 58%,#0b7a6e 100%);color:white;border-radius:28px;padding:28px 30px;position:relative;overflow:hidden}.WPeyebrow{font-size:11px;font-weight:900;letter-spacing:.16em;text-transform:uppercase;opacity:.75}.WPtitle{font-size:38px;line-height:1;font-weight:950;letter-spacing:-.045em;margin-top:9px}.WPsub{font-size:13px;margin-top:9px;opacity:.85}.WPbenchmark{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:14px 0 10px}.WPstat{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:linear-gradient(180deg,#fff,#f7fafc)}.WPk{font-size:9px;letter-spacing:.11em;text-transform:uppercase;font-weight:900;color:#64748b}.WPv{font-size:20px;font-weight:950;margin-top:4px}.WPplayer{margin-top:20px;border:1px solid #dbe5ee;border-radius:24px;padding:16px;background:#fff}.WPplayer+.WPplayer{break-before:page}.WPplayerHead{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;border-bottom:1px solid #e6edf3;padding-bottom:12px}.WPname{font-size:28px;font-weight:950}.WPmeta{font-size:11px;color:#64748b;margin-top:4px}.WPtarget{font-size:34px;font-weight:950;color:#08775f;line-height:1}.WPribbon{margin:14px 0;background:#0b1f36;color:#fff;border-radius:18px;padding:13px 15px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px}.WPribbon b{font-size:18px}.WPsmall{font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.08em;font-weight:800}.WPholes{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px}.WPhole{border-radius:15px;padding:10px;border:1px solid #dfe7ef;min-height:148px}.WPscoreLine{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:7px}.WPscoreLabel{font-size:8px;letter-spacing:.12em;text-transform:uppercase;font-weight:950;color:#64748b}.WPgrossBig{font-size:40px;font-weight:950;line-height:.95;color:#0b1f36}.WPpointsPill{font-size:15px;font-weight:950;padding:8px 9px;border-radius:11px;background:#0b1f36;color:#fff;white-space:nowrap}.WPscoreEq{font-size:9px;font-weight:850;margin-top:7px;color:#334155}.WPhole.attack{background:linear-gradient(160deg,#ecfdf5,#d8fae9);border-color:#9ee7c8}.WPhole.protect{background:linear-gradient(160deg,#f8fafc,#eef4f8)}.WPhole.accept{background:linear-gradient(160deg,#fff8e8,#fff0c7);border-color:#f4d38f}.WPhole.reset{background:#fff1f2;border-color:#fecdd3}.WPhn{font-size:10px;font-weight:950;color:#64748b}.WPtag{display:inline-block;margin-top:6px;font-size:8px;letter-spacing:.08em;font-weight:950;padding:4px 6px;border-radius:999px;background:#0b1f36;color:white}.WPwhy{font-size:8px;color:#64748b;margin-top:5px;line-height:1.2}.WPsection{margin-top:14px}.WPsectionTitle{font-size:18px;font-weight:950}.WPrules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:8px}.WPrule{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:#f8fafc}.WPrule strong{display:block;font-size:13px;margin-top:4px}.WPdanger{color:#b42318}.WPattack{color:#08775f}.WPfoot{font-size:9px;color:#64748b;margin-top:12px;padding-top:9px;border-top:1px solid #e6edf3}.WPprintNote{font-size:11px;color:#475569;margin:9px 0}.WPbenchNote{border-radius:16px;padding:11px 13px;margin:0 0 18px;border:1px solid #dbe5ee;background:#f8fafc;font-size:10px;color:#475569}
       @media(max-width:700px){.WPbenchmark{grid-template-columns:repeat(2,1fr)}.WPholes{grid-template-columns:repeat(3,1fr)}.WPrules{grid-template-columns:1fr}.WPtitle{font-size:30px}}
       .PRpdfExportRoot .WPholes{grid-template-columns:repeat(6,minmax(0,1fr))!important}.PRpdfExportRoot .WPbenchmark{grid-template-columns:repeat(4,minmax(0,1fr))!important}.PRpdfExportRoot .WPrules{grid-template-columns:repeat(3,minmax(0,1fr))!important}
     </style>`;
-    const statusClass=event.benchmarkStatus==="LIKELY ANOMALY"?"warn":"good";
-    const historyText=Number.isFinite(event.historicWinningMedian)?`Historic winning median ${event.historicWinningMedian.toFixed(1)} pts across ${event.priorWinningScores.length} earlier visit${event.priorWinningScores.length===1?"":"s"}.`:"No earlier winning-score history at this course.";
-    const head=`${css}<div class="WP"><div class="WPhdr"><div class="WPeyebrow">DEN GOLF · PRE-ROUND INTELLIGENCE</div><div class="WPtitle">Winning Game Plan</div><div class="WPsub">${WP_escape(c)} · all-years benchmark · previous event ${WP_escape(event.dateLabel)}</div></div><div class="WPbenchmark"><div class="WPstat"><div class="WPk">Previous winner</div><div class="WPv">${WP_escape(event.winnerName)}</div><div style="font-size:10px;color:#64748b;margin-top:3px">${event.winningPoints.toFixed(0)} pts</div></div><div class="WPstat"><div class="WPk">Runner-up</div><div class="WPv">${WP_escape(event.runnerUpName)}</div><div style="font-size:10px;color:#64748b;margin-top:3px">${Number.isFinite(event.runnerUpPoints)?event.runnerUpPoints.toFixed(0)+" pts":"—"}${Number.isFinite(event.winnerGapToSecond)?` · gap ${event.winnerGapToSecond.toFixed(0)}`:""}</div></div><div class="WPstat"><div class="WPk">Winning-score check</div><div class="WPv" style="font-size:14px">${WP_escape(event.benchmarkStatus)}</div><div style="font-size:10px;color:#64748b;margin-top:3px">Repeat likelihood: ${WP_escape(event.repeatLikelihood)}</div></div><div class="WPstat"><div class="WPk">Recommended target</div><div class="WPv" style="color:#08775f">${event.targetPoints.toFixed(0)} pts</div><div style="font-size:10px;color:#64748b;margin-top:3px">Competitive line ${event.competitiveBenchmark.toFixed(0)} + 1</div></div></div><div class="WPbenchNote"><strong>${WP_escape(event.benchmarkHeadline)}</strong><span class="WPstatus ${statusClass}">${WP_escape(event.benchmarkStatus)}</span><br>${WP_escape(event.benchmarkDetail)} ${WP_escape(historyText)}</div>`;
+    const modeTitle=mode==='gross'?'Custom Gross Route':mode==='stableford'?'Custom Stableford Route':'Winning Game Plan';
+    const targetLabel=mode==='gross'?`${Math.round(target)} gross`:`${Math.round(target)} pts`;
+    const head=`${css}<div class="WP"><div class="WPhdr"><div class="WPeyebrow">DEN GOLF · PRE-ROUND INTELLIGENCE</div><div class="WPtitle">${WP_escape(modeTitle)}</div><div class="WPsub">${WP_escape(c)} · all-years player history · target ${WP_escape(targetLabel)}</div></div><div class="WPbenchmark"><div class="WPstat"><div class="WPk">Previous winner</div><div class="WPv">${WP_escape(event.winnerName)}</div><div style="font-size:10px;color:#64748b">${event.winningPoints.toFixed(0)} pts</div></div><div class="WPstat"><div class="WPk">Runner-up</div><div class="WPv">${WP_escape(event.runnerUpName)}</div><div style="font-size:10px;color:#64748b">${Number.isFinite(event.runnerUpPoints)?event.runnerUpPoints.toFixed(0)+' pts':'—'}</div></div><div class="WPstat"><div class="WPk">Plan mode</div><div class="WPv" style="font-size:14px">${WP_escape(modeTitle)}</div></div><div class="WPstat"><div class="WPk">Selected target</div><div class="WPv" style="color:#08775f">${WP_escape(targetLabel)}</div></div></div><div class="WPbenchNote">The route is optimised from each golfer's all-years history, giving highest weight to previous scores on the exact hole, then Stroke Index, Par and yardage patterns. A temporary handicap is used where entered.</div>`;
     const body=plans.map(plan=>{
-      const p=plan.player, l=plan.layout, extras=Math.max(0,plan.total-36);
-      const attackText=plan.attacks.length?plan.attacks.slice(0,6).map(h=>`H${h.hole}`).join(" · "):"No forced attack holes";
-      const dangerText=plan.dangers.map(h=>`H${h.hole}`).join(" · ");
-      const pct=Math.max(0,Math.min(100,(plan.total/Math.max(1,event.targetPoints))*100));
-      const holes=plan.holes.map(h=>`<div class="WPhole ${h.strategy.toLowerCase()}"><div class="WPhn">HOLE ${h.hole} · PAR ${Number.isFinite(h.par)?h.par:"—"} · SI ${Number.isFinite(h.si)?h.si:"—"}</div><div class="WPscoreLine"><div><div class="WPscoreLabel">GROSS SCORE TO MAKE</div><div class="WPgrossBig">${Number.isFinite(h.targetGross)?h.targetGross:"—"}</div></div><div class="WPpointsPill">${h.targetPts} PTS</div></div><div class="WPscoreEq">Make <b>${Number.isFinite(h.targetGross)?h.targetGross:"—"}</b> gross → <b>${h.targetPts} Stableford point${h.targetPts===1?"":"s"}</b> ${h.strokes?`· ${h.strokes} handicap shot${h.strokes===1?"":"s"}`:"· no handicap shot"}</div><div class="WPtag">${h.strategy}</div><div class="WPwhy">${WP_escape(h.reason)}</div></div>`).join("");
-      return `<section class="WPplayer"><div class="WPplayerHead"><div><div class="WPeyebrow" style="color:#0b7a6e;opacity:1">PERSONALISED ROUTE</div><div class="WPname">${WP_escape(p?.name||"Player")}</div><div class="WPmeta">HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):"—"} · Course Handicap ${l.ch} ${l.teeName?`· ${WP_escape(l.teeName)}`:""}</div></div><div style="text-align:right"><div class="WPk">WIN TARGET</div><div class="WPtarget">${plan.total} pts</div></div></div><div class="WPribbon"><div><div class="WPsmall">The simple equation</div><b>36 + ${extras} = ${plan.total}</b><div style="font-size:10px;opacity:.75;margin-top:3px">Handicap pace plus ${extras} extra point${extras===1?"":"s"}</div></div><div><div class="WPsmall">Front 9 plan</div><b>${plan.front} pts</b></div><div><div class="WPsmall">Back 9 plan</div><b>${plan.back} pts</b></div></div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route to ${plan.total}</div><div class="WPprintNote">The BIG number on every hole is the gross score to make. The points badge shows what that gross score delivers. Green = planned gain; grey = protect handicap pace; amber = controlled concession.</div><div class="WPbar"><span style="width:${pct}%"></span></div><div class="WPholes" style="margin-top:10px">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Three things to remember</div><div class="WPrules"><div class="WPrule"><div class="WPk">1 · PROTECT</div><strong>Do not chase points on every hole.</strong><div class="WPwhy">A 2-point net par is doing its job. The plan only asks for gains where they are most efficient.</div></div><div class="WPrule"><div class="WPk">2 · ATTACK</div><strong class="WPattack">${WP_escape(attackText)}</strong><div class="WPwhy">These are the highest-value places to find the extra ${extras} point${extras===1?"":"s"}.</div></div><div class="WPrule"><div class="WPk">3 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong><div class="WPwhy">These are your lowest-opportunity holes. One point is recoverable; a blob creates pressure.</div></div></div></div><div class="WPfoot">Plan basis: previous winner ${WP_escape(event.winnerName)} ${event.winningPoints.toFixed(0)} pts · runner-up ${Number.isFinite(event.runnerUpPoints)?event.runnerUpPoints.toFixed(0):"—"} pts · score check ${WP_escape(event.benchmarkStatus)} → recommended target ${event.targetPoints.toFixed(0)} pts. Hole targets use this player's latest current-year handicap, the selected course Par/SI layout and the player's all-years scoring profile where available.</div></section>`;
-    }).join("");
+      const p=plan.player,l=plan.layout;
+      const isGross=plan.mode==='gross';
+      const attackText=plan.attacks.length?plan.attacks.slice(0,6).map(h=>`H${h.hole}`).join(' · '):'Play the plan, not the flag';
+      const dangerText=plan.dangers.map(h=>`H${h.hole}`).join(' · ');
+      const holes=plan.holes.map(h=>`<div class="WPhole ${h.strategy.toLowerCase()}"><div class="WPhn">HOLE ${h.hole} · PAR ${h.par} · SI ${Number.isFinite(h.si)?h.si:'—'}</div><div class="WPscoreLine"><div><div class="WPscoreLabel">GROSS SCORE TO MAKE</div><div class="WPgrossBig">${h.targetGross}</div></div><div class="WPpointsPill">${h.targetPts} PTS</div></div><div class="WPscoreEq">Make <b>${h.targetGross}</b> gross → <b>${h.targetPts} Stableford point${h.targetPts===1?'':'s'}</b> · ${h.strokes} handicap shot${h.strokes===1?'':'s'}</div><div class="WPtag">${h.strategy}</div><div class="WPwhy">${WP_escape(h.reason)}</div></div>`).join('');
+      const targetTop=isGross?`${plan.totalGross} GROSS`:`${plan.pointsTotal} PTS`;
+      const ribbon=isGross?`<div><div class="WPsmall">Gross target</div><b>${plan.totalGross} strokes</b><div style="font-size:10px;opacity:.75;margin-top:3px">Projected ${plan.pointsTotal} Stableford pts</div></div><div><div class="WPsmall">Front 9</div><b>${plan.front} gross</b></div><div><div class="WPsmall">Back 9</div><b>${plan.back} gross</b></div>`:`<div><div class="WPsmall">Stableford target</div><b>${plan.pointsTotal} points</b><div style="font-size:10px;opacity:.75;margin-top:3px">Projected gross ${plan.totalGross}</div></div><div><div class="WPsmall">Front 9</div><b>${plan.front} pts</b></div><div><div class="WPsmall">Back 9</div><b>${plan.back} pts</b></div>`;
+      return `<section class="WPplayer"><div class="WPplayerHead"><div><div class="WPeyebrow" style="color:#0b7a6e;opacity:1">PERSONALISED ROUTE</div><div class="WPname">${WP_escape(p?.name||'Player')}</div><div class="WPmeta">HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'}${l.temporaryHI?' (temporary)':''} · Course Handicap ${l.ch} ${l.teeName?'· '+WP_escape(l.teeName):''}</div></div><div style="text-align:right"><div class="WPk">TARGET</div><div class="WPtarget">${targetTop}</div></div></div><div class="WPribbon">${ribbon}</div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route</div><div class="WPprintNote">Use the BIG gross number live on the course. The engine has chosen where your pars, bogeys and gains are most likely based on your own previous rounds plus this course's Par and SI.</div><div class="WPholes">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Three things to remember</div><div class="WPrules"><div class="WPrule"><div class="WPk">1 · FOLLOW THE GROSS NUMBER</div><strong>That is the score to make on each hole.</strong></div><div class="WPrule"><div class="WPk">2 · BEST OPPORTUNITIES</div><strong class="WPattack">${WP_escape(attackText)}</strong></div><div class="WPrule"><div class="WPk">3 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong></div></div></div><div class="WPfoot">Optimised from all recorded rounds for ${WP_escape(p?.name||'this player')}: exact-hole history first, then SI, Par and yardage profile. ${l.temporaryHI?'Temporary handicap override used.':'Latest current-year handicap used.'}</div></section>`;
+    }).join('');
     return {ok:true,event,plans,htmlFragment:`${head}${body}</div>`};
-  }catch(e){ console.error("Winning plan failed",e); return {ok:false,error:`Could not build winning plan${e?.message ? `: ${e.message}` : "."}`}; }
+  }catch(e){ console.error('Winning plan failed',e); return {ok:false,error:`Could not build winning plan${e?.message?`: ${e.message}`:'.'}`}; }
 }
-
 
 // Pre-Round planner: if data is not loaded, scan ALL stored games and return to this view.
 function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, setView, runSeasonAnalysis }) {
@@ -15302,6 +15413,10 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     .sort((a,b)=>String(a.name).localeCompare(String(b.name))), [seasonModel]);
   const [courseKey, setCourseKey] = React.useState("");
   const [selectedPlayers, setSelectedPlayers] = React.useState([]);
+  const [planMode, setPlanMode] = React.useState("winning"); // winning | stableford | gross
+  const [customPoints, setCustomPoints] = React.useState(40);
+  const [customGross, setCustomGross] = React.useState(85);
+  const [tempHandicaps, setTempHandicaps] = React.useState({});
   const handicapMap = React.useMemo(() => WP_currentYearHandicapMap(seasonRoundsAllYears, currentYear), [seasonRoundsAllYears, currentYear]);
 
   React.useEffect(() => {
@@ -15311,9 +15426,9 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
   const event = React.useMemo(() => WP_findLatestEventAtCourse(seasonModel, courseKey), [seasonModel, courseKey]);
   const selectedCourse = courses.find(c => c.key === courseKey) || null;
-  const target = Number(event?.targetPoints);
   const winnerPts = Number(event?.winningPoints);
-  const extraNeeded = Number.isFinite(target) ? Math.max(0, target - 36) : NaN;
+  const target = planMode === "winning" ? Number(event?.targetPoints) : (planMode === "stableford" ? Number(customPoints) : Number(customGross));
+  const extraNeeded = planMode !== "gross" && Number.isFinite(target) ? Math.max(0, target - 36) : NaN;
 
   const togglePlayer = (name) => {
     setSelectedPlayers(prev => prev.includes(name) ? prev.filter(x => x !== name) : [...prev, name]);
@@ -15321,15 +15436,15 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
   const generatePlan = () => {
     try {
-      const r = WP_generateWinningPlanHTML({ model: seasonModel, courseKey, playerNames: selectedPlayers, handicapMap });
+      const r = WP_generateWinningPlanHTML({ model: seasonModel, courseKey, playerNames: selectedPlayers, handicapMap, mode: planMode, customTarget: target, tempHandicaps });
       if (!r?.ok) { alert(r?.error || "Could not build winning plan."); return; }
       window.__dslSeasonReportParams = {
         model: seasonModel,
         playerName: `Winning-Plan-${r.event.courseName || "course"}`,
         yearLabel: "All Years",
         seasonLimit: "all",
-        scoringMode: "stableford",
-        lensMode: "winningPlan",
+        scoringMode: planMode === "gross" ? "gross" : "stableford",
+        lensMode: planMode === "winning" ? "winningPlan" : (planMode === "gross" ? "customGrossPlan" : "customStablefordPlan"),
         comparatorMode: "target"
       };
       PR_showInlineSeasonReport(r.htmlFragment);
@@ -15398,19 +15513,28 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
               <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
                 <div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white text-sm font-black">3</div><div><div className="text-[10px] font-black tracking-widest uppercase text-slate-400">Golfers</div><div className="font-black text-slate-900">Who needs a plan?</div></div></div>
                 <div className="mt-4 max-h-52 overflow-auto rounded-2xl border border-slate-200 bg-white p-2">
-                  {players.map(p=>{ const name=String(p.name); const checked=selectedPlayers.includes(name); const hx=handicapMap.get(WP_norm(name)); const hi=Number(hx?.newHI); return <label key={name} className={`flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold ${checked?"bg-emerald-50 text-emerald-900":"text-slate-700 hover:bg-slate-50"}`}><input type="checkbox" checked={checked} onChange={()=>togglePlayer(name)} className="h-4 w-4"/><span className="flex-1">{name}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ${Number.isFinite(hi)?"bg-blue-50 text-blue-700":"bg-slate-100 text-slate-400"}`}>{Number.isFinite(hi)?`HI ${hi.toFixed(1)}`:"HI —"}</span>{checked?<span className="text-emerald-600">✓</span>:null}</label>; })}
+                  {players.map(p=>{ const name=String(p.name); const checked=selectedPlayers.includes(name); const hx=handicapMap.get(WP_norm(name)); const hi=Number(hx?.newHI); return <div key={name} className={`rounded-xl px-3 py-2.5 ${checked?"bg-emerald-50":"hover:bg-slate-50"}`}><label className={`flex cursor-pointer items-center gap-3 text-sm font-bold ${checked?"text-emerald-900":"text-slate-700"}`}><input type="checkbox" checked={checked} onChange={()=>togglePlayer(name)} className="h-4 w-4"/><span className="flex-1">{name}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ${Number.isFinite(hi)?"bg-blue-50 text-blue-700":"bg-slate-100 text-slate-400"}`}>{Number.isFinite(hi)?`HI ${hi.toFixed(1)}`:"HI —"}</span>{checked?<span className="text-emerald-600">✓</span>:null}</label>{checked?<div className="mt-2 ml-7 flex items-center gap-2"><span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Temporary HI</span><input type="number" min="0" max="54" step="0.1" placeholder={Number.isFinite(hi)?hi.toFixed(1):"optional"} value={tempHandicaps[name]??""} onChange={e=>setTempHandicaps(prev=>({...prev,[name]:e.target.value}))} className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-black text-slate-900"/><span className="text-[10px] text-slate-400">optional override</span></div>:null}</div>; })}
                 </div>
                 <div className="mt-3 flex items-center justify-between gap-3"><div className="text-xs font-bold text-slate-500">{selectedPlayers.length} selected</div><button type="button" className="text-xs font-black text-slate-700 underline" onClick={()=>setSelectedPlayers(selectedPlayers.length===players.length?[]:players.map(p=>String(p.name)))}>{selectedPlayers.length===players.length?"Clear all":"Select all"}</button></div><div className="mt-2 rounded-xl bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-800">Handicap source: latest {currentYear} handicap from the current-year handicap export.</div>
               </div>
             </div>
           </section>
 
+          {event && <section className="content-card p-5 md:p-7">
+            <div className="text-[10px] font-black uppercase tracking-[.18em] text-slate-400">Choose your destination</div>
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
+              {[['winning','🏆','Beat likely winning score','Let Den Golf set the target'],['stableford','🎯','Choose Stableford target','Build an exact points route'],['gross','⛳','Choose gross target','Build an exact stroke route']].map(([m,icon,title,sub])=><button key={m} type="button" onClick={()=>setPlanMode(m)} className={`rounded-2xl border p-4 text-left transition ${planMode===m?'border-emerald-400 bg-emerald-50 shadow-sm':'border-slate-200 bg-white hover:bg-slate-50'}`}><div className="text-2xl">{icon}</div><div className="mt-2 font-black text-slate-900">{title}</div><div className="mt-1 text-xs text-slate-500">{sub}</div></button>)}
+            </div>
+            {planMode==='stableford'?<div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4"><label className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Target Stableford points</label><div className="mt-2 flex items-center gap-3"><input type="number" min="18" max="72" step="1" value={customPoints} onChange={e=>setCustomPoints(e.target.value)} className="w-28 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-2xl font-black text-slate-900"/><span className="font-black text-emerald-800">points</span></div><div className="mt-2 text-xs text-emerald-800">The optimizer will use your previous rounds, exact-hole record, SI and Par profile to decide where those points are most realistically made.</div></div>:null}
+            {planMode==='gross'?<div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4"><label className="text-[10px] font-black uppercase tracking-widest text-blue-700">Target gross score</label><div className="mt-2 flex items-center gap-3"><input type="number" min="54" max="180" step="1" value={customGross} onChange={e=>setCustomGross(e.target.value)} className="w-28 rounded-xl border border-blue-300 bg-white px-3 py-2 text-2xl font-black text-slate-900"/><span className="font-black text-blue-800">gross</span></div><div className="mt-2 text-xs text-blue-800">The optimizer allocates pars, bogeys and worse scores to the holes where your history says they are most likely, while making the 18-hole total equal your chosen gross score.</div></div>:null}
+          </section>}
+
           {event && <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
             <div className="grid grid-cols-1 md:grid-cols-[1.25fr_.75fr]">
               <div className="p-5 md:p-7">
-                <div className="text-[10px] font-black uppercase tracking-[.18em] text-slate-400">The winning equation</div>
-                <div className="mt-2 flex items-baseline gap-3 flex-wrap"><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">36</span><span className="text-3xl font-black text-slate-300">+</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-emerald-600">{Number.isFinite(extraNeeded)?extraNeeded.toFixed(0):"—"}</span><span className="text-3xl font-black text-slate-300">=</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">{event.targetPoints.toFixed(0)}</span></div>
-                <div className="mt-2 text-sm text-slate-600">The engine starts at handicap golf, then finds the lowest-risk holes to produce the extra {Number.isFinite(extraNeeded)?extraNeeded.toFixed(0):"—"} point{extraNeeded===1?"":"s"} needed to beat the recommended competitive benchmark. {event.targetAdjusted?`The last winning score of ${event.winningPoints.toFixed(0)} was treated as a likely anomaly rather than a score everyone should chase.`:""}</div>
+                <div className="text-[10px] font-black uppercase tracking-[.18em] text-slate-400">{planMode==='winning'?'The winning equation':planMode==='stableford'?'Your points target':'Your gross target'}</div>
+                {planMode==='gross'?<div className="mt-2"><span className="text-6xl font-black tracking-[-.05em] text-slate-900">{Number.isFinite(target)?Math.round(target):'—'}</span><span className="ml-3 text-xl font-black text-blue-600">GROSS</span></div>:<div className="mt-2 flex items-baseline gap-3 flex-wrap"><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">36</span><span className="text-3xl font-black text-slate-300">+</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-emerald-600">{Number.isFinite(extraNeeded)?extraNeeded.toFixed(0):"—"}</span><span className="text-3xl font-black text-slate-300">=</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">{Number.isFinite(target)?Math.round(target):'—'}</span></div>}
+                <div className="mt-2 text-sm text-slate-600">{planMode==='winning'?'The engine finds the lowest-risk holes to beat the credible winning benchmark.':planMode==='stableford'?'The engine builds an exact points total, putting the extra points on the holes your previous rounds, Stroke Index and Par profile say are most likely.':'The engine builds an exact gross total, placing pars, bogeys and higher scores on the holes where your own history says they are most likely.'}</div>
               </div>
               <div className="border-t md:border-t-0 md:border-l border-slate-200 bg-slate-50 p-5 md:p-7">
                 <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">How the plan thinks</div>
@@ -15419,8 +15543,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
             </div>
           </section>}
 
-          <button type="button" disabled={!event || !selectedPlayers.length} onClick={generatePlan} className="w-full rounded-3xl px-6 py-5 text-lg md:text-xl font-black text-white shadow-xl disabled:cursor-not-allowed disabled:opacity-40" style={{background:"linear-gradient(90deg,#071d35 0%,#0b3e61 45%,#08775f 100%)"}}>
-            {event ? `Build ${selectedPlayers.length || ""} Winning Game Plan${selectedPlayers.length===1?"":"s"} · Target ${event.targetPoints.toFixed(0)} pts` : "Choose a course with a previous result"}
+          <button type="button" disabled={!event || !selectedPlayers.length || !Number.isFinite(target)} onClick={generatePlan} className="w-full rounded-3xl px-6 py-5 text-lg md:text-xl font-black text-white shadow-xl disabled:cursor-not-allowed disabled:opacity-40" style={{background:"linear-gradient(90deg,#071d35 0%,#0b3e61 45%,#08775f 100%)"}}>
+            {event ? `Build ${selectedPlayers.length || ""} ${planMode==='winning'?'Winning':planMode==='stableford'?'Stableford':'Gross'} Route${selectedPlayers.length===1?"":"s"} · Target ${Number.isFinite(target)?Math.round(target):'—'} ${planMode==='gross'?'gross':'pts'}` : "Choose a course with a previous result"}
           </button>
         </>
       )}
