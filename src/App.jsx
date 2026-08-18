@@ -15013,6 +15013,12 @@ function WP_courseOptionsFromModel(model){
   }
   return Array.from(map.values()).sort((a,b)=>(b.lastMs-a.lastMs)||a.label.localeCompare(b.label));
 }
+function WP_median(values){
+  const a=(values||[]).map(Number).filter(Number.isFinite).sort((x,y)=>x-y);
+  if(!a.length) return NaN;
+  const m=Math.floor(a.length/2);
+  return a.length%2?a[m]:(a[m-1]+a[m])/2;
+}
 function WP_findLatestEventAtCourse(model, courseKey){
   const key=WP_norm(courseKey); if(!key) return null;
   const events=new Map();
@@ -15021,17 +15027,103 @@ function WP_findLatestEventAtCourse(model, courseKey){
       if(WP_norm(WP_course(r))!==key) continue;
       const ek=WP_eventKey(r);
       const e=events.get(ek)||{key:ek,courseName:WP_course(r),dateMs:0,dateLabel:WP_dateLabel(r),entries:[]};
-      e.dateMs=Math.max(e.dateMs,WP_dateMs(r)||0); e.entries.push({player:p,round:r}); events.set(ek,e);
+      e.dateMs=Math.max(e.dateMs,WP_dateMs(r)||0);
+      e.entries.push({player:p,round:r});
+      events.set(ek,e);
     }
   }
-  const arr=Array.from(events.values()).filter(e=>e.entries.some(x=>Number.isFinite(WP_points(x.round))));
+
+  const arr=Array.from(events.values()).map(e=>{
+    const ranked=e.entries.filter(x=>Number.isFinite(WP_points(x.round))).slice().sort((a,b)=>WP_compareRounds(a.round,b.round));
+    const winner=ranked[0]||null;
+    return {...e,ranked,winner,winningPoints:winner?WP_points(winner.round):NaN};
+  }).filter(e=>e.winner&&Number.isFinite(e.winningPoints));
   if(!arr.length) return null;
   arr.sort((a,b)=>b.dateMs-a.dateMs);
+
   const e=arr[0];
-  const ranked=e.entries.filter(x=>Number.isFinite(WP_points(x.round))).slice().sort((a,b)=>WP_compareRounds(a.round,b.round));
+  const ranked=e.ranked||[];
   const winner=ranked[0]||null;
+  const second=ranked[1]||null;
+  const third=ranked[2]||null;
   if(!winner) return null;
-  e.winnerName=String(winner.player?.name||"Winner"); e.winningPoints=WP_points(winner.round); e.targetPoints=e.winningPoints+1; e.winnerRound=winner.round;
+
+  e.winnerName=String(winner.player?.name||"Winner");
+  e.winnerRound=winner.round;
+  e.winningPoints=WP_points(winner.round);
+  e.runnerUpName=second?String(second.player?.name||"Second place"):"—";
+  e.runnerUpPoints=second?WP_points(second.round):NaN;
+  e.thirdName=third?String(third.player?.name||"Third place"):"—";
+  e.thirdPoints=third?WP_points(third.round):NaN;
+  e.fieldSize=ranked.length;
+
+  const priorWinningScores=arr.slice(1).map(x=>Number(x.winningPoints)).filter(Number.isFinite);
+  const histMedian=WP_median(priorWinningScores);
+  const histMean=priorWinningScores.length?priorWinningScores.reduce((a,b)=>a+b,0)/priorWinningScores.length:NaN;
+  const gap2=Number.isFinite(e.runnerUpPoints)?e.winningPoints-e.runnerUpPoints:NaN;
+  const gap3=Number.isFinite(e.thirdPoints)?e.winningPoints-e.thirdPoints:NaN;
+  const aboveHist=Number.isFinite(histMedian)?e.winningPoints-histMedian:NaN;
+
+  let anomalyScore=0;
+  if(Number.isFinite(gap2)){
+    if(gap2>=6) anomalyScore+=3;
+    else if(gap2>=4) anomalyScore+=2;
+    else if(gap2>=3) anomalyScore+=1;
+  }
+  if(Number.isFinite(gap3)&&gap3>=8) anomalyScore+=1;
+  if(Number.isFinite(aboveHist)){
+    if(aboveHist>=6) anomalyScore+=3;
+    else if(aboveHist>=4) anomalyScore+=2;
+    else if(aboveHist>=3) anomalyScore+=1;
+  }
+
+  let benchmarkStatus="CREDIBLE";
+  let repeatLikelihood="HIGH";
+  let benchmarkHeadline="Last winning score looks repeatable";
+  let benchmarkDetail="The gap to the chasing players is within a normal competitive range, so the previous winning score remains the best benchmark.";
+  if(anomalyScore>=3){
+    benchmarkStatus="LIKELY ANOMALY";
+    repeatLikelihood="LOW";
+    benchmarkHeadline="Last winning score looks unusually hard to repeat";
+    benchmarkDetail="The winner was unusually far clear of the chasing score and/or above the normal winning level previously recorded here. The plan therefore uses a more realistic competitive benchmark.";
+  }else if(anomalyScore>=2){
+    benchmarkStatus="UNUSUALLY HIGH";
+    repeatLikelihood="MEDIUM";
+    benchmarkHeadline="Last winning score was strong, but not clearly a freak result";
+    benchmarkDetail="It was above the normal competitive line, but the evidence is not strong enough to discard it. The planner keeps the previous winning score as the target benchmark.";
+  }else if(e.winningPoints>=42){
+    benchmarkStatus="STRONG BUT CREDIBLE";
+    repeatLikelihood="MEDIUM-HIGH";
+    benchmarkHeadline="A strong winning score, but still credible";
+    benchmarkDetail="The score was high, but the finishing gap does not look extreme enough to treat it as an outlier.";
+  }
+
+  let competitiveBenchmark=e.winningPoints;
+  if(benchmarkStatus==="LIKELY ANOMALY"){
+    const candidates=[];
+    if(Number.isFinite(e.runnerUpPoints)) candidates.push(e.runnerUpPoints+1);
+    if(Number.isFinite(histMedian)) candidates.push(histMedian);
+    if(Number.isFinite(e.thirdPoints)) candidates.push(e.thirdPoints+1);
+    if(candidates.length) competitiveBenchmark=Math.max(...candidates);
+  }
+  competitiveBenchmark=Math.max(0,Math.round(competitiveBenchmark));
+  const targetPoints=Math.max(1,Math.min(72,competitiveBenchmark+1));
+
+  e.previousEventCount=arr.length;
+  e.priorWinningScores=priorWinningScores;
+  e.historicWinningMedian=histMedian;
+  e.historicWinningMean=histMean;
+  e.winnerGapToSecond=gap2;
+  e.winnerGapToThird=gap3;
+  e.aboveHistoricMedian=aboveHist;
+  e.anomalyScore=anomalyScore;
+  e.benchmarkStatus=benchmarkStatus;
+  e.repeatLikelihood=repeatLikelihood;
+  e.benchmarkHeadline=benchmarkHeadline;
+  e.benchmarkDetail=benchmarkDetail;
+  e.competitiveBenchmark=competitiveBenchmark;
+  e.targetPoints=targetPoints;
+  e.targetAdjusted=targetPoints!==Math.round(e.winningPoints+1);
   return e;
 }
 function WP_currentYearHandicapMap(seasonRounds, calendarYear){
@@ -15182,18 +15274,20 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap}){
     if(!plans.length)return{ok:false,error:"The selected course does not have enough Par / Stroke Index data to build a plan."};
     const c=event.courseName||courseKey;
     const css=`<style>
-      .WP{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#0b1f36;background:#fff;max-width:760px;margin:0 auto}.WP *{box-sizing:border-box}.WPhdr{background:linear-gradient(120deg,#0b2747 0%,#123c61 58%,#0b7a6e 100%);color:white;border-radius:28px;padding:28px 30px;position:relative;overflow:hidden}.WPhdr:after{content:"";position:absolute;width:240px;height:240px;border-radius:50%;right:-70px;top:-110px;background:rgba(255,255,255,.08)}.WPeyebrow{font-size:11px;font-weight:900;letter-spacing:.16em;text-transform:uppercase;opacity:.75}.WPtitle{font-size:38px;line-height:1;font-weight:950;letter-spacing:-.045em;margin-top:9px}.WPsub{font-size:13px;margin-top:9px;opacity:.85}.WPbenchmark{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:14px 0 20px}.WPstat{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:linear-gradient(180deg,#fff,#f7fafc)}.WPk{font-size:9px;letter-spacing:.11em;text-transform:uppercase;font-weight:900;color:#64748b}.WPv{font-size:20px;font-weight:950;margin-top:4px;letter-spacing:-.02em}.WPplayer{margin-top:20px;border:1px solid #dbe5ee;border-radius:24px;padding:16px;background:#fff;break-inside:auto}.WPplayer+.WPplayer{break-before:page}.WPplayerHead{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;border-bottom:1px solid #e6edf3;padding-bottom:12px}.WPname{font-size:28px;font-weight:950;letter-spacing:-.035em}.WPmeta{font-size:11px;color:#64748b;margin-top:4px}.WPtarget{font-size:34px;font-weight:950;color:#08775f;line-height:1}.WPribbon{margin:14px 0;background:#0b1f36;color:#fff;border-radius:18px;padding:13px 15px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px}.WPribbon b{font-size:18px}.WPsmall{font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.08em;font-weight:800}.WPholes{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px}.WPhole{border-radius:15px;padding:9px;border:1px solid #dfe7ef;min-height:116px;position:relative;overflow:hidden}.WPhole.attack{background:linear-gradient(160deg,#ecfdf5,#d8fae9);border-color:#9ee7c8}.WPhole.protect{background:linear-gradient(160deg,#f8fafc,#eef4f8)}.WPhole.accept{background:linear-gradient(160deg,#fff8e8,#fff0c7);border-color:#f4d38f}.WPhole.reset{background:#fff1f2;border-color:#fecdd3}.WPhn{font-size:10px;font-weight:950;color:#64748b}.WPpts{font-size:27px;font-weight:950;line-height:1;margin-top:6px}.WPpts span{font-size:9px;color:#64748b}.WPgross{font-size:11px;font-weight:900;margin-top:6px}.WPtag{display:inline-block;margin-top:6px;font-size:8px;letter-spacing:.08em;font-weight:950;padding:4px 6px;border-radius:999px;background:#0b1f36;color:white}.WPwhy{font-size:8px;color:#64748b;margin-top:5px;line-height:1.2}.WPsection{margin-top:14px}.WPsectionTitle{font-size:18px;font-weight:950;letter-spacing:-.02em}.WPrules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:8px}.WPrule{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:#f8fafc}.WPrule strong{display:block;font-size:13px;margin-top:4px}.WPdanger{color:#b42318}.WPattack{color:#08775f}.WPfoot{font-size:9px;color:#64748b;margin-top:12px;padding-top:9px;border-top:1px solid #e6edf3}.WPprintNote{font-size:11px;color:#475569;margin:9px 0 0}.WPbar{height:8px;background:#e8eef3;border-radius:999px;overflow:hidden;margin-top:7px}.WPbar>span{display:block;height:100%;background:linear-gradient(90deg,#0ea36f,#0b7a6e)}
+      .WP{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#0b1f36;background:#fff;max-width:760px;margin:0 auto}.WP *{box-sizing:border-box}.WPhdr{background:linear-gradient(120deg,#0b2747 0%,#123c61 58%,#0b7a6e 100%);color:white;border-radius:28px;padding:28px 30px;position:relative;overflow:hidden}.WPhdr:after{content:"";position:absolute;width:240px;height:240px;border-radius:50%;right:-70px;top:-110px;background:rgba(255,255,255,.08)}.WPeyebrow{font-size:11px;font-weight:900;letter-spacing:.16em;text-transform:uppercase;opacity:.75}.WPtitle{font-size:38px;line-height:1;font-weight:950;letter-spacing:-.045em;margin-top:9px}.WPsub{font-size:13px;margin-top:9px;opacity:.85}.WPbenchmark{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:14px 0 10px}.WPstat{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:linear-gradient(180deg,#fff,#f7fafc)}.WPk{font-size:9px;letter-spacing:.11em;text-transform:uppercase;font-weight:900;color:#64748b}.WPv{font-size:20px;font-weight:950;margin-top:4px;letter-spacing:-.02em}.WPplayer{margin-top:20px;border:1px solid #dbe5ee;border-radius:24px;padding:16px;background:#fff;break-inside:auto}.WPplayer+.WPplayer{break-before:page}.WPplayerHead{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;border-bottom:1px solid #e6edf3;padding-bottom:12px}.WPname{font-size:28px;font-weight:950;letter-spacing:-.035em}.WPmeta{font-size:11px;color:#64748b;margin-top:4px}.WPtarget{font-size:34px;font-weight:950;color:#08775f;line-height:1}.WPribbon{margin:14px 0;background:#0b1f36;color:#fff;border-radius:18px;padding:13px 15px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px}.WPribbon b{font-size:18px}.WPsmall{font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.08em;font-weight:800}.WPholes{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px}.WPhole{border-radius:15px;padding:10px;border:1px solid #dfe7ef;min-height:142px;position:relative;overflow:hidden}.WPscoreLine{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:7px}.WPscoreLabel{font-size:8px;letter-spacing:.12em;text-transform:uppercase;font-weight:950;color:#64748b}.WPgrossBig{font-size:38px;font-weight:950;line-height:.95;letter-spacing:-.04em;color:#0b1f36}.WPpointsPill{font-size:16px;font-weight:950;line-height:1;padding:8px 9px;border-radius:11px;background:#0b1f36;color:#fff;white-space:nowrap}.WPscoreEq{font-size:9px;font-weight:850;margin-top:7px;color:#334155}.WPhole.attack{background:linear-gradient(160deg,#ecfdf5,#d8fae9);border-color:#9ee7c8}.WPhole.protect{background:linear-gradient(160deg,#f8fafc,#eef4f8)}.WPhole.accept{background:linear-gradient(160deg,#fff8e8,#fff0c7);border-color:#f4d38f}.WPhole.reset{background:#fff1f2;border-color:#fecdd3}.WPhn{font-size:10px;font-weight:950;color:#64748b}.WPpts{font-size:27px;font-weight:950;line-height:1;margin-top:6px}.WPpts span{font-size:9px;color:#64748b}.WPgross{font-size:11px;font-weight:900;margin-top:6px}.WPtag{display:inline-block;margin-top:6px;font-size:8px;letter-spacing:.08em;font-weight:950;padding:4px 6px;border-radius:999px;background:#0b1f36;color:white}.WPwhy{font-size:8px;color:#64748b;margin-top:5px;line-height:1.2}.WPsection{margin-top:14px}.WPsectionTitle{font-size:18px;font-weight:950;letter-spacing:-.02em}.WPrules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:8px}.WPrule{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:#f8fafc}.WPrule strong{display:block;font-size:13px;margin-top:4px}.WPdanger{color:#b42318}.WPattack{color:#08775f}.WPfoot{font-size:9px;color:#64748b;margin-top:12px;padding-top:9px;border-top:1px solid #e6edf3}.WPprintNote{font-size:11px;color:#475569;margin:9px 0 0}.WPbar{height:8px;background:#e8eef3;border-radius:999px;overflow:hidden;margin-top:7px}.WPbar>span{display:block;height:100%;background:linear-gradient(90deg,#0ea36f,#0b7a6e)}.WPbenchNote{border-radius:16px;padding:11px 13px;margin:0 0 18px;border:1px solid #dbe5ee;background:#f8fafc;font-size:10px;line-height:1.45;color:#475569}.WPbenchNote strong{color:#0b1f36}.WPstatus{display:inline-block;padding:4px 7px;border-radius:999px;font-size:8px;font-weight:950;letter-spacing:.08em;margin-left:6px}.WPstatus.warn{background:#fff0d6;color:#9a5a00}.WPstatus.good{background:#e8f8f1;color:#08775f}
       @media(max-width:700px){.WPbenchmark{grid-template-columns:repeat(2,1fr)}.WPholes{grid-template-columns:repeat(3,1fr)}.WPrules{grid-template-columns:1fr}.WPtitle{font-size:30px}}
       .PRpdfExportRoot .WPholes{grid-template-columns:repeat(6,minmax(0,1fr))!important}.PRpdfExportRoot .WPbenchmark{grid-template-columns:repeat(4,minmax(0,1fr))!important}.PRpdfExportRoot .WPrules{grid-template-columns:repeat(3,minmax(0,1fr))!important}
     </style>`;
-    const head=`${css}<div class="WP"><div class="WPhdr"><div class="WPeyebrow">DEN GOLF · PRE-ROUND INTELLIGENCE</div><div class="WPtitle">Winning Game Plan</div><div class="WPsub">${WP_escape(c)} · benchmarked against the most recent recorded event</div></div><div class="WPbenchmark"><div class="WPstat"><div class="WPk">Previous winner</div><div class="WPv">${WP_escape(event.winnerName)}</div></div><div class="WPstat"><div class="WPk">Winning score</div><div class="WPv">${event.winningPoints.toFixed(0)} pts</div></div><div class="WPstat"><div class="WPk">Target to win</div><div class="WPv" style="color:#08775f">${event.targetPoints.toFixed(0)} pts</div></div><div class="WPstat"><div class="WPk">Previous event</div><div class="WPv" style="font-size:14px">${WP_escape(event.dateLabel)}</div></div></div>`;
+    const statusClass=event.benchmarkStatus==="LIKELY ANOMALY"?"warn":"good";
+    const historyText=Number.isFinite(event.historicWinningMedian)?`Historic winning median ${event.historicWinningMedian.toFixed(1)} pts across ${event.priorWinningScores.length} earlier visit${event.priorWinningScores.length===1?"":"s"}.`:"No earlier winning-score history at this course.";
+    const head=`${css}<div class="WP"><div class="WPhdr"><div class="WPeyebrow">DEN GOLF · PRE-ROUND INTELLIGENCE</div><div class="WPtitle">Winning Game Plan</div><div class="WPsub">${WP_escape(c)} · all-years benchmark · previous event ${WP_escape(event.dateLabel)}</div></div><div class="WPbenchmark"><div class="WPstat"><div class="WPk">Previous winner</div><div class="WPv">${WP_escape(event.winnerName)}</div><div style="font-size:10px;color:#64748b;margin-top:3px">${event.winningPoints.toFixed(0)} pts</div></div><div class="WPstat"><div class="WPk">Runner-up</div><div class="WPv">${WP_escape(event.runnerUpName)}</div><div style="font-size:10px;color:#64748b;margin-top:3px">${Number.isFinite(event.runnerUpPoints)?event.runnerUpPoints.toFixed(0)+" pts":"—"}${Number.isFinite(event.winnerGapToSecond)?` · gap ${event.winnerGapToSecond.toFixed(0)}`:""}</div></div><div class="WPstat"><div class="WPk">Winning-score check</div><div class="WPv" style="font-size:14px">${WP_escape(event.benchmarkStatus)}</div><div style="font-size:10px;color:#64748b;margin-top:3px">Repeat likelihood: ${WP_escape(event.repeatLikelihood)}</div></div><div class="WPstat"><div class="WPk">Recommended target</div><div class="WPv" style="color:#08775f">${event.targetPoints.toFixed(0)} pts</div><div style="font-size:10px;color:#64748b;margin-top:3px">Competitive line ${event.competitiveBenchmark.toFixed(0)} + 1</div></div></div><div class="WPbenchNote"><strong>${WP_escape(event.benchmarkHeadline)}</strong><span class="WPstatus ${statusClass}">${WP_escape(event.benchmarkStatus)}</span><br>${WP_escape(event.benchmarkDetail)} ${WP_escape(historyText)}</div>`;
     const body=plans.map(plan=>{
       const p=plan.player, l=plan.layout, extras=Math.max(0,plan.total-36);
       const attackText=plan.attacks.length?plan.attacks.slice(0,6).map(h=>`H${h.hole}`).join(" · "):"No forced attack holes";
       const dangerText=plan.dangers.map(h=>`H${h.hole}`).join(" · ");
       const pct=Math.max(0,Math.min(100,(plan.total/Math.max(1,event.targetPoints))*100));
-      const holes=plan.holes.map(h=>`<div class="WPhole ${h.strategy.toLowerCase()}"><div class="WPhn">HOLE ${h.hole} · PAR ${Number.isFinite(h.par)?h.par:"—"} · SI ${Number.isFinite(h.si)?h.si:"—"}</div><div class="WPpts">${h.targetPts}<span> PTS</span></div><div class="WPgross">Gross target: ${Number.isFinite(h.targetGross)?h.targetGross:"—"} ${h.strokes?`· ${h.strokes} shot${h.strokes===1?"":"s"}`:"· no shot"}</div><div class="WPtag">${h.strategy}</div><div class="WPwhy">${WP_escape(h.reason)}</div></div>`).join("");
-      return `<section class="WPplayer"><div class="WPplayerHead"><div><div class="WPeyebrow" style="color:#0b7a6e;opacity:1">PERSONALISED ROUTE</div><div class="WPname">${WP_escape(p?.name||"Player")}</div><div class="WPmeta">HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):"—"} · Course Handicap ${l.ch} ${l.teeName?`· ${WP_escape(l.teeName)}`:""}</div></div><div style="text-align:right"><div class="WPk">WIN TARGET</div><div class="WPtarget">${plan.total} pts</div></div></div><div class="WPribbon"><div><div class="WPsmall">The simple equation</div><b>36 + ${extras} = ${plan.total}</b><div style="font-size:10px;opacity:.75;margin-top:3px">Handicap pace plus ${extras} extra point${extras===1?"":"s"}</div></div><div><div class="WPsmall">Front 9 plan</div><b>${plan.front} pts</b></div><div><div class="WPsmall">Back 9 plan</div><b>${plan.back} pts</b></div></div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route to ${plan.total}</div><div class="WPprintNote">Green = planned gain. Grey = protect handicap pace. Amber = a controlled concession if the target ever requires one.</div><div class="WPbar"><span style="width:${pct}%"></span></div><div class="WPholes" style="margin-top:10px">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Three things to remember</div><div class="WPrules"><div class="WPrule"><div class="WPk">1 · PROTECT</div><strong>Do not chase points on every hole.</strong><div class="WPwhy">A 2-point net par is doing its job. The plan only asks for gains where they are most efficient.</div></div><div class="WPrule"><div class="WPk">2 · ATTACK</div><strong class="WPattack">${WP_escape(attackText)}</strong><div class="WPwhy">These are the highest-value places to find the extra ${extras} point${extras===1?"":"s"}.</div></div><div class="WPrule"><div class="WPk">3 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong><div class="WPwhy">These are your lowest-opportunity holes. One point is recoverable; a blob creates pressure.</div></div></div></div><div class="WPfoot">Plan basis: previous winner ${WP_escape(event.winnerName)} ${event.winningPoints.toFixed(0)} pts → target ${event.targetPoints.toFixed(0)} pts. Hole targets use this player's current handicap, the selected course Par/SI layout and the player's recorded scoring profile where available.</div></section>`;
+      const holes=plan.holes.map(h=>`<div class="WPhole ${h.strategy.toLowerCase()}"><div class="WPhn">HOLE ${h.hole} · PAR ${Number.isFinite(h.par)?h.par:"—"} · SI ${Number.isFinite(h.si)?h.si:"—"}</div><div class="WPscoreLine"><div><div class="WPscoreLabel">GROSS SCORE TO MAKE</div><div class="WPgrossBig">${Number.isFinite(h.targetGross)?h.targetGross:"—"}</div></div><div class="WPpointsPill">${h.targetPts} PTS</div></div><div class="WPscoreEq">Make <b>${Number.isFinite(h.targetGross)?h.targetGross:"—"}</b> gross → <b>${h.targetPts} Stableford point${h.targetPts===1?"":"s"}</b> ${h.strokes?`· ${h.strokes} handicap shot${h.strokes===1?"":"s"}`:"· no handicap shot"}</div><div class="WPtag">${h.strategy}</div><div class="WPwhy">${WP_escape(h.reason)}</div></div>`).join("");
+      return `<section class="WPplayer"><div class="WPplayerHead"><div><div class="WPeyebrow" style="color:#0b7a6e;opacity:1">PERSONALISED ROUTE</div><div class="WPname">${WP_escape(p?.name||"Player")}</div><div class="WPmeta">HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):"—"} · Course Handicap ${l.ch} ${l.teeName?`· ${WP_escape(l.teeName)}`:""}</div></div><div style="text-align:right"><div class="WPk">WIN TARGET</div><div class="WPtarget">${plan.total} pts</div></div></div><div class="WPribbon"><div><div class="WPsmall">The simple equation</div><b>36 + ${extras} = ${plan.total}</b><div style="font-size:10px;opacity:.75;margin-top:3px">Handicap pace plus ${extras} extra point${extras===1?"":"s"}</div></div><div><div class="WPsmall">Front 9 plan</div><b>${plan.front} pts</b></div><div><div class="WPsmall">Back 9 plan</div><b>${plan.back} pts</b></div></div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route to ${plan.total}</div><div class="WPprintNote">The BIG number on every hole is the gross score to make. The points badge shows what that gross score delivers. Green = planned gain; grey = protect handicap pace; amber = controlled concession.</div><div class="WPbar"><span style="width:${pct}%"></span></div><div class="WPholes" style="margin-top:10px">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Three things to remember</div><div class="WPrules"><div class="WPrule"><div class="WPk">1 · PROTECT</div><strong>Do not chase points on every hole.</strong><div class="WPwhy">A 2-point net par is doing its job. The plan only asks for gains where they are most efficient.</div></div><div class="WPrule"><div class="WPk">2 · ATTACK</div><strong class="WPattack">${WP_escape(attackText)}</strong><div class="WPwhy">These are the highest-value places to find the extra ${extras} point${extras===1?"":"s"}.</div></div><div class="WPrule"><div class="WPk">3 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong><div class="WPwhy">These are your lowest-opportunity holes. One point is recoverable; a blob creates pressure.</div></div></div></div><div class="WPfoot">Plan basis: previous winner ${WP_escape(event.winnerName)} ${event.winningPoints.toFixed(0)} pts · runner-up ${Number.isFinite(event.runnerUpPoints)?event.runnerUpPoints.toFixed(0):"—"} pts · score check ${WP_escape(event.benchmarkStatus)} → recommended target ${event.targetPoints.toFixed(0)} pts. Hole targets use this player's latest current-year handicap, the selected course Par/SI layout and the player's all-years scoring profile where available.</div></section>`;
     }).join("");
     return {ok:true,event,plans,htmlFragment:`${head}${body}</div>`};
   }catch(e){ console.error("Winning plan failed",e); return {ok:false,error:`Could not build winning plan${e?.message ? `: ${e.message}` : "."}`}; }
@@ -15259,7 +15353,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
               <div className="text-[10px] font-black tracking-[.2em] uppercase text-emerald-200">Den Golf · Pre-Round Intelligence</div>
               <div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[10px] font-black text-white">ALL YEARS COURSE HISTORY</span><span className="rounded-full border border-blue-200/30 bg-blue-300/10 px-3 py-1 text-[10px] font-black text-blue-100">LATEST {currentYear} HANDICAPS</span></div>
               <h1 className="mt-2 text-3xl md:text-5xl font-black tracking-[-.04em] leading-none">Build the route to a win.</h1>
-              <p className="mt-3 max-w-3xl text-sm md:text-base text-white/75 leading-relaxed">Choose where you are playing next, see what won there last time across all recorded years, then give each golfer a personalised 18-hole Stableford target that reaches one point more with the least unnecessary risk.</p>
+              <p className="mt-3 max-w-3xl text-sm md:text-base text-white/75 leading-relaxed">Choose where you are playing next, test whether the last winning score was genuinely repeatable, then give each golfer a personalised 18-hole Stableford route to one point above the most credible winning benchmark.</p>
             </div>
             <div className="grid grid-cols-3 gap-2 min-w-[300px]">
               <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur"><div className="text-[9px] font-black uppercase tracking-widest text-white/55">Handicap pace</div><div className="mt-1 text-2xl font-black">36</div></div>
@@ -15292,8 +15386,12 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
               <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
                 <div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white text-sm font-black">2</div><div><div className="text-[10px] font-black tracking-widest uppercase text-slate-400">Benchmark</div><div className="font-black text-slate-900">What won here last time?</div></div></div>
                 {event ? <>
-                  <div className="mt-5 flex items-end justify-between gap-3"><div><div className="text-xs text-slate-500">Previous winner</div><div className="text-lg font-black text-slate-900">{event.winnerName}</div><div className="text-xs text-slate-500">{event.dateLabel}</div></div><div className="text-right"><div className="text-4xl font-black tracking-tight text-slate-900">{event.winningPoints.toFixed(0)}</div><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Stableford pts</div></div></div>
-                  <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center justify-between"><div><div className="text-[9px] font-black uppercase tracking-widest text-emerald-600">Target to win</div><div className="text-xs font-semibold text-emerald-800">One more than last time</div></div><div className="text-3xl font-black text-emerald-700">{event.targetPoints.toFixed(0)}</div></div>
+                  <div className="mt-5 grid grid-cols-2 gap-3">
+                    <div className="rounded-2xl border border-slate-200 bg-white p-3"><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Previous winner</div><div className="mt-1 text-sm font-black text-slate-900">{event.winnerName}</div><div className="mt-1 text-3xl font-black tracking-tight text-slate-900">{event.winningPoints.toFixed(0)} <span className="text-xs text-slate-400">pts</span></div></div>
+                    <div className="rounded-2xl border border-slate-200 bg-white p-3"><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Runner-up</div><div className="mt-1 text-sm font-black text-slate-900">{event.runnerUpName}</div><div className="mt-1 text-3xl font-black tracking-tight text-slate-900">{Number.isFinite(event.runnerUpPoints)?event.runnerUpPoints.toFixed(0):"—"} <span className="text-xs text-slate-400">pts</span></div></div>
+                  </div>
+                  <div className={`mt-3 rounded-2xl border px-4 py-3 ${event.benchmarkStatus==="LIKELY ANOMALY"?"border-amber-200 bg-amber-50":"border-emerald-200 bg-emerald-50"}`}><div className="flex items-center justify-between gap-3"><div><div className={`text-[9px] font-black uppercase tracking-widest ${event.benchmarkStatus==="LIKELY ANOMALY"?"text-amber-700":"text-emerald-700"}`}>Winning-score check</div><div className="mt-1 text-sm font-black text-slate-900">{event.benchmarkStatus}</div></div><div className="text-right"><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Gap to 2nd</div><div className="text-2xl font-black text-slate-900">{Number.isFinite(event.winnerGapToSecond)?event.winnerGapToSecond.toFixed(0):"—"}</div></div></div><div className="mt-2 text-[11px] leading-relaxed text-slate-600">{event.benchmarkHeadline}. {Number.isFinite(event.historicWinningMedian)?`Historic winning median: ${event.historicWinningMedian.toFixed(1)} pts.`:"No earlier winning-score history at this course."}</div></div>
+                  <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center justify-between"><div><div className="text-[9px] font-black uppercase tracking-widest text-emerald-600">Recommended target</div><div className="text-xs font-semibold text-emerald-800">{event.targetAdjusted?`Adjusted from ${Math.round(event.winningPoints+1)} because the last win looks anomalous`:`One point above the credible winning benchmark`}</div></div><div className="text-3xl font-black text-emerald-700">{event.targetPoints.toFixed(0)}</div></div>
                 </> : <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">No previous Stableford winner found for {selectedCourse?.label || "this course"}.</div>}
               </div>
 
@@ -15312,7 +15410,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
               <div className="p-5 md:p-7">
                 <div className="text-[10px] font-black uppercase tracking-[.18em] text-slate-400">The winning equation</div>
                 <div className="mt-2 flex items-baseline gap-3 flex-wrap"><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">36</span><span className="text-3xl font-black text-slate-300">+</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-emerald-600">{Number.isFinite(extraNeeded)?extraNeeded.toFixed(0):"—"}</span><span className="text-3xl font-black text-slate-300">=</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">{event.targetPoints.toFixed(0)}</span></div>
-                <div className="mt-2 text-sm text-slate-600">The engine starts at handicap golf, then finds the lowest-risk holes to produce the extra {Number.isFinite(extraNeeded)?extraNeeded.toFixed(0):"—"} point{extraNeeded===1?"":"s"} needed to beat the last winner.</div>
+                <div className="mt-2 text-sm text-slate-600">The engine starts at handicap golf, then finds the lowest-risk holes to produce the extra {Number.isFinite(extraNeeded)?extraNeeded.toFixed(0):"—"} point{extraNeeded===1?"":"s"} needed to beat the recommended competitive benchmark. {event.targetAdjusted?`The last winning score of ${event.winningPoints.toFixed(0)} was treated as a likely anomaly rather than a score everyone should chase.`:""}</div>
               </div>
               <div className="border-t md:border-t-0 md:border-l border-slate-200 bg-slate-50 p-5 md:p-7">
                 <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">How the plan thinks</div>
