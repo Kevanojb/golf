@@ -12156,8 +12156,16 @@ const postRoundIntel = (() => {
       return s.some(r=>sameEvent(r,latest));
     });
     const isSoloRound = realEventPeers.length===0;
+    // IMPORTANT: a player with NO prior rounds must also be benchmarked against
+    // their playing-to-handicap target, even when they had real opponents in
+    // the event. Previously this path was only enabled for a literal solo event,
+    // so first-time players in a normal field had no historical expectation,
+    // produced zero comparable holes, and the report exited before the exact
+    // handicap snapshot was even attempted.
+    const hasNoPriorHistory = prior.length === 0;
+    const usesHandicapTarget = hasNoPriorHistory || isSoloRound;
 
-    // SOLO virtual player must use the Handicap Index converted to the
+    // Handicap-target benchmarking uses the Handicap Index converted to the
     // Course Handicap for the actual tee played.
     const latestParsForCH = arrPars(latest);
     const latestParTotalForCH = latestParsForCH.reduce((sum, v) => {
@@ -12254,10 +12262,12 @@ const postRoundIntel = (() => {
     };
 
     const expectationFor = (par,si,y) => {
-      // SOLO ROUND: compare with a computer-generated player on the SAME
-      // playing/course handicap. Net par = 2 Stableford pts on every hole.
-      // In gross mode, net par translates to par + strokes received.
-      if (isSoloRound){
+      // NO-HISTORY / SOLO benchmark: compare with playing-to-handicap on the
+      // actual tee. This applies whenever there is no prior personal history,
+      // regardless of how many other golfers were in the event.
+      // Net par = 2 Stableford pts on every hole; in gross mode this is
+      // par + handicap strokes received.
+      if (usesHandicapTarget){
         if (isGrossMode){
           // Internally the report compares strokes-over-par, so the target value
           // here is the number of handicap strokes received. This is exactly
@@ -12335,8 +12345,8 @@ const postRoundIntel = (() => {
       : NaN;
 
     const scale=Math.max(0.5,coverage/18);
-    let verdict = isSoloRound ? "Played approximately to your handicap target" : "About your normal game";
-    if (isSoloRound){
+    let verdict = usesHandicapTarget ? "Played approximately to your handicap target" : "About your normal game";
+    if (usesHandicapTarget){
       if(roundDelta>=2.5*scale) verdict="Clearly beat your handicap target";
       else if(roundDelta>=0.75*scale) verdict="Slightly beat your handicap target";
       else if(roundDelta<=-2.5*scale) verdict="Well below your handicap target";
@@ -12467,7 +12477,7 @@ const postRoundIntel = (() => {
     const restDelta=rest.reduce((s,h)=>s+h.delta,0);
     const restHoles=rest.length;
 
-    const confidence = isSoloRound ? "HIGH"
+    const confidence = hasNoPriorHistory ? "LOW"
       : ((prior.length>=8&&coverage>=12)?"HIGH":(prior.length>=4&&coverage>=9)?"MEDIUM":"LOW");
 
     let oneJob="Keep the card clean: avoid the one or two holes that turn a normal round into a poor one.";
@@ -12989,7 +12999,7 @@ const postRoundIntel = (() => {
     return {
       ok:true,priorRounds:prior.length,coverage,roundDelta,actualTotal,expectedTotal,
       verdict,costly,damageShare,weakness,strength,dna,dnaWhy,biggestLever,recoverable,totalRecoverable,restDelta,restHoles,
-      confidence,oneJob,oneJobWhy,isGrossMode,eventName,isSoloRound,virtualCH,exactHandicap,exactCategories
+      confidence,oneJob,oneJobWhy,isGrossMode,eventName,isSoloRound,hasNoPriorHistory,usesHandicapTarget,virtualCH,exactHandicap,exactCategories
     };
   } catch(e) {
     console.error("Post-round intelligence failed:",e);
@@ -14349,23 +14359,23 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
       <div style="font-size:18px;font-weight:950;">${PR_escapeHtml(postRoundIntel.verdict)}</div>
       <div class="PRmuted" style="font-size:12px;margin-top:4px;">
         Confidence: <b>${postRoundIntel.confidence}</b>
-        · ${postRoundIntel.isSoloRound
-            ? `benchmark: <b>virtual player, same CH ${Number.isFinite(postRoundIntel.virtualCH)?Math.round(postRoundIntel.virtualCH):"—"}</b>`
+        · ${postRoundIntel.usesHandicapTarget
+            ? `benchmark: <b>playing-to-handicap target${Number.isFinite(postRoundIntel.virtualCH)?` · CH ${Math.round(postRoundIntel.virtualCH)}`:""}</b>`
             : `${postRoundIntel.priorRounds} prior rounds`}
         · ${postRoundIntel.coverage} comparable holes
       </div>
 
       <div class="PRintelGrid">
         <div class="PRintelCard">
-          <div class="PRintelLabel">${postRoundIntel.isSoloRound ? "Actual vs playing-to-handicap target" : "Actual vs own expectation"}</div>
+          <div class="PRintelLabel">${postRoundIntel.usesHandicapTarget ? "Actual vs playing-to-handicap target" : "Actual vs own expectation"}</div>
           <div class="PRintelValue ${postRoundIntel.roundDelta>=0?"PRgood":"PRbad"}">
             ${postRoundIntel.roundDelta>=0?"+":""}${postRoundIntel.roundDelta.toFixed(1)} ${postRoundIntel.isGrossMode?"strokes":"pts"}
           </div>
           <div class="PRmuted" style="font-size:11px;margin-top:3px;">
             ${Number.isFinite(postRoundIntel.actualTotal)&&Number.isFinite(postRoundIntel.expectedTotal)
               ? (postRoundIntel.isGrossMode
-                  ? `Actual ${postRoundIntel.actualTotal.toFixed(0)} · ${postRoundIntel.isSoloRound?"same-handicap target":"own-history benchmark"} ≈ ${postRoundIntel.expectedTotal.toFixed(1)}`
-                  : `Actual ${postRoundIntel.actualTotal.toFixed(0)} pts · ${postRoundIntel.isSoloRound?"same-handicap target":"own-history benchmark"} ≈ ${postRoundIntel.expectedTotal.toFixed(1)} pts`)
+                  ? `Actual ${postRoundIntel.actualTotal.toFixed(0)} · ${postRoundIntel.usesHandicapTarget?"playing-to-handicap target":"own-history benchmark"} ≈ ${postRoundIntel.expectedTotal.toFixed(1)}`
+                  : `Actual ${postRoundIntel.actualTotal.toFixed(0)} pts · ${postRoundIntel.usesHandicapTarget?"playing-to-handicap target":"own-history benchmark"} ≈ ${postRoundIntel.expectedTotal.toFixed(1)} pts`)
               : ""}
           </div>
         </div>
@@ -14436,8 +14446,8 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
       </div>
 
       <div class="PRnote">
-        ${postRoundIntel.isSoloRound
-          ? `Solo-round rule: because no real opponents were present, the benchmark is a computer-generated player using your Handicap Index converted to the correct Course Handicap for those tees from Slope, Course Rating and Par. That player then makes net par on every hole (2 Stableford points per hole; 36 points over 18 holes).`
+        ${postRoundIntel.usesHandicapTarget
+          ? `${postRoundIntel.hasNoPriorHistory ? "First-round rule: because there is no prior personal history yet" : "Solo-round rule: because no real opponents were present"}, the benchmark is your playing-to-handicap target using your Handicap Index converted to the correct Course Handicap for those tees. Net par is 2 Stableford points per hole (36 points over 18 holes).`
           : `This diagnoses scoring patterns only; it does not claim the cause was driving, irons, short game or putting without shot-level data.`}
       </div>
     </div>
