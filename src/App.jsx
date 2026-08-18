@@ -14915,6 +14915,216 @@ function PR_downloadHtmlFile(filename, html){
 }
 
 
+
+// ============================================================
+// PRE-ROUND WINNING PLAN
+// Turns the latest previous event at a selected course into a
+// personalised 18-hole Stableford route to one point better.
+// ============================================================
+function WP_num(){
+  for(const v of arguments){ const n=Number(v); if(Number.isFinite(n)) return n; }
+  return NaN;
+}
+function WP_norm(v){ return String(v||"").trim().toLowerCase().replace(/\s+/g," "); }
+function WP_series(p){
+  const a=Array.isArray(p?.roundSeries)&&p.roundSeries.length?p.roundSeries:(Array.isArray(p?.series)?p.series:[]);
+  return a.filter(Boolean).slice().sort((x,y)=>(WP_num(x?.dateMs,x?.idx,0)||0)-(WP_num(y?.dateMs,y?.idx,0)||0));
+}
+function WP_course(r){ return String(r?.courseName||r?.course||r?.clubName||r?.venueName||r?.courseLabel||"").trim(); }
+function WP_tee(r){ return String(r?.teeName||r?.teeLabel||r?.teeMatched||r?.tee||"").trim(); }
+function WP_points(r){ return WP_num(r?.pts,r?.points,r?.stableford,r?.totalPoints); }
+function WP_dateMs(r){
+  const direct=WP_num(r?.dateMs,r?.playedAtMs,r?.idx);
+  if(Number.isFinite(direct)&&direct>1000000000) return direct;
+  const raw=r?.date||r?.roundDate||r?.playedAt||r?.played_on||r?.eventDate;
+  const d=raw?new Date(raw):null; return d&&!isNaN(d.getTime())?d.getTime():(Number.isFinite(direct)?direct:0);
+}
+function WP_dateLabel(r){
+  const raw=r?.date||r?.roundDate||r?.playedAt||r?.played_on||r?.eventDate;
+  const d=raw?new Date(raw):null;
+  if(d&&!isNaN(d.getTime())) return d.toLocaleDateString(undefined,{day:"2-digit",month:"short",year:"numeric"});
+  return raw?String(raw):"Previous event";
+}
+function WP_array(r, keys){
+  for(const k of keys){
+    const v=r?.[k];
+    if(Array.isArray(v)&&v.length){ return v.slice(0,18).map(Number); }
+  }
+  return [];
+}
+function WP_pars(r){ return WP_array(r,["parsArr","parsPerHole","parPerHole","pars","parHoles"]); }
+function WP_si(r){ return WP_array(r,["siArr","siPerHole","strokeIndexPerHole","si","strokeIndex"]); }
+function WP_yards(r){ return WP_array(r,["yardsArr","yardsPerHole","yardagePerHole","yards","yardages"]); }
+function WP_gross(r){ return WP_array(r,["grossPerHole","imputedGrossPerHole","grossHoles","holeGross","scoresPerHole","scores"]); }
+function WP_holePts(r){ return WP_array(r,["perHole","pointsPerHole","stablefordPerHole","ptsPerHole"]); }
+function WP_eventKey(r){
+  const file=String(r?.file||r?.fileName||r?.sourceFile||"").trim();
+  if(file) return `file:${file}`;
+  const date=WP_dateMs(r)||String(r?.date||r?.roundDate||"");
+  const event=String(r?.eventName||r?.event||r?.competition||"").trim();
+  return `event:${date}|${WP_norm(WP_course(r))}|${WP_norm(event)}`;
+}
+function WP_countbackVector(r){
+  const ph=WP_holePts(r).map(Number).filter(Number.isFinite);
+  if(!ph.length) return [0,0,0,0];
+  const tail=n=>ph.slice(Math.max(0,ph.length-n)).reduce((s,v)=>s+v,0);
+  return [tail(9),tail(6),tail(3),tail(1)];
+}
+function WP_compareRounds(a,b){
+  const pa=WP_points(a), pb=WP_points(b);
+  if(pa!==pb) return pb-pa;
+  const va=WP_countbackVector(a), vb=WP_countbackVector(b);
+  for(let i=0;i<va.length;i++){ if(va[i]!==vb[i]) return vb[i]-va[i]; }
+  return 0;
+}
+function WP_courseOptionsFromModel(model){
+  const map=new Map();
+  for(const p of (Array.isArray(model?.players)?model.players:[])){
+    for(const r of WP_series(p)){
+      const label=WP_course(r); const key=WP_norm(label);
+      if(!key) continue;
+      const cur=map.get(key)||{key,label,rounds:0,lastMs:0};
+      cur.rounds++; cur.lastMs=Math.max(cur.lastMs,WP_dateMs(r)||0); if(label.length>cur.label.length)cur.label=label;
+      map.set(key,cur);
+    }
+  }
+  return Array.from(map.values()).sort((a,b)=>(b.lastMs-a.lastMs)||a.label.localeCompare(b.label));
+}
+function WP_findLatestEventAtCourse(model, courseKey){
+  const key=WP_norm(courseKey); if(!key) return null;
+  const events=new Map();
+  for(const p of (Array.isArray(model?.players)?model.players:[])){
+    for(const r of WP_series(p)){
+      if(WP_norm(WP_course(r))!==key) continue;
+      const ek=WP_eventKey(r);
+      const e=events.get(ek)||{key:ek,courseName:WP_course(r),dateMs:0,dateLabel:WP_dateLabel(r),entries:[]};
+      e.dateMs=Math.max(e.dateMs,WP_dateMs(r)||0); e.entries.push({player:p,round:r}); events.set(ek,e);
+    }
+  }
+  const arr=Array.from(events.values()).filter(e=>e.entries.some(x=>Number.isFinite(WP_points(x.round))));
+  if(!arr.length) return null;
+  arr.sort((a,b)=>b.dateMs-a.dateMs);
+  const e=arr[0];
+  const ranked=e.entries.filter(x=>Number.isFinite(WP_points(x.round))).slice().sort((a,b)=>WP_compareRounds(a.round,b.round));
+  const winner=ranked[0]||null;
+  if(!winner) return null;
+  e.winnerName=String(winner.player?.name||"Winner"); e.winningPoints=WP_points(winner.round); e.targetPoints=e.winningPoints+1; e.winnerRound=winner.round;
+  return e;
+}
+function WP_latestPlayerHcap(p){
+  const s=WP_series(p); const r=s.length?s[s.length-1]:null;
+  return WP_num(r?.startExact,r?.handicapIndex,r?.index,r?.hi,r?.hcap,r?.playingHcap,p?.startExact,p?.handicapIndex,p?.index,p?.hi,p?.hcap,p?.metrics?.avgHcap);
+}
+function WP_roundHasLayout(r){
+  const ps=WP_pars(r), si=WP_si(r); return ps.filter(Number.isFinite).length>=9&&si.filter(Number.isFinite).length>=9;
+}
+function WP_layoutForPlayer(model,event,p,courseKey){
+  const mineInEvent=event?.entries?.find(x=>String(x.player?.name||"")===String(p?.name||""))?.round||null;
+  const sameCourse=WP_series(p).filter(r=>WP_norm(WP_course(r))===WP_norm(courseKey)).reverse();
+  let base=[mineInEvent,...sameCourse,event?.winnerRound,...(event?.entries||[]).map(x=>x.round)].find(r=>r&&WP_roundHasLayout(r))||mineInEvent||sameCourse[0]||event?.winnerRound||event?.entries?.[0]?.round||null;
+  if(!base) return null;
+  const ps=WP_pars(base), sis=WP_si(base), ys=WP_yards(base);
+  const parTotal=ps.reduce((s,v)=>s+(Number.isFinite(v)?v:0),0);
+  const hi=WP_latestPlayerHcap(p);
+  const slope=WP_num(base?.teeSlope,base?.slope,base?.slopeRating,base?.courseSlope);
+  const rating=WP_num(base?.teeRating,base?.rating,base?.courseRating);
+  let ch=NaN;
+  try{ if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0&&typeof WHS_courseHandicap==="function") ch=WHS_courseHandicap(hi,slope,rating,parTotal); }catch(_){ }
+  if(!Number.isFinite(ch)) ch=Math.round(WP_num(base?.courseHandicap,base?.playingHcap,base?.hcap,hi,0));
+  ch=Math.max(0,Math.round(ch||0));
+  return {round:base,pars:ps,si:sis,yards:ys,parTotal,hi,ch,teeName:WP_tee(base),slope,rating};
+}
+function WP_strokesReceived(ch,si){
+  const h=Math.max(0,Math.round(Number(ch)||0)), s=Number(si);
+  if(!Number.isFinite(s)||s<1||s>18) return Math.floor(h/18);
+  return Math.floor(h/18)+((h%18)>0&&s<=(h%18)?1:0);
+}
+function WP_playerHistorySignals(p,courseKey){
+  const exact=Array.from({length:18},()=>[]); const parMap=new Map();
+  for(const r of WP_series(p)){
+    const pts=WP_holePts(r), ps=WP_pars(r); if(!pts.length) continue;
+    for(let i=0;i<Math.min(18,pts.length);i++){
+      const v=Number(pts[i]); if(!Number.isFinite(v)) continue;
+      if(WP_norm(WP_course(r))===WP_norm(courseKey)) exact[i].push(v);
+      const par=Number(ps[i]); if(Number.isFinite(par)){ if(!parMap.has(par))parMap.set(par,[]); parMap.get(par).push(v); }
+    }
+  }
+  const avg=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:NaN;
+  return {holeAvg:exact.map(avg),parAvg:new Map(Array.from(parMap.entries()).map(([k,v])=>[k,avg(v)]))};
+}
+function WP_makePlayerPlan(model,event,p,courseKey){
+  const layout=WP_layoutForPlayer(model,event,p,courseKey); if(!layout) return null;
+  const sig=WP_playerHistorySignals(p,courseKey); const holes=[];
+  for(let i=0;i<18;i++){
+    const par=Number(layout.pars[i]), si=Number(layout.si[i]), yard=Number(layout.yards[i]);
+    if(!Number.isFinite(par)) continue;
+    const strokes=WP_strokesReceived(layout.ch,si);
+    const hAvg=Number(sig.holeAvg[i]), pAvg=Number(sig.parAvg.get(par));
+    let opp=0;
+    if(Number.isFinite(hAvg)) opp+=(hAvg-2)*3.5;
+    if(Number.isFinite(pAvg)) opp+=(pAvg-2)*1.4;
+    opp+=Math.min(2,strokes)*0.5;
+    if(Number.isFinite(si)) opp+=((si-1)/17)*0.35;
+    if(Number.isFinite(yard)){ if(yard<180)opp+=0.18; else if(yard>420)opp-=0.12; }
+    holes.push({hole:i+1,par,si,yard,strokes,opp,hAvg,pAvg,targetPts:2});
+  }
+  if(holes.length<9) return null;
+  const desired=Math.max(0,Math.min(72,Math.round(Number(event?.targetPoints)||37)));
+  let diff=desired-holes.length*2;
+  if(diff>0){
+    const candidates=[];
+    holes.forEach(h=>{
+      candidates.push({h,to:3,score:h.opp});
+      candidates.push({h,to:4,score:h.opp-1.35});
+    });
+    candidates.sort((a,b)=>b.score-a.score);
+    for(const c of candidates){ if(diff<=0)break; if(c.h.targetPts===c.to-1){c.h.targetPts++;diff--;} }
+  }else if(diff<0){
+    const candidates=[];
+    holes.forEach(h=>{ candidates.push({h,to:1,score:h.opp}); candidates.push({h,to:0,score:h.opp+1.2}); });
+    candidates.sort((a,b)=>a.score-b.score);
+    for(const c of candidates){ if(diff>=0)break; if(c.h.targetPts===c.to+1){c.h.targetPts--;diff++;} }
+  }
+  holes.forEach(h=>{
+    h.targetGross=h.par+h.strokes+2-h.targetPts;
+    h.strategy=h.targetPts>=3?"ATTACK":(h.targetPts===2?"PROTECT":(h.targetPts===1?"ACCEPT":"RESET"));
+    h.reason=Number.isFinite(h.hAvg)&&h.hAvg>2.05?`You average ${h.hAvg.toFixed(1)} pts here`
+      : (h.strokes>0?`You receive ${h.strokes} shot${h.strokes===1?"":"s"}`
+      : (Number.isFinite(h.pAvg)&&h.pAvg>2.05?`Strong Par ${h.par} profile`:"Best fit for the target"));
+  });
+  const total=holes.reduce((s,h)=>s+h.targetPts,0);
+  const attacks=holes.filter(h=>h.targetPts>=3).sort((a,b)=>b.opp-a.opp);
+  const dangers=holes.slice().sort((a,b)=>a.opp-b.opp).slice(0,3);
+  const front=holes.filter(h=>h.hole<=9).reduce((s,h)=>s+h.targetPts,0), back=total-front;
+  return {player:p,layout,holes,total,attacks,dangers,front,back};
+}
+function WP_escape(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
+function WP_generateWinningPlanHTML({model,courseKey,playerNames}){
+  try{
+    const event=WP_findLatestEventAtCourse(model,courseKey); if(!event)return{ok:false,error:"No previous Stableford event was found for that course."};
+    const players=(Array.isArray(model?.players)?model.players:[]).filter(p=>(playerNames||[]).includes(String(p?.name||"")));
+    if(!players.length)return{ok:false,error:"Choose at least one player."};
+    const plans=players.map(p=>WP_makePlayerPlan(model,event,p,courseKey)).filter(Boolean);
+    if(!plans.length)return{ok:false,error:"The selected course does not have enough Par / Stroke Index data to build a plan."};
+    const c=event.courseName||courseKey;
+    const css=`<style>
+      .WP{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#0b1f36;background:#fff;max-width:760px;margin:0 auto}.WP *{box-sizing:border-box}.WPhdr{background:linear-gradient(120deg,#0b2747 0%,#123c61 58%,#0b7a6e 100%);color:white;border-radius:28px;padding:28px 30px;position:relative;overflow:hidden}.WPhdr:after{content:"";position:absolute;width:240px;height:240px;border-radius:50%;right:-70px;top:-110px;background:rgba(255,255,255,.08)}.WPeyebrow{font-size:11px;font-weight:900;letter-spacing:.16em;text-transform:uppercase;opacity:.75}.WPtitle{font-size:38px;line-height:1;font-weight:950;letter-spacing:-.045em;margin-top:9px}.WPsub{font-size:13px;margin-top:9px;opacity:.85}.WPbenchmark{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:14px 0 20px}.WPstat{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:linear-gradient(180deg,#fff,#f7fafc)}.WPk{font-size:9px;letter-spacing:.11em;text-transform:uppercase;font-weight:900;color:#64748b}.WPv{font-size:20px;font-weight:950;margin-top:4px;letter-spacing:-.02em}.WPplayer{margin-top:20px;border:1px solid #dbe5ee;border-radius:24px;padding:16px;background:#fff;break-inside:auto}.WPplayer+.WPplayer{break-before:page}.WPplayerHead{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;border-bottom:1px solid #e6edf3;padding-bottom:12px}.WPname{font-size:28px;font-weight:950;letter-spacing:-.035em}.WPmeta{font-size:11px;color:#64748b;margin-top:4px}.WPtarget{font-size:34px;font-weight:950;color:#08775f;line-height:1}.WPribbon{margin:14px 0;background:#0b1f36;color:#fff;border-radius:18px;padding:13px 15px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px}.WPribbon b{font-size:18px}.WPsmall{font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.08em;font-weight:800}.WPholes{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px}.WPhole{border-radius:15px;padding:9px;border:1px solid #dfe7ef;min-height:116px;position:relative;overflow:hidden}.WPhole.attack{background:linear-gradient(160deg,#ecfdf5,#d8fae9);border-color:#9ee7c8}.WPhole.protect{background:linear-gradient(160deg,#f8fafc,#eef4f8)}.WPhole.accept{background:linear-gradient(160deg,#fff8e8,#fff0c7);border-color:#f4d38f}.WPhole.reset{background:#fff1f2;border-color:#fecdd3}.WPhn{font-size:10px;font-weight:950;color:#64748b}.WPpts{font-size:27px;font-weight:950;line-height:1;margin-top:6px}.WPpts span{font-size:9px;color:#64748b}.WPgross{font-size:11px;font-weight:900;margin-top:6px}.WPtag{display:inline-block;margin-top:6px;font-size:8px;letter-spacing:.08em;font-weight:950;padding:4px 6px;border-radius:999px;background:#0b1f36;color:white}.WPwhy{font-size:8px;color:#64748b;margin-top:5px;line-height:1.2}.WPsection{margin-top:14px}.WPsectionTitle{font-size:18px;font-weight:950;letter-spacing:-.02em}.WPrules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:8px}.WPrule{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:#f8fafc}.WPrule strong{display:block;font-size:13px;margin-top:4px}.WPdanger{color:#b42318}.WPattack{color:#08775f}.WPfoot{font-size:9px;color:#64748b;margin-top:12px;padding-top:9px;border-top:1px solid #e6edf3}.WPprintNote{font-size:11px;color:#475569;margin:9px 0 0}.WPbar{height:8px;background:#e8eef3;border-radius:999px;overflow:hidden;margin-top:7px}.WPbar>span{display:block;height:100%;background:linear-gradient(90deg,#0ea36f,#0b7a6e)}
+      @media(max-width:700px){.WPbenchmark{grid-template-columns:repeat(2,1fr)}.WPholes{grid-template-columns:repeat(3,1fr)}.WPrules{grid-template-columns:1fr}.WPtitle{font-size:30px}}
+      .PRpdfExportRoot .WPholes{grid-template-columns:repeat(6,minmax(0,1fr))!important}.PRpdfExportRoot .WPbenchmark{grid-template-columns:repeat(4,minmax(0,1fr))!important}.PRpdfExportRoot .WPrules{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+    </style>`;
+    const head=`${css}<div class="WP"><div class="WPhdr"><div class="WPeyebrow">DEN GOLF · PRE-ROUND INTELLIGENCE</div><div class="WPtitle">Winning Game Plan</div><div class="WPsub">${WP_escape(c)} · benchmarked against the most recent recorded event</div></div><div class="WPbenchmark"><div class="WPstat"><div class="WPk">Previous winner</div><div class="WPv">${WP_escape(event.winnerName)}</div></div><div class="WPstat"><div class="WPk">Winning score</div><div class="WPv">${event.winningPoints.toFixed(0)} pts</div></div><div class="WPstat"><div class="WPk">Target to win</div><div class="WPv" style="color:#08775f">${event.targetPoints.toFixed(0)} pts</div></div><div class="WPstat"><div class="WPk">Previous event</div><div class="WPv" style="font-size:14px">${WP_escape(event.dateLabel)}</div></div></div>`;
+    const body=plans.map(plan=>{
+      const p=plan.player, l=plan.layout, extras=Math.max(0,plan.total-36);
+      const attackText=plan.attacks.length?plan.attacks.slice(0,6).map(h=>`H${h.hole}`).join(" · "):"No forced attack holes";
+      const dangerText=plan.dangers.map(h=>`H${h.hole}`).join(" · ");
+      const pct=Math.max(0,Math.min(100,(plan.total/Math.max(1,event.targetPoints))*100));
+      const holes=plan.holes.map(h=>`<div class="WPhole ${h.strategy.toLowerCase()}"><div class="WPhn">HOLE ${h.hole} · PAR ${Number.isFinite(h.par)?h.par:"—"} · SI ${Number.isFinite(h.si)?h.si:"—"}</div><div class="WPpts">${h.targetPts}<span> PTS</span></div><div class="WPgross">Gross target: ${Number.isFinite(h.targetGross)?h.targetGross:"—"} ${h.strokes?`· ${h.strokes} shot${h.strokes===1?"":"s"}`:"· no shot"}</div><div class="WPtag">${h.strategy}</div><div class="WPwhy">${WP_escape(h.reason)}</div></div>`).join("");
+      return `<section class="WPplayer"><div class="WPplayerHead"><div><div class="WPeyebrow" style="color:#0b7a6e;opacity:1">PERSONALISED ROUTE</div><div class="WPname">${WP_escape(p?.name||"Player")}</div><div class="WPmeta">HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):"—"} · Course Handicap ${l.ch} ${l.teeName?`· ${WP_escape(l.teeName)}`:""}</div></div><div style="text-align:right"><div class="WPk">WIN TARGET</div><div class="WPtarget">${plan.total} pts</div></div></div><div class="WPribbon"><div><div class="WPsmall">The simple equation</div><b>36 + ${extras} = ${plan.total}</b><div style="font-size:10px;opacity:.75;margin-top:3px">Handicap pace plus ${extras} extra point${extras===1?"":"s"}</div></div><div><div class="WPsmall">Front 9 plan</div><b>${plan.front} pts</b></div><div><div class="WPsmall">Back 9 plan</div><b>${plan.back} pts</b></div></div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route to ${plan.total}</div><div class="WPprintNote">Green = planned gain. Grey = protect handicap pace. Amber = a controlled concession if the target ever requires one.</div><div class="WPbar"><span style="width:${pct}%"></span></div><div class="WPholes" style="margin-top:10px">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Three things to remember</div><div class="WPrules"><div class="WPrule"><div class="WPk">1 · PROTECT</div><strong>Do not chase points on every hole.</strong><div class="WPwhy">A 2-point net par is doing its job. The plan only asks for gains where they are most efficient.</div></div><div class="WPrule"><div class="WPk">2 · ATTACK</div><strong class="WPattack">${WP_escape(attackText)}</strong><div class="WPwhy">These are the highest-value places to find the extra ${extras} point${extras===1?"":"s"}.</div></div><div class="WPrule"><div class="WPk">3 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong><div class="WPwhy">These are your lowest-opportunity holes. One point is recoverable; a blob creates pressure.</div></div></div></div><div class="WPfoot">Plan basis: previous winner ${WP_escape(event.winnerName)} ${event.winningPoints.toFixed(0)} pts → target ${event.targetPoints.toFixed(0)} pts. Hole targets use this player's current handicap, the selected course Par/SI layout and the player's recorded scoring profile where available.</div></section>`;
+    }).join("");
+    return {ok:true,event,plans,htmlFragment:`${head}${body}</div>`};
+  }catch(e){ console.error("Winning plan failed",e); return {ok:false,error:"Could not build winning plan."}; }
+}
+
 function PlayerReportView({ seasonModel, reportNextHcapMode, setReportNextHcapMode, scoringMode, setScoringMode, seasonPlayer, setSeasonPlayer, seasonYear, setSeasonYear, seasonLimit, setSeasonLimit, seasonYears, setView, autoOpenQA, onAutoOpenQADone }) {
   // --- 1. Basic Hooks & State ---
   const [deepDiveView, setDeepDiveView] = React.useState(() => {
@@ -14985,6 +15195,17 @@ function PlayerReportView({ seasonModel, reportNextHcapMode, setReportNextHcapMo
   const [deepDiveMetric, setDeepDiveMetric] = React.useState("round");
   const [controlsOpen, setControlsOpen] = React.useState(false);
   const [qaOpen, setQaOpen] = React.useState(false);
+  // Pre-round Winning Plan controls
+  const wpCourseOptions = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
+  const [wpCourseKey, setWpCourseKey] = React.useState("");
+  const [wpSelectedPlayers, setWpSelectedPlayers] = React.useState([]);
+  React.useEffect(() => {
+    if(!wpCourseKey && wpCourseOptions.length) setWpCourseKey(wpCourseOptions[0].key);
+  }, [wpCourseKey, wpCourseOptions]);
+  React.useEffect(() => {
+    if(seasonPlayer && !wpSelectedPlayers.length) setWpSelectedPlayers([seasonPlayer]);
+  }, [seasonPlayer]);
+  const wpEvent = React.useMemo(() => WP_findLatestEventAtCourse(seasonModel, wpCourseKey), [seasonModel, wpCourseKey]);
 
   // Deep-link scrolling
   React.useEffect(() => {
@@ -16056,6 +16277,82 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
 
         </div>
 
+
+
+      {/* Pre-Round Winning Plan */}
+      <div className="mt-4 rounded-3xl border border-slate-200 bg-white overflow-hidden shadow-sm">
+        <div style={{background:"linear-gradient(120deg,#0b2747 0%,#123c61 62%,#0b7a6e 100%)"}} className="p-5 md:p-6 text-white">
+          <div className="text-[10px] font-black tracking-[.18em] uppercase text-white/70">Pre-Round Intelligence</div>
+          <div className="mt-1 text-2xl md:text-3xl font-black tracking-tight">Build a Winning Game Plan</div>
+          <div className="mt-2 text-sm text-white/80 max-w-3xl">
+            Pick the next course and your golfers. We find the most recent winner there, set the target at one point better, then build the lowest-risk 18-hole route for each player.
+          </div>
+        </div>
+        <div className="p-4 md:p-5">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-[10px] font-black tracking-widest uppercase text-slate-500">1 · Next course</div>
+              <select
+                value={wpCourseKey}
+                onChange={e=>setWpCourseKey(e.target.value)}
+                className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-bold text-slate-900"
+              >
+                {wpCourseOptions.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+              </select>
+              <div className="mt-2 text-xs text-slate-500">Only courses already recorded in Den Golf are shown.</div>
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-[10px] font-black tracking-widest uppercase text-slate-500">2 · Previous benchmark</div>
+              {wpEvent ? <>
+                <div className="mt-2 flex items-end justify-between gap-3">
+                  <div><div className="text-sm font-black text-slate-900">{wpEvent.winnerName}</div><div className="text-xs text-slate-500">{wpEvent.dateLabel}</div></div>
+                  <div className="text-right"><div className="text-2xl font-black text-slate-900">{wpEvent.winningPoints.toFixed(0)}</div><div className="text-[10px] font-black uppercase tracking-wider text-slate-500">winning pts</div></div>
+                </div>
+                <div className="mt-3 rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2 flex justify-between items-center">
+                  <span className="text-xs font-black text-emerald-800">Target to beat</span><span className="text-xl font-black text-emerald-700">{wpEvent.targetPoints.toFixed(0)} pts</span>
+                </div>
+              </> : <div className="mt-2 text-sm font-semibold text-rose-700">No previous Stableford winner found for this course.</div>}
+            </div>
+
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+              <div className="text-[10px] font-black tracking-widest uppercase text-slate-500">3 · Choose players</div>
+              <details className="mt-2 relative">
+                <summary className="cursor-pointer list-none rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-bold text-slate-900 flex items-center justify-between">
+                  <span>{wpSelectedPlayers.length ? `${wpSelectedPlayers.length} player${wpSelectedPlayers.length===1?"":"s"} selected` : "Select players"}</span><span>▾</span>
+                </summary>
+                <div className="mt-2 max-h-56 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
+                  {allPlayers.map(p=>{
+                    const name=String(p?.name||""); const checked=wpSelectedPlayers.includes(name);
+                    return <label key={name} className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-slate-50 text-sm font-semibold text-slate-800 cursor-pointer">
+                      <input type="checkbox" checked={checked} onChange={()=>setWpSelectedPlayers(prev=>checked?prev.filter(x=>x!==name):[...prev,name])}/>
+                      <span>{name}</span>
+                    </label>;
+                  })}
+                </div>
+              </details>
+              <button type="button" className="mt-2 text-xs font-bold text-slate-600 underline" onClick={()=>setWpSelectedPlayers(allPlayers.map(p=>String(p?.name||"")).filter(Boolean))}>Select all golfers</button>
+            </div>
+          </div>
+
+          <button
+            className="mt-4 w-full rounded-2xl px-5 py-4 text-base font-black text-white shadow-lg disabled:opacity-40"
+            style={{background:"linear-gradient(90deg,#0b2747,#0b7a6e)"}}
+            disabled={!wpEvent || !wpSelectedPlayers.length}
+            onClick={()=>{
+              try{
+                const r=WP_generateWinningPlanHTML({model:seasonModel,courseKey:wpCourseKey,playerNames:wpSelectedPlayers});
+                if(!r?.ok){alert(r?.error||"Could not build winning plan.");return;}
+                window.__dslSeasonReportParams={model:seasonModel,playerName:`Winning-Plan-${r.event.courseName||"course"}`,yearLabel:seasonYear,seasonLimit:"all",scoringMode:"stableford",lensMode:"winningPlan",comparatorMode:"target"};
+                PR_showInlineSeasonReport(r.htmlFragment);
+              }catch(e){console.error(e);alert("Could not build winning plan.");}
+            }}
+          >
+            Generate Winning Plan{wpEvent?` · Beat ${wpEvent.winningPoints.toFixed(0)} with ${wpEvent.targetPoints.toFixed(0)}`:""}
+          </button>
+          <div className="mt-2 text-center text-[11px] text-slate-500">The report allocates the extra points to the most efficient holes rather than asking the golfer to attack everywhere.</div>
+        </div>
+      </div>
 
       {/* Pro Plan (prescription) */}
       <div className="mt-4 rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm" id="player-report-top">
