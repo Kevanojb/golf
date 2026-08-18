@@ -15227,16 +15227,51 @@ function WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI){
   if(!base) return null;
   const ps=WP_pars(base), sis=WP_si(base), ys=WP_yards(base);
   const parTotal=ps.reduce((sum,v)=>sum+(Number.isFinite(v)?v:0),0);
-  const latestHI=WP_latestPlayerHcap(p,handicapMap);
-  const override=Number(tempHI);
-  const hi=Number.isFinite(override)&&override>=0 ? override : latestHI;
+
+  // Handicap rules for the Pre-Round Planner:
+  // 1) No temporary value entered = use the player's latest DEN SOCIETY handicap
+  //    as a FIXED playing handicap. Do NOT apply Slope/Rating conversion.
+  // 2) Temporary handicap entered = treat it as a WHS Handicap Index and convert
+  //    it to the tee-specific Course Handicap before allocating strokes by SI.
+  const denHandicap=WP_latestPlayerHcap(p,handicapMap);
+  const overrideRaw=String(tempHI??"").trim();
+  const override=overrideRaw==="" ? NaN : Number(overrideRaw);
+  const temporaryHI=Number.isFinite(override)&&override>=0;
+  const hi=temporaryHI ? override : denHandicap;
   const slope=WP_num(base?.teeSlope,base?.slope,base?.slopeRating,base?.courseSlope);
   const rating=WP_num(base?.teeRating,base?.rating,base?.courseRating);
+
   let ch=NaN;
-  try{ if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0&&typeof WHS_courseHandicap==="function") ch=WHS_courseHandicap(hi,slope,rating,parTotal); }catch(_){ }
-  if(!Number.isFinite(ch)) ch=Math.round(WP_num(base?.courseHandicap,base?.playingHcap,base?.hcap,hi,0));
+  let handicapMethod="DEN_FIXED";
+  let handicapMethodLabel="Den Society fixed handicap";
+  let usedWHSFallback=false;
+
+  if(temporaryHI){
+    handicapMethod="TEMP_WHS";
+    handicapMethodLabel="Temporary HI → WHS Course Handicap";
+    try{
+      if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0&&typeof WHS_courseHandicap==="function"){
+        ch=WHS_courseHandicap(hi,slope,rating,parTotal);
+      }
+    }catch(_){ }
+    // If the course does not contain enough WHS tee data, preserve usability but
+    // make the fallback explicit in the generated plan.
+    if(!Number.isFinite(ch)){
+      usedWHSFallback=true;
+      ch=Math.round(WP_num(base?.courseHandicap,base?.playingHcap,base?.hcap,hi,0));
+    }
+  }else{
+    // Den Society mode: the exported/current Den handicap IS the playing handicap.
+    // Only round here because SI allocation requires a whole number of strokes.
+    ch=Math.round(WP_num(denHandicap,base?.playingHcap,base?.hcap,0));
+  }
+
   ch=Math.max(0,Math.round(ch||0));
-  return {round:base,pars:ps,si:sis,yards:ys,parTotal,hi,ch,teeName:WP_tee(base),slope,rating,temporaryHI:Number.isFinite(override)&&override>=0};
+  return {
+    round:base,pars:ps,si:sis,yards:ys,parTotal,
+    hi,denHandicap,ch,teeName:WP_tee(base),slope,rating,temporaryHI,
+    handicapMethod,handicapMethodLabel,usedWHSFallback
+  };
 }
 function WP_strokesReceived(ch,si){
   const h=Math.max(0,Math.round(Number(ch)||0)), s=Number(si);
@@ -15444,7 +15479,12 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
       }).join('');
       const targetTop=isGross?`${plan.totalGross} GROSS`:`${plan.pointsTotal} PTS`;
       const ribbon=isGross?`<div><div class="WPsmall">Gross target</div><b>${plan.totalGross} strokes</b><div style="font-size:10px;opacity:.75;margin-top:3px">Projected ${plan.pointsTotal} Stableford pts</div></div><div><div class="WPsmall">Front 9</div><b>${plan.front} gross</b></div><div><div class="WPsmall">Back 9</div><b>${plan.back} gross</b></div>`:`<div><div class="WPsmall">Stableford target</div><b>${plan.pointsTotal} points</b><div style="font-size:10px;opacity:.75;margin-top:3px">Projected gross ${plan.totalGross}</div></div><div><div class="WPsmall">Front 9</div><b>${plan.front} pts</b></div><div><div class="WPsmall">Back 9</div><b>${plan.back} pts</b></div>`;
-      return `<section class="WPplayer"><div class="WPplayerHead"><div><div class="WPeyebrow" style="color:#0b7a6e;opacity:1">PERSONALISED ROUTE</div><div class="WPname">${WP_escape(p?.name||'Player')}</div><div class="WPmeta">HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'}${l.temporaryHI?' (temporary)':''} · Course Handicap ${l.ch} ${l.teeName?'· '+WP_escape(l.teeName):''}</div></div><div style="text-align:right"><div class="WPk">TARGET</div><div class="WPtarget">${targetTop}</div></div></div><div class="WPribbon">${ribbon}</div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route</div><div class="WPprintNote">Use the BIG gross number live on the course. A very light red tint means bogey or worse is deliberately BUILT INTO THE PLAN — do not chase par and turn the planned score into bigger damage. The engine has chosen where your pars, bogeys and gains are most likely based on your own previous rounds plus this course's Par and SI.</div><div class="WPholes">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Three things to remember</div><div class="WPrules"><div class="WPrule"><div class="WPk">1 · FOLLOW THE GROSS NUMBER</div><strong>That is the score to make on each hole.</strong></div><div class="WPrule"><div class="WPk">2 · BEST OPPORTUNITIES</div><strong class="WPattack">${WP_escape(attackText)}</strong></div><div class="WPrule"><div class="WPk">3 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong></div></div></div><div class="WPfoot">Optimised from all recorded rounds for ${WP_escape(p?.name||'this player')}: exact-hole history first, then SI, Par and yardage profile. ${l.temporaryHI?'Temporary handicap override used.':'Latest current-year handicap used.'}</div></section>`;
+      return `<section class="WPplayer"><div class="WPplayerHead"><div><div class="WPeyebrow" style="color:#0b7a6e;opacity:1">PERSONALISED ROUTE</div><div class="WPname">${WP_escape(p?.name||'Player')}</div><div class="WPmeta">${l.temporaryHI
+  ? `Temporary HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'} → Course Handicap ${l.ch}`
+  : `Den Handicap ${Number.isFinite(l.denHandicap)?Number(l.denHandicap).toFixed(1):'—'} · Playing Handicap ${l.ch}`}
+  ${l.teeName?'· '+WP_escape(l.teeName):''}</div></div><div style="text-align:right"><div class="WPk">TARGET</div><div class="WPtarget">${targetTop}</div></div></div><div class="WPribbon">${ribbon}</div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route</div><div class="WPprintNote">Use the BIG gross number live on the course. A very light red tint means bogey or worse is deliberately BUILT INTO THE PLAN — do not chase par and turn the planned score into bigger damage. The engine has chosen where your pars, bogeys and gains are most likely based on your own previous rounds plus this course's Par and SI.</div><div class="WPholes">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Three things to remember</div><div class="WPrules"><div class="WPrule"><div class="WPk">1 · FOLLOW THE GROSS NUMBER</div><strong>That is the score to make on each hole.</strong></div><div class="WPrule"><div class="WPk">2 · BEST OPPORTUNITIES</div><strong class="WPattack">${WP_escape(attackText)}</strong></div><div class="WPrule"><div class="WPk">3 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong></div></div></div><div class="WPfoot">Optimised from all recorded rounds for ${WP_escape(p?.name||'this player')}: exact-hole history first, then SI, Par and yardage profile. ${l.temporaryHI
+  ? (l.usedWHSFallback?'Temporary HI used; WHS tee data was incomplete so a stored/fallback Course Handicap was used.':'Temporary HI converted to the tee-specific WHS Course Handicap before SI allocation.')
+  : 'Latest current-year Den Society handicap used directly as the fixed playing handicap — no Slope/Rating conversion.'}</div></section>`;
     }).join('');
     return {ok:true,event,plans,htmlFragment:`${head}${body}</div>`};
   }catch(e){ console.error('Winning plan failed',e); return {ok:false,error:`Could not build winning plan${e?.message?`: ${e.message}`:'.'}`}; }
@@ -15511,9 +15551,9 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
             <div>
               <button type="button" onClick={()=>setView("home")} className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-black text-white/90 hover:bg-white/15">← Home</button>
               <div className="text-[10px] font-black tracking-[.2em] uppercase text-emerald-200">Den Golf · Pre-Round Intelligence</div>
-              <div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[10px] font-black text-white">ALL YEARS COURSE HISTORY</span><span className="rounded-full border border-blue-200/30 bg-blue-300/10 px-3 py-1 text-[10px] font-black text-blue-100">LATEST {currentYear} HANDICAPS</span></div>
+              <div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[10px] font-black text-white">ALL YEARS COURSE HISTORY</span><span className="rounded-full border border-blue-200/30 bg-blue-300/10 px-3 py-1 text-[10px] font-black text-blue-100">FIXED DEN HANDICAPS · TEMP WHS OPTIONAL</span></div>
               <h1 className="mt-2 text-3xl md:text-5xl font-black tracking-[-.04em] leading-none">Build the route to a win.</h1>
-              <p className="mt-3 max-w-3xl text-sm md:text-base text-white/75 leading-relaxed">Choose where you are playing next, test whether the last winning score was genuinely repeatable, then give each golfer a personalised 18-hole Stableford route to one point above the most credible winning benchmark.</p>
+              <p className="mt-3 max-w-3xl text-sm md:text-base text-white/75 leading-relaxed">Choose the course and target. Den Society handicaps are used as fixed playing handicaps; enter a temporary HI only when you want a WHS Course Handicap. The optimiser then builds the most likely 18-hole route from each golfer's history.</p>
             </div>
             <div className="grid grid-cols-3 gap-2 min-w-[300px]">
               <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur"><div className="text-[9px] font-black uppercase tracking-widest text-white/55">Handicap pace</div><div className="mt-1 text-2xl font-black">36</div></div>
@@ -15558,9 +15598,9 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
               <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
                 <div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white text-sm font-black">3</div><div><div className="text-[10px] font-black tracking-widest uppercase text-slate-400">Golfers</div><div className="font-black text-slate-900">Who needs a plan?</div></div></div>
                 <div className="mt-4 max-h-52 overflow-auto rounded-2xl border border-slate-200 bg-white p-2">
-                  {players.map(p=>{ const name=String(p.name); const checked=selectedPlayers.includes(name); const hx=handicapMap.get(WP_norm(name)); const hi=Number(hx?.newHI); return <div key={name} className={`rounded-xl px-3 py-2.5 ${checked?"bg-emerald-50":"hover:bg-slate-50"}`}><label className={`flex cursor-pointer items-center gap-3 text-sm font-bold ${checked?"text-emerald-900":"text-slate-700"}`}><input type="checkbox" checked={checked} onChange={()=>togglePlayer(name)} className="h-4 w-4"/><span className="flex-1">{name}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ${Number.isFinite(hi)?"bg-blue-50 text-blue-700":"bg-slate-100 text-slate-400"}`}>{Number.isFinite(hi)?`HI ${hi.toFixed(1)}`:"HI —"}</span>{checked?<span className="text-emerald-600">✓</span>:null}</label>{checked?<div className="mt-2 ml-7 flex items-center gap-2"><span className="text-[10px] font-black uppercase tracking-wider text-slate-400">Temporary HI</span><input type="number" min="0" max="54" step="0.1" placeholder={Number.isFinite(hi)?hi.toFixed(1):"optional"} value={tempHandicaps[name]??""} onChange={e=>setTempHandicaps(prev=>({...prev,[name]:e.target.value}))} className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-black text-slate-900"/><span className="text-[10px] text-slate-400">optional override</span></div>:null}</div>; })}
+                  {players.map(p=>{ const name=String(p.name); const checked=selectedPlayers.includes(name); const hx=handicapMap.get(WP_norm(name)); const hi=Number(hx?.newHI); return <div key={name} className={`rounded-xl px-3 py-2.5 ${checked?"bg-emerald-50":"hover:bg-slate-50"}`}><label className={`flex cursor-pointer items-center gap-3 text-sm font-bold ${checked?"text-emerald-900":"text-slate-700"}`}><input type="checkbox" checked={checked} onChange={()=>togglePlayer(name)} className="h-4 w-4"/><span className="flex-1">{name}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ${Number.isFinite(hi)?"bg-blue-50 text-blue-700":"bg-slate-100 text-slate-400"}`}>{Number.isFinite(hi)?`HI ${hi.toFixed(1)}`:"HI —"}</span>{checked?<span className="text-emerald-600">✓</span>:null}</label>{checked?<div className="mt-2 ml-7 rounded-xl border border-slate-200 bg-white/80 p-2.5"><div className="flex flex-wrap items-center gap-2"><span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Temporary HI</span><input type="number" min="0" max="54" step="0.1" placeholder="optional" value={tempHandicaps[name]??""} onChange={e=>setTempHandicaps(prev=>({...prev,[name]:e.target.value}))} className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-black text-slate-900"/><span className="text-[10px] font-bold text-slate-500">leave blank = use fixed Den handicap</span></div><div className="mt-1.5 text-[10px] leading-relaxed text-slate-500">Enter a temporary HI only for non-Den / simulated golf. It will be converted to the selected tee's WHS Course Handicap before strokes are allocated by SI.</div></div>:null}</div>; })}
                 </div>
-                <div className="mt-3 flex items-center justify-between gap-3"><div className="text-xs font-bold text-slate-500">{selectedPlayers.length} selected</div><button type="button" className="text-xs font-black text-slate-700 underline" onClick={()=>setSelectedPlayers(selectedPlayers.length===players.length?[]:players.map(p=>String(p.name)))}>{selectedPlayers.length===players.length?"Clear all":"Select all"}</button></div><div className="mt-2 rounded-xl bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-800">Handicap source: latest {currentYear} handicap from the current-year handicap export.</div>
+                <div className="mt-3 flex items-center justify-between gap-3"><div className="text-xs font-bold text-slate-500">{selectedPlayers.length} selected</div><button type="button" className="text-xs font-black text-slate-700 underline" onClick={()=>setSelectedPlayers(selectedPlayers.length===players.length?[]:players.map(p=>String(p.name)))}>{selectedPlayers.length===players.length?"Clear all":"Select all"}</button></div><div className="mt-2 grid grid-cols-1 gap-2"><div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-bold text-emerald-800"><b>Den Society:</b> latest {currentYear} Den handicap is used directly as the fixed playing handicap. No Course Handicap conversion.</div><div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-800"><b>Temporary HI entered:</b> that number overrides the Den handicap and is converted to a WHS Course Handicap for the selected tee.</div></div>
               </div>
             </div>
           </section>
