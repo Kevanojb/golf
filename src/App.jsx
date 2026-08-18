@@ -3296,6 +3296,29 @@ function Home({
             </div>
           </button>
 
+
+          {/* PRE-ROUND INTELLIGENCE */}
+          <button className="hm-card heroish" onClick={() => setView("pre_round")} style={{ textAlign: "left", cursor: "pointer", borderColor:"rgba(5,150,105,.28)", background:"linear-gradient(135deg,rgba(236,253,245,.96),rgba(255,255,255,.98))" }}>
+            <div className="hm-card-inner">
+              <div style={{ minWidth: 0 }}>
+                <div style={{display:"inline-flex",alignItems:"center",gap:7,padding:"5px 9px",borderRadius:999,background:"rgba(5,150,105,.10)",color:"#047857",fontSize:10,fontWeight:900,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8}}>⛳ Pre-Round Intelligence</div>
+                <h3>Winning Game Plan</h3>
+                <div className="hm-desc">Know exactly what a winning score looks like before you tee off.</div>
+                <ul>
+                  <li><span className="hm-ico2">🏆</span><span>See what won at the course last time</span></li>
+                  <li><span className="hm-ico2">🎯</span><span>Target one point more than the previous winner</span></li>
+                  <li><span className="hm-ico2">🧠</span><span>Get a personalised hole-by-hole route for each golfer</span></li>
+                </ul>
+              </div>
+              <div className="hm-card-action">
+                <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("pre_round"); }} style={{background:"linear-gradient(180deg,#10b981,#047857)",color:"white"}}>
+                  <span>→ Plan Next Round</span>
+                </button>
+                <div className="hm-pill">NEW</div>
+              </div>
+            </div>
+          </button>
+
           {/* TWO-UP ROW */}
           <div className="hm-row2">
             <button className="hm-card heroish" onClick={() => setView("standings")} style={{ textAlign: "left", cursor: "pointer" }}>
@@ -15125,6 +15148,134 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames}){
   }catch(e){ console.error("Winning plan failed",e); return {ok:false,error:"Could not build winning plan."}; }
 }
 
+
+function PreRoundPlannerView({ seasonModel, seasonYear, setView, runSeasonAnalysis }) {
+  const courses = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
+  const players = React.useMemo(() => (Array.isArray(seasonModel?.players) ? seasonModel.players : [])
+    .filter(p => p && String(p?.name || "").trim())
+    .sort((a,b)=>String(a.name).localeCompare(String(b.name))), [seasonModel]);
+  const [courseKey, setCourseKey] = React.useState("");
+  const [selectedPlayers, setSelectedPlayers] = React.useState([]);
+
+  React.useEffect(() => {
+    if (!courseKey && courses.length) setCourseKey(courses[0].key);
+    if (courseKey && courses.length && !courses.some(c => c.key === courseKey)) setCourseKey(courses[0].key);
+  }, [courseKey, courses]);
+
+  const event = React.useMemo(() => WP_findLatestEventAtCourse(seasonModel, courseKey), [seasonModel, courseKey]);
+  const selectedCourse = courses.find(c => c.key === courseKey) || null;
+  const target = Number(event?.targetPoints);
+  const winnerPts = Number(event?.winningPoints);
+  const extraNeeded = Number.isFinite(target) ? Math.max(0, target - 36) : NaN;
+
+  const togglePlayer = (name) => {
+    setSelectedPlayers(prev => prev.includes(name) ? prev.filter(x => x !== name) : [...prev, name]);
+  };
+
+  const generatePlan = () => {
+    try {
+      const r = WP_generateWinningPlanHTML({ model: seasonModel, courseKey, playerNames: selectedPlayers });
+      if (!r?.ok) { alert(r?.error || "Could not build winning plan."); return; }
+      window.__dslSeasonReportParams = {
+        model: seasonModel,
+        playerName: `Winning-Plan-${r.event.courseName || "course"}`,
+        yearLabel: seasonYear,
+        seasonLimit: "all",
+        scoringMode: "stableford",
+        lensMode: "winningPlan",
+        comparatorMode: "target"
+      };
+      PR_showInlineSeasonReport(r.htmlFragment);
+    } catch (e) {
+      console.error(e);
+      alert("Could not build winning plan.");
+    }
+  };
+
+  const hasModel = players.length > 0;
+
+  return (
+    <div className="space-y-4">
+      <section className="content-card overflow-hidden p-0">
+        <div style={{background:"linear-gradient(125deg,#071d35 0%,#0c3559 52%,#08775f 100%)"}} className="relative overflow-hidden px-5 py-6 md:px-8 md:py-8 text-white">
+          <div className="absolute -right-16 -top-20 h-56 w-56 rounded-full bg-white/10" />
+          <div className="absolute right-24 -bottom-24 h-44 w-44 rounded-full bg-emerald-300/10" />
+          <div className="relative z-10 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+            <div>
+              <button type="button" onClick={()=>setView("home")} className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-black text-white/90 hover:bg-white/15">← Home</button>
+              <div className="text-[10px] font-black tracking-[.2em] uppercase text-emerald-200">Den Golf · Pre-Round Intelligence</div>
+              <h1 className="mt-2 text-3xl md:text-5xl font-black tracking-[-.04em] leading-none">Build the route to a win.</h1>
+              <p className="mt-3 max-w-3xl text-sm md:text-base text-white/75 leading-relaxed">Choose where you are playing next, see what won there last time, then give each golfer a personalised 18-hole Stableford target that reaches one point more with the least unnecessary risk.</p>
+            </div>
+            <div className="grid grid-cols-3 gap-2 min-w-[300px]">
+              <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur"><div className="text-[9px] font-black uppercase tracking-widest text-white/55">Handicap pace</div><div className="mt-1 text-2xl font-black">36</div></div>
+              <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur"><div className="text-[9px] font-black uppercase tracking-widest text-white/55">Last winner</div><div className="mt-1 text-2xl font-black">{Number.isFinite(winnerPts)?winnerPts.toFixed(0):"—"}</div></div>
+              <div className="rounded-2xl border border-emerald-200/30 bg-emerald-300/15 p-3 backdrop-blur"><div className="text-[9px] font-black uppercase tracking-widest text-emerald-100/75">Win target</div><div className="mt-1 text-2xl font-black text-emerald-100">{Number.isFinite(target)?target.toFixed(0):"—"}</div></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {!hasModel ? (
+        <section className="content-card p-5 md:p-7">
+          <div className="text-xs font-black uppercase tracking-widest text-neutral-400">Season data required</div>
+          <div className="mt-1 text-2xl font-black text-neutral-900">Load the season once, then plan any course.</div>
+          <div className="mt-2 text-sm text-neutral-600">The planner uses the courses, previous winners, player handicaps and hole-by-hole history already stored in Den Golf.</div>
+          <button className="btn-primary mt-4" onClick={()=>runSeasonAnalysis && runSeasonAnalysis()}>Load Season Data</button>
+        </section>
+      ) : (
+        <>
+          <section className="content-card p-5 md:p-7">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
+                <div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white text-sm font-black">1</div><div><div className="text-[10px] font-black tracking-widest uppercase text-slate-400">Next venue</div><div className="font-black text-slate-900">Choose the course</div></div></div>
+                <select value={courseKey} onChange={e=>setCourseKey(e.target.value)} className="mt-5 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3.5 text-sm font-black text-slate-900 shadow-sm">
+                  {courses.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+                </select>
+                <div className="mt-3 text-xs leading-relaxed text-slate-500">{courses.length} previously recorded course{courses.length===1?"":"s"} available.</div>
+              </div>
+
+              <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
+                <div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white text-sm font-black">2</div><div><div className="text-[10px] font-black tracking-widest uppercase text-slate-400">Benchmark</div><div className="font-black text-slate-900">What won here last time?</div></div></div>
+                {event ? <>
+                  <div className="mt-5 flex items-end justify-between gap-3"><div><div className="text-xs text-slate-500">Previous winner</div><div className="text-lg font-black text-slate-900">{event.winnerName}</div><div className="text-xs text-slate-500">{event.dateLabel}</div></div><div className="text-right"><div className="text-4xl font-black tracking-tight text-slate-900">{event.winningPoints.toFixed(0)}</div><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Stableford pts</div></div></div>
+                  <div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center justify-between"><div><div className="text-[9px] font-black uppercase tracking-widest text-emerald-600">Target to win</div><div className="text-xs font-semibold text-emerald-800">One more than last time</div></div><div className="text-3xl font-black text-emerald-700">{event.targetPoints.toFixed(0)}</div></div>
+                </> : <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">No previous Stableford winner found for {selectedCourse?.label || "this course"}.</div>}
+              </div>
+
+              <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
+                <div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white text-sm font-black">3</div><div><div className="text-[10px] font-black tracking-widest uppercase text-slate-400">Golfers</div><div className="font-black text-slate-900">Who needs a plan?</div></div></div>
+                <div className="mt-4 max-h-52 overflow-auto rounded-2xl border border-slate-200 bg-white p-2">
+                  {players.map(p=>{ const name=String(p.name); const checked=selectedPlayers.includes(name); return <label key={name} className={`flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold ${checked?"bg-emerald-50 text-emerald-900":"text-slate-700 hover:bg-slate-50"}`}><input type="checkbox" checked={checked} onChange={()=>togglePlayer(name)} className="h-4 w-4"/><span className="flex-1">{name}</span>{checked?<span className="text-emerald-600">✓</span>:null}</label>; })}
+                </div>
+                <div className="mt-3 flex items-center justify-between gap-3"><div className="text-xs font-bold text-slate-500">{selectedPlayers.length} selected</div><button type="button" className="text-xs font-black text-slate-700 underline" onClick={()=>setSelectedPlayers(selectedPlayers.length===players.length?[]:players.map(p=>String(p.name)))}>{selectedPlayers.length===players.length?"Clear all":"Select all"}</button></div>
+              </div>
+            </div>
+          </section>
+
+          {event && <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+            <div className="grid grid-cols-1 md:grid-cols-[1.25fr_.75fr]">
+              <div className="p-5 md:p-7">
+                <div className="text-[10px] font-black uppercase tracking-[.18em] text-slate-400">The winning equation</div>
+                <div className="mt-2 flex items-baseline gap-3 flex-wrap"><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">36</span><span className="text-3xl font-black text-slate-300">+</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-emerald-600">{Number.isFinite(extraNeeded)?extraNeeded.toFixed(0):"—"}</span><span className="text-3xl font-black text-slate-300">=</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">{event.targetPoints.toFixed(0)}</span></div>
+                <div className="mt-2 text-sm text-slate-600">The engine starts at handicap golf, then finds the lowest-risk holes to produce the extra {Number.isFinite(extraNeeded)?extraNeeded.toFixed(0):"—"} point{extraNeeded===1?"":"s"} needed to beat the last winner.</div>
+              </div>
+              <div className="border-t md:border-t-0 md:border-l border-slate-200 bg-slate-50 p-5 md:p-7">
+                <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">How the plan thinks</div>
+                <div className="mt-3 space-y-2 text-sm font-bold text-slate-700"><div className="flex gap-2"><span className="text-emerald-600">●</span><span>Attack the most efficient gain holes.</span></div><div className="flex gap-2"><span className="text-slate-400">●</span><span>Protect 2 points where handicap pace is enough.</span></div><div className="flex gap-2"><span className="text-amber-500">●</span><span>Respect low-opportunity holes and avoid blobs.</span></div></div>
+              </div>
+            </div>
+          </section>}
+
+          <button type="button" disabled={!event || !selectedPlayers.length} onClick={generatePlan} className="w-full rounded-3xl px-6 py-5 text-lg md:text-xl font-black text-white shadow-xl disabled:cursor-not-allowed disabled:opacity-40" style={{background:"linear-gradient(90deg,#071d35 0%,#0b3e61 45%,#08775f 100%)"}}>
+            {event ? `Build ${selectedPlayers.length || ""} Winning Game Plan${selectedPlayers.length===1?"":"s"} · Target ${event.targetPoints.toFixed(0)} pts` : "Choose a course with a previous result"}
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 function PlayerReportView({ seasonModel, reportNextHcapMode, setReportNextHcapMode, scoringMode, setScoringMode, seasonPlayer, setSeasonPlayer, seasonYear, setSeasonYear, seasonLimit, setSeasonLimit, seasonYears, setView, autoOpenQA, onAutoOpenQADone }) {
   // --- 1. Basic Hooks & State ---
   const [deepDiveView, setDeepDiveView] = React.useState(() => {
@@ -15195,17 +15346,6 @@ function PlayerReportView({ seasonModel, reportNextHcapMode, setReportNextHcapMo
   const [deepDiveMetric, setDeepDiveMetric] = React.useState("round");
   const [controlsOpen, setControlsOpen] = React.useState(false);
   const [qaOpen, setQaOpen] = React.useState(false);
-  // Pre-round Winning Plan controls
-  const wpCourseOptions = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
-  const [wpCourseKey, setWpCourseKey] = React.useState("");
-  const [wpSelectedPlayers, setWpSelectedPlayers] = React.useState([]);
-  React.useEffect(() => {
-    if(!wpCourseKey && wpCourseOptions.length) setWpCourseKey(wpCourseOptions[0].key);
-  }, [wpCourseKey, wpCourseOptions]);
-  React.useEffect(() => {
-    if(seasonPlayer && !wpSelectedPlayers.length) setWpSelectedPlayers([seasonPlayer]);
-  }, [seasonPlayer]);
-  const wpEvent = React.useMemo(() => WP_findLatestEventAtCourse(seasonModel, wpCourseKey), [seasonModel, wpCourseKey]);
 
   // Deep-link scrolling
   React.useEffect(() => {
@@ -16278,81 +16418,6 @@ const comparator = uiCohort ? (uiCohort === "field" ? "field" : "band")
         </div>
 
 
-
-      {/* Pre-Round Winning Plan */}
-      <div className="mt-4 rounded-3xl border border-slate-200 bg-white overflow-hidden shadow-sm">
-        <div style={{background:"linear-gradient(120deg,#0b2747 0%,#123c61 62%,#0b7a6e 100%)"}} className="p-5 md:p-6 text-white">
-          <div className="text-[10px] font-black tracking-[.18em] uppercase text-white/70">Pre-Round Intelligence</div>
-          <div className="mt-1 text-2xl md:text-3xl font-black tracking-tight">Build a Winning Game Plan</div>
-          <div className="mt-2 text-sm text-white/80 max-w-3xl">
-            Pick the next course and your golfers. We find the most recent winner there, set the target at one point better, then build the lowest-risk 18-hole route for each player.
-          </div>
-        </div>
-        <div className="p-4 md:p-5">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-[10px] font-black tracking-widest uppercase text-slate-500">1 · Next course</div>
-              <select
-                value={wpCourseKey}
-                onChange={e=>setWpCourseKey(e.target.value)}
-                className="mt-2 w-full rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-bold text-slate-900"
-              >
-                {wpCourseOptions.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
-              </select>
-              <div className="mt-2 text-xs text-slate-500">Only courses already recorded in Den Golf are shown.</div>
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-[10px] font-black tracking-widest uppercase text-slate-500">2 · Previous benchmark</div>
-              {wpEvent ? <>
-                <div className="mt-2 flex items-end justify-between gap-3">
-                  <div><div className="text-sm font-black text-slate-900">{wpEvent.winnerName}</div><div className="text-xs text-slate-500">{wpEvent.dateLabel}</div></div>
-                  <div className="text-right"><div className="text-2xl font-black text-slate-900">{wpEvent.winningPoints.toFixed(0)}</div><div className="text-[10px] font-black uppercase tracking-wider text-slate-500">winning pts</div></div>
-                </div>
-                <div className="mt-3 rounded-xl bg-emerald-50 border border-emerald-200 px-3 py-2 flex justify-between items-center">
-                  <span className="text-xs font-black text-emerald-800">Target to beat</span><span className="text-xl font-black text-emerald-700">{wpEvent.targetPoints.toFixed(0)} pts</span>
-                </div>
-              </> : <div className="mt-2 text-sm font-semibold text-rose-700">No previous Stableford winner found for this course.</div>}
-            </div>
-
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <div className="text-[10px] font-black tracking-widest uppercase text-slate-500">3 · Choose players</div>
-              <details className="mt-2 relative">
-                <summary className="cursor-pointer list-none rounded-xl border border-slate-300 bg-white px-3 py-3 text-sm font-bold text-slate-900 flex items-center justify-between">
-                  <span>{wpSelectedPlayers.length ? `${wpSelectedPlayers.length} player${wpSelectedPlayers.length===1?"":"s"} selected` : "Select players"}</span><span>▾</span>
-                </summary>
-                <div className="mt-2 max-h-56 overflow-auto rounded-xl border border-slate-200 bg-white p-2 shadow-lg">
-                  {allPlayers.map(p=>{
-                    const name=String(p?.name||""); const checked=wpSelectedPlayers.includes(name);
-                    return <label key={name} className="flex items-center gap-2 rounded-lg px-2 py-2 hover:bg-slate-50 text-sm font-semibold text-slate-800 cursor-pointer">
-                      <input type="checkbox" checked={checked} onChange={()=>setWpSelectedPlayers(prev=>checked?prev.filter(x=>x!==name):[...prev,name])}/>
-                      <span>{name}</span>
-                    </label>;
-                  })}
-                </div>
-              </details>
-              <button type="button" className="mt-2 text-xs font-bold text-slate-600 underline" onClick={()=>setWpSelectedPlayers(allPlayers.map(p=>String(p?.name||"")).filter(Boolean))}>Select all golfers</button>
-            </div>
-          </div>
-
-          <button
-            className="mt-4 w-full rounded-2xl px-5 py-4 text-base font-black text-white shadow-lg disabled:opacity-40"
-            style={{background:"linear-gradient(90deg,#0b2747,#0b7a6e)"}}
-            disabled={!wpEvent || !wpSelectedPlayers.length}
-            onClick={()=>{
-              try{
-                const r=WP_generateWinningPlanHTML({model:seasonModel,courseKey:wpCourseKey,playerNames:wpSelectedPlayers});
-                if(!r?.ok){alert(r?.error||"Could not build winning plan.");return;}
-                window.__dslSeasonReportParams={model:seasonModel,playerName:`Winning-Plan-${r.event.courseName||"course"}`,yearLabel:seasonYear,seasonLimit:"all",scoringMode:"stableford",lensMode:"winningPlan",comparatorMode:"target"};
-                PR_showInlineSeasonReport(r.htmlFragment);
-              }catch(e){console.error(e);alert("Could not build winning plan.");}
-            }}
-          >
-            Generate Winning Plan{wpEvent?` · Beat ${wpEvent.winningPoints.toFixed(0)} with ${wpEvent.targetPoints.toFixed(0)}`:""}
-          </button>
-          <div className="mt-2 text-center text-[11px] text-slate-500">The report allocates the extra points to the most efficient holes rather than asking the golfer to attack everywhere.</div>
-        </div>
-      </div>
 
       {/* Pro Plan (prescription) */}
       <div className="mt-4 rounded-3xl border border-neutral-200 bg-white p-5 shadow-sm" id="player-report-top">
@@ -17688,6 +17753,7 @@ function GuideView({ setView, leagueTitle }) {
               <li>🧩 <span className="font-semibold">Eclectic</span> — best score on each hole across the season.</li>
               <li>🗂️ <span className="font-semibold">Analyse Game</span> — pick a past game and deep‑dive.</li>
               <li>📊 <button type="button" className="link" onClick={() => { setView("player_progress"); window.scrollTo(0,0); }}><span className="font-semibold">Player Progress</span></button> — analyse 1/5/10/20/30/ALL games for trends, volatility, and vs field comparisons.</li>
+              <li>🎯 <button type="button" className="link" onClick={() => { setView("pre_round"); window.scrollTo(0,0); }}><span className="font-semibold">Pre-Round Intelligence</span></button> — choose the next course, benchmark the previous winner and build personalised winning game plans.</li>
               <li>📝 <span className="font-semibold">Player Report</span> — single-player report across 1/5/10/20/30/ALL games (spot patterns over time).</li>
               <li>💬 <span className="font-semibold">Banter</span> — fun / commentary view.</li>
               <li>🤝 <span className="font-semibold">Partners</span> — partner / duo views.</li>
@@ -21615,6 +21681,15 @@ if (res.error) toast("Error: " + res.error.message);
     totalPlayersCount={(adminPlayerRoster||[]).length}
   />
 )}
+{view === "pre_round" && (
+  <PreRoundPlannerView
+    seasonModel={seasonModel}
+    seasonYear={seasonYear}
+    setView={setView}
+    runSeasonAnalysis={loadAllGamesAndBuildPlayerModel}
+  />
+)}
+
 {view === "player_progress" && (
   <PlayerProgressView
     seasonModel={seasonModel}
