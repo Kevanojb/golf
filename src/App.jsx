@@ -2462,7 +2462,10 @@ const finalPlayers = players.filter(p => p.name && !/^player$/i.test(p.name.trim
               if (!tee) tee = teesFinal.find(t => String(t?.gender || "").toUpperCase() === g) || teesFinal[0];
               if (tee) {
                 if (!parsArr && Array.isArray(tee.pars) && tee.pars.length === 18) parsArr = tee.pars;
-                if (!siArr   && Array.isArray(tee.sis)  && tee.sis.length  === 18) siArr   = tee.sis;
+                if (!siArr) {
+                  const _tsi = Array.isArray(tee.si) ? tee.si : (Array.isArray(tee.sis) ? tee.sis : null);
+                  if (_tsi && _tsi.length === 18) siArr = _tsi;
+                }
               }
             }
         
@@ -12542,7 +12545,20 @@ const postRoundIntel = (() => {
             gain:Math.max(0,target-gross)
           });
         }
-        if(!holes.length)return {ok:false};
+        if(!holes.length){
+          try{
+            console.warn("Exact handicap snapshot has no usable holes", {
+              player: String(__sourcePlayer?.name || playerName || ""),
+              round: latest,
+              pars: ps,
+              si: sis,
+              gross: gs,
+              teeLabel: latest?.teeLabel || latest?.teeName || latest?.tee || "",
+              sourceSeriesCount: Array.isArray(__sourcePlayer?.series) ? __sourcePlayer.series.length : 0
+            });
+          }catch(_){}
+          return {ok:false};
+        }
 
         const actual=holes.reduce((s,h)=>s+h.gross,0);
         const target=holes.reduce((s,h)=>s+h.target,0);
@@ -18865,15 +18881,54 @@ function _pushUnique(arr, val) {
               if (hiddenKeys && hiddenKeys.has(key)) continue;
       if (!name) continue;
 
-      const tee = _chooseTeeForPlayerSeason(p, courseTees) || {
-  pars: Array(18).fill(NaN),
-  yards: Array(18).fill(NaN),
-  si: Array(18).fill(NaN),
-};
+      // Resolve the actual tee layout for this player/round.
+      // IMPORTANT FOR FIRST-TIME / ONE-ROUND PLAYERS:
+      // the parser can successfully attach par/SI directly to the player even when
+      // courseTees is missing, minimal, or cannot be matched by tee label.  The old
+      // season model ignored those player-level arrays and replaced them with NaNs,
+      // which meant the Overview could show 37 pts / 80 gross while the detailed
+      // report had no usable par/SI holes and therefore failed its handicap snapshot.
+      const teeChosen = _chooseTeeForPlayerSeason(p, courseTees) || null;
+
+      const _validLayoutArray = (x, fn) =>
+        Array.isArray(x) && x.length && x.slice(0,18).some(v => fn(Number(v)));
+
+      const _pickLayoutArray = (candidates, fn) => {
+        for (const x of candidates || []) {
+          if (_validLayoutArray(x, fn)) return x.slice(0,18).map(Number);
+        }
+        return Array(18).fill(NaN);
+      };
+
+      const pars = _pickLayoutArray([
+        teeChosen?.pars, teeChosen?.par, teeChosen?.Pars,
+        p?.pars, p?.parsArr, p?.parsPerHole, p?.parPerHole,
+        parsed?.pars, parsed?.parsArr, parsed?.parsPerHole
+      ], v => Number.isFinite(v) && v >= 3 && v <= 6);
+
+      const siArr = _pickLayoutArray([
+        teeChosen?.si, teeChosen?.SI, teeChosen?.sis, teeChosen?.strokeIndex,
+        p?.sis, p?.si, p?.siArr, p?.siPerHole, p?.strokeIndexPerHole,
+        parsed?.si, parsed?.sis, parsed?.siArr, parsed?.siPerHole
+      ], v => Number.isFinite(v) && v >= 1 && v <= 18);
+
+      const yards = _pickLayoutArray([
+        teeChosen?.yards, teeChosen?.yardages, teeChosen?.yardsPerHole,
+        p?.yards, p?.yardsArr, p?.yardsPerHole, p?.yardages,
+        parsed?.yards, parsed?.yardsArr, parsed?.yardsPerHole
+      ], v => Number.isFinite(v) && v > 30);
+
+      // Preserve tee metadata while enriching the chosen tee with the resolved arrays.
+      const tee = {
+        ...(teeChosen || {}),
+        teeName: (teeChosen?.teeName || teeChosen?.name || teeChosen?.label || p?.teeLabel || p?.tee || ''),
+        gender: (teeChosen?.gender || p?.gender || 'M'),
+        pars,
+        si: siArr,
+        yards
+      };
+
       const perHole = Array.isArray(p.perHole) ? p.perHole : Array(18).fill(0);
-      const pars = Array.isArray(tee.pars) ? tee.pars : Array(18).fill(NaN);
-      const yards = Array.isArray(tee.yards) ? tee.yards : Array(18).fill(NaN);
-      const siArr = Array.isArray(tee.si) ? tee.si : Array(18).fill(NaN);
 
       const rec = (byPlayer[key] ||= {
         name: String(name).replace(/\u00A0/g, " ").replace(/\s+/g, " ").trim(),
