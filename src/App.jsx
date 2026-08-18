@@ -12306,6 +12306,11 @@ const postRoundIntel = (() => {
       const delta=isGrossMode?(ex.expected-actualNorm):(actualNorm-ex.expected);
       holesIntel.push({
         hole:i+1,par,si,y,delta,
+        raw,
+        gross:Number.isFinite(Number(lg[i]))?Number(lg[i]):NaN,
+        points:Number.isFinite(Number(lpts[i]))?Number(lpts[i]):NaN,
+        expected:Number(ex.expected),
+        expectedGross:Number.isFinite(Number(ex.expectedGross))?Number(ex.expectedGross):NaN,
         cost:Math.max(0,-delta),
         gain:Math.max(0,delta),
         samples:ex.samples
@@ -12671,6 +12676,50 @@ const postRoundIntel = (() => {
       } catch(e) { try{console.error("One-round exact snapshot rebuild failed:",e);}catch(_){} }
     }
 
+    // GUARANTEED CURRENT-ROUND SNAPSHOT.
+    // Post-Round Intelligence cannot reach this point unless `holesIntel` already
+    // contains valid hole-level data. Therefore the visual report must NEVER fail
+    // merely because the secondary exact-gross parser could not rebuild the same
+    // round. Reuse the already-successful hole analysis as the source of truth.
+    if (!exactHandicap?.ok && Array.isArray(holesIntel) && holesIntel.length) {
+      try {
+        const basis = isGrossMode ? "gross-intel" : "stableford";
+        const hs = holesIntel.map((h, idx) => {
+          const gross = Number.isFinite(Number(h.gross)) ? Number(h.gross) : NaN;
+          const points = Number.isFinite(Number(h.points)) ? Number(h.points) : NaN;
+          const par = Number.isFinite(Number(h.par)) ? Number(h.par) : NaN;
+          const si = Number.isFinite(Number(h.si)) ? Number(h.si) : NaN;
+          const yard = Number.isFinite(Number(h.y)) ? Number(h.y) : NaN;
+          const target = isGrossMode
+            ? (Number.isFinite(Number(h.expectedGross)) ? Number(h.expectedGross)
+              : (Number.isFinite(gross) ? gross + Number(h.delta||0) : NaN))
+            : 2;
+          const strokes = (isGrossMode && Number.isFinite(target) && Number.isFinite(par)) ? target-par : NaN;
+          return {
+            hole:Number(h.hole||idx+1), par, si, yard, gross, points, strokes, target,
+            delta:Number(h.delta||0), cost:Math.max(0,Number(h.cost||0)), gain:Math.max(0,Number(h.gain||0)),
+            intelFallback:true
+          };
+        });
+        const actual = isGrossMode
+          ? (Number.isFinite(Number(actualTotal)) ? Number(actualTotal) : hs.reduce((a,h)=>a+(Number.isFinite(h.gross)?h.gross:0),0))
+          : (Number.isFinite(Number(actualTotal)) ? Number(actualTotal) : hs.reduce((a,h)=>a+(Number.isFinite(h.points)?h.points:0),0));
+        const target = isGrossMode
+          ? (Number.isFinite(Number(expectedTotal)) ? Number(expectedTotal) : actual + Number(roundDelta||0))
+          : hs.length*2;
+        const losses=hs.filter(h=>h.cost>0).sort((a,b)=>(b.cost-a.cost)||(a.hole-b.hole));
+        const totalLoss=losses.reduce((a,h)=>a+h.cost,0);
+        const top3Loss=losses.slice(0,3).reduce((a,h)=>a+h.cost,0);
+        const topSet=new Set(losses.slice(0,3).map(h=>h.hole));
+        Object.assign(exactHandicap,{
+          ok:true,basis,ch:Number.isFinite(Number(virtualCH))?Number(virtualCH):NaN,holes:hs,actual,target,
+          delta:Number(roundDelta||0),losses,totalLoss,top3Loss,damageShare:totalLoss?top3Loss/totalLoss:0,
+          restDelta:hs.filter(h=>!topSet.has(h.hole)).reduce((a,h)=>a+Number(h.delta||0),0),
+          reusedPostRoundIntel:true
+        });
+      } catch(e) { try{console.error("Guaranteed current-round snapshot failed:",e);}catch(_){} }
+    }
+
     // Exact handicap-target history for the visual action cards.
     const exactCategories = (() => {
       try{
@@ -12893,31 +12942,46 @@ const postRoundIntel = (() => {
       }
     })();
 
-    // If the detailed Par/SI layout is missing for a first recorded round,
-    // exactCategories may legitimately have no gross-based round summary even
-    // though the Stableford fallback above has a complete 18-hole performance
-    // picture. Seed a one-round baseline so the report renders a useful Part 2
-    // instead of appearing broken. Do not call these gross doubles/pars.
-    if (exactHandicap?.ok && exactHandicap?.basis === "stableford" && exactCategories?.ok && !(exactCategories.roundSummaries||[]).length) {
-      const hs=Array.isArray(exactHandicap.holes)?exactHandicap.holes:[];
-      const dateRaw=latest?.date||latest?.roundDate||latest?.playedAt||latest?.played_on||"";
-      const dateObj=new Date(dateRaw);
-      const dateLabel=dateRaw ? (isNaN(dateObj.getTime())?String(dateRaw):dateObj.toLocaleDateString(undefined,{day:"2-digit",month:"short"})) : "R1";
-      exactCategories.roundSummaries=[{
-        ri:0,dateLabel,
-        course:String(latest?.courseName||latest?.course||""),
-        tee:String(latest?.teeName||latest?.teeLabel||latest?.tee||""),
-        ch:exactHandicap.ch,
-        actual:exactHandicap.actual,
-        target:exactHandicap.target,
-        delta:exactHandicap.delta,
-        top3Loss:exactHandicap.top3Loss,
-        parsOrBetter:hs.filter(h=>Number(h.points)>=2).length,
-        doublesPlus:hs.filter(h=>Number(h.points)===0).length,
-        birdiesPlus:hs.filter(h=>Number(h.points)>=3).length,
-        holes:hs,
-        metricBasis:"stableford"
-      }];
+    // GUARANTEED ONE-ROUND DNA.
+    // Previous rounds add confidence, but are never required to build the current
+    // 2026 profile. If the historical category pass produced no summary, derive
+    // the complete current profile directly from the snapshot that Part 1 uses.
+    if (exactHandicap?.ok && (!(exactCategories?.ok) || !(exactCategories.roundSummaries||[]).length)) {
+      try {
+        const hs=Array.isArray(exactHandicap.holes)?exactHandicap.holes:[];
+        const map=new Map();
+        const yBand=y=>{const n=Number(y);if(!Number.isFinite(n))return null;if(n<150)return "<150";if(n<=200)return "150–200";if(n<=350)return "201–350";if(n<=420)return "351–420";return "420+";};
+        const sBand=si=>{const n=Number(si);if(!Number.isFinite(n))return null;if(n<=6)return "SI 1–6";if(n<=12)return "SI 7–12";return "SI 13–18";};
+        const add=(type,label,h)=>{
+          if(!label||!Number.isFinite(Number(h.delta)))return;
+          const key=`${type}|${label}`;
+          const x=map.get(key)||{type,label,displayLabel:`${type}: ${label}`,sum:0,n:0,roundSet:new Set(),bad:0};
+          x.sum+=Number(h.delta);x.n++;x.roundSet.add(0);if(Number(h.delta)<0)x.bad++;map.set(key,x);
+        };
+        hs.forEach(h=>{
+          if(Number.isFinite(Number(h.par))) add("Par",`Par ${Number(h.par)}`,h);
+          add("Stroke Index",sBand(h.si),h);
+          add("Yardage",yBand(h.yard),h);
+        });
+        const rows=Array.from(map.values()).map(x=>({...x,rounds:1,avg:x.n?x.sum/x.n:NaN,status:"CURRENT ROUND",badRate:x.n?x.bad/x.n:0})).filter(x=>Number.isFinite(x.avg));
+        const keep=[];
+        ["Par","Stroke Index","Yardage"].forEach(type=>{const r=rows.filter(x=>x.type===type&&x.avg>0.05).sort((a,b)=>b.avg-a.avg)[0];if(r)keep.push(r);});
+        const bad=rows.filter(x=>x.avg<-0.05).sort((a,b)=>a.avg-b.avg);
+        const fix=bad[0]||null, watch=(fix?bad.find(x=>x.type!==fix.type):null)||bad[1]||null;
+        const dateRaw=latest?.date||latest?.roundDate||latest?.playedAt||latest?.played_on||"";
+        const dateObj=new Date(dateRaw);
+        const dateLabel=dateRaw?(isNaN(dateObj.getTime())?String(dateRaw):dateObj.toLocaleDateString(undefined,{day:"2-digit",month:"short"})):"R1";
+        const doublesPlus=hs.filter(h=>Number.isFinite(Number(h.gross))&&Number.isFinite(Number(h.par))&&(Number(h.gross)-Number(h.par))>=2).length;
+        const parsOrBetter=hs.filter(h=>Number.isFinite(Number(h.gross))&&Number.isFinite(Number(h.par))&&(Number(h.gross)-Number(h.par))<=0).length;
+        const birdiesPlus=hs.filter(h=>Number.isFinite(Number(h.gross))&&Number.isFinite(Number(h.par))&&(Number(h.gross)-Number(h.par))<=-1).length;
+        const summary={ri:0,dateLabel,course:String(latest?.courseName||latest?.course||""),tee:String(latest?.teeName||latest?.teeLabel||latest?.tee||""),ch:exactHandicap.ch,actual:exactHandicap.actual,target:exactHandicap.target,delta:exactHandicap.delta,top3Loss:exactHandicap.top3Loss,doublesPlus,parsOrBetter,birdiesPlus,holes:hs,metricBasis:exactHandicap.basis};
+        const holeRows=hs.map(h=>({hole:h.hole,appearances:1,totalDelta:Number(h.delta||0),totalCost:Number(h.cost||0),badCount:Number(h.delta)<0?1:0,goodCount:Number(h.delta)>0?1:0,avgDelta:Number(h.delta||0),badRate:Number(h.delta)<0?1:0,goodRate:Number(h.delta)>0?1:0,dominantPar:Number(h.par)}));
+        const defs=[{key:"start",label:"Holes 1–3",from:1,to:3},{key:"early",label:"Holes 4–6",from:4,to:6},{key:"middle",label:"Holes 7–12",from:7,to:12},{key:"late",label:"Holes 13–15",from:13,to:15},{key:"finish",label:"Holes 16–18",from:16,to:18}];
+        const phases=defs.map(p=>{const x=hs.filter(h=>h.hole>=p.from&&h.hole<=p.to);const d=x.reduce((a,h)=>a+Number(h.delta||0),0);return {...p,rounds:1,holes:x.length,avgPerRound:d,badRoundRate:d<0?1:0};}).filter(p=>p.holes);
+        const startPhase=phases.find(p=>p.key==="start")||null;
+        const courseDNA={holeRows,nemesis:[],strongholds:[],phases,startPhase,startPattern:null,hole1Pattern:null,specificityInsight:null};
+        Object.assign(exactCategories,{ok:true,rows,keep,fix,watch,roundSummaries:[summary],goodBad:null,courseDNA,oneRoundFallback:true});
+      } catch(e) { try{console.error("One-round DNA fallback failed:",e);}catch(_){} }
     }
 
     const eventName=String(latest?.eventName||latest?.event||latest?.competition||latest?.courseName||latest?.course||"Latest round");
