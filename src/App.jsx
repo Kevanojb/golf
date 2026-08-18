@@ -15196,10 +15196,11 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap}){
       return `<section class="WPplayer"><div class="WPplayerHead"><div><div class="WPeyebrow" style="color:#0b7a6e;opacity:1">PERSONALISED ROUTE</div><div class="WPname">${WP_escape(p?.name||"Player")}</div><div class="WPmeta">HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):"—"} · Course Handicap ${l.ch} ${l.teeName?`· ${WP_escape(l.teeName)}`:""}</div></div><div style="text-align:right"><div class="WPk">WIN TARGET</div><div class="WPtarget">${plan.total} pts</div></div></div><div class="WPribbon"><div><div class="WPsmall">The simple equation</div><b>36 + ${extras} = ${plan.total}</b><div style="font-size:10px;opacity:.75;margin-top:3px">Handicap pace plus ${extras} extra point${extras===1?"":"s"}</div></div><div><div class="WPsmall">Front 9 plan</div><b>${plan.front} pts</b></div><div><div class="WPsmall">Back 9 plan</div><b>${plan.back} pts</b></div></div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route to ${plan.total}</div><div class="WPprintNote">Green = planned gain. Grey = protect handicap pace. Amber = a controlled concession if the target ever requires one.</div><div class="WPbar"><span style="width:${pct}%"></span></div><div class="WPholes" style="margin-top:10px">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Three things to remember</div><div class="WPrules"><div class="WPrule"><div class="WPk">1 · PROTECT</div><strong>Do not chase points on every hole.</strong><div class="WPwhy">A 2-point net par is doing its job. The plan only asks for gains where they are most efficient.</div></div><div class="WPrule"><div class="WPk">2 · ATTACK</div><strong class="WPattack">${WP_escape(attackText)}</strong><div class="WPwhy">These are the highest-value places to find the extra ${extras} point${extras===1?"":"s"}.</div></div><div class="WPrule"><div class="WPk">3 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong><div class="WPwhy">These are your lowest-opportunity holes. One point is recoverable; a blob creates pressure.</div></div></div></div><div class="WPfoot">Plan basis: previous winner ${WP_escape(event.winnerName)} ${event.winningPoints.toFixed(0)} pts → target ${event.targetPoints.toFixed(0)} pts. Hole targets use this player's current handicap, the selected course Par/SI layout and the player's recorded scoring profile where available.</div></section>`;
     }).join("");
     return {ok:true,event,plans,htmlFragment:`${head}${body}</div>`};
-  }catch(e){ console.error("Winning plan failed",e); return {ok:false,error:"Could not build winning plan."}; }
+  }catch(e){ console.error("Winning plan failed",e); return {ok:false,error:`Could not build winning plan${e?.message ? `: ${e.message}` : "."}`}; }
 }
 
 
+// Pre-Round planner: if data is not loaded, scan ALL stored games and return to this view.
 function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, setView, runSeasonAnalysis }) {
   const courses = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
   const players = React.useMemo(() => (Array.isArray(seasonModel?.players) ? seasonModel.players : [])
@@ -15231,7 +15232,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       window.__dslSeasonReportParams = {
         model: seasonModel,
         playerName: `Winning-Plan-${r.event.courseName || "course"}`,
-        yearLabel: seasonYear,
+        yearLabel: "All Years",
         seasonLimit: "all",
         scoringMode: "stableford",
         lensMode: "winningPlan",
@@ -15239,8 +15240,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       };
       PR_showInlineSeasonReport(r.htmlFragment);
     } catch (e) {
-      console.error(e);
-      alert("Could not build winning plan.");
+      console.error("Winning plan UI failed:", e);
+      alert(`Could not build winning plan${e?.message ? `: ${e.message}` : "."}`);
     }
   };
 
@@ -15272,9 +15273,9 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       {!hasModel ? (
         <section className="content-card p-5 md:p-7">
           <div className="text-xs font-black uppercase tracking-widest text-neutral-400">Season data required</div>
-          <div className="mt-1 text-2xl font-black text-neutral-900">Load the season once, then plan any course.</div>
-          <div className="mt-2 text-sm text-neutral-600">The planner uses the courses, previous winners, player handicaps and hole-by-hole history already stored in Den Golf.</div>
-          <button className="btn-primary mt-4" onClick={()=>runSeasonAnalysis && runSeasonAnalysis()}>Load Season Data</button>
+          <div className="mt-1 text-2xl font-black text-neutral-900">Load all golf history, then plan any course.</div>
+          <div className="mt-2 text-sm text-neutral-600">The planner scans every stored year for courses, previous winners and hole-by-hole history, then returns you straight here. Current-year handicap data is used separately for each player.</div>
+          <button className="btn-primary mt-4" onClick={()=>runSeasonAnalysis && runSeasonAnalysis({ afterView: "pre_round" })}>Load All Golf History</button>
         </section>
       ) : (
         <>
