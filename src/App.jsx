@@ -3298,16 +3298,16 @@ function Home({
 
 
           {/* PRE-ROUND INTELLIGENCE */}
-          <button className="hm-card heroish" onClick={() => setView("pre_round")} style={{ textAlign: "left", cursor: "pointer", borderColor:"rgba(5,150,105,.28)", background:"linear-gradient(135deg,rgba(236,253,245,.96),rgba(255,255,255,.98))" }}>
+          <button className="hm-card heroish" onClick={() => setView("pre_round")} style={{ textAlign: "left", cursor: "pointer", color:"#0f172a", border:"1px solid rgba(5,150,105,.35)", background:"linear-gradient(135deg,#ecfdf5 0%,#ffffff 55%,#eff6ff 100%)", boxShadow:"0 14px 34px rgba(15,23,42,.08)" }}>
             <div className="hm-card-inner">
               <div style={{ minWidth: 0 }}>
                 <div style={{display:"inline-flex",alignItems:"center",gap:7,padding:"5px 9px",borderRadius:999,background:"rgba(5,150,105,.10)",color:"#047857",fontSize:10,fontWeight:900,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8}}>⛳ Pre-Round Intelligence</div>
-                <h3>Winning Game Plan</h3>
-                <div className="hm-desc">Know exactly what a winning score looks like before you tee off.</div>
+                <h3 style={{color:"#0f172a"}}>Winning Game Plan</h3>
+                <div className="hm-desc" style={{color:"#475569"}}>Know exactly what a winning score looks like before you tee off.</div>
                 <ul>
-                  <li><span className="hm-ico2">🏆</span><span>See what won at the course last time</span></li>
-                  <li><span className="hm-ico2">🎯</span><span>Target one point more than the previous winner</span></li>
-                  <li><span className="hm-ico2">🧠</span><span>Get a personalised hole-by-hole route for each golfer</span></li>
+                  <li><span className="hm-ico2">🏆</span><span style={{color:"#334155"}}>See what won at the course last time</span></li>
+                  <li><span className="hm-ico2">🎯</span><span style={{color:"#334155"}}>Target one point more than the previous winner</span></li>
+                  <li><span className="hm-ico2">🧠</span><span style={{color:"#334155"}}>Get a personalised hole-by-hole route for each golfer</span></li>
                 </ul>
               </div>
               <div className="hm-card-action">
@@ -7402,7 +7402,7 @@ const parLeaders = React.useMemo(() => {
         // identity
         playerName: String(cur?.name || ""),
         // current filters
-        yearLabel: seasonYear,
+        yearLabel: "All-Years",
         seasonLimit,
         scoringMode,
         lensMode: (localStorage.getItem("dsl_lens") || "pointsField"),
@@ -15034,21 +15034,72 @@ function WP_findLatestEventAtCourse(model, courseKey){
   e.winnerName=String(winner.player?.name||"Winner"); e.winningPoints=WP_points(winner.round); e.targetPoints=e.winningPoints+1; e.winnerRound=winner.round;
   return e;
 }
-function WP_latestPlayerHcap(p){
+function WP_currentYearHandicapMap(seasonRounds, calendarYear){
+  // Mirrors the Current-year handicap export logic so Pre-Round Intelligence
+  // always uses the player's latest current-year HI, while course/history
+  // analysis can still use every year stored in Den Golf.
+  const year = Number(calendarYear) || new Date().getFullYear();
+  const byKey = new Map();
+  const normName = v => WP_norm(v);
+  const readPts = obj => {
+    let pts=WP_num(obj?.pts,obj?.points,obj?.stableford,obj?.sf,obj?.totalPoints,obj?.netPoints);
+    if(!Number.isFinite(pts) && Array.isArray(obj?.perHole)) pts=obj.perHole.reduce((a,b)=>a+(Number(b)||0),0);
+    return pts;
+  };
+  const readHI = obj => WP_num(obj?.startExact,obj?.start_exact,obj?.hi,obj?.HI,obj?.index,obj?.handicap,obj?.hcap,obj?.exact,obj?.hiExact,obj?.handicapIndex,obj?.handicap_index);
+  const dateMsFor = (sr,pl) => {
+    const n=WP_num(pl?.dateMs,pl?.date_ms,sr?.dateMs,sr?.date_ms,sr?.parsed?.dateMs);
+    if(Number.isFinite(n)&&n>1000000000) return n;
+    const raw=pl?.date||pl?.roundDate||sr?.date||sr?.parsed?.date;
+    const d=raw?new Date(raw):null; return d&&!isNaN(d.getTime())?d.getTime():NaN;
+  };
+  for(const sr of (Array.isArray(seasonRounds)?seasonRounds:[])){
+    const parsed=sr?.parsed||sr;
+    const players=Array.isArray(parsed?.players)?parsed.players:[];
+    if(!players.length) continue;
+    const dated=players.map(pl=>({pl,dateMs:dateMsFor(sr,pl),pts:readPts(pl),back9:Number(pl?.back9??pl?.backNine??0),key:normName(pl?.name||pl?.player||pl?.playerName)}));
+    const validForYear=dated.filter(x=>Number.isFinite(x.dateMs)&&new Date(x.dateMs).getFullYear()===year);
+    if(!validForYear.length) continue;
+    const ranked=validForYear.filter(x=>x.key&&Number.isFinite(x.pts)).slice().sort((a,b)=>(b.pts-a.pts)||(b.back9-a.back9));
+    const top=ranked[0];
+    const winnerKeys=new Set(top?ranked.filter(x=>x.pts===top.pts&&x.back9===top.back9).map(x=>x.key):[]);
+    for(const x of validForYear){
+      if(!x.key) continue;
+      const hi=readHI(x.pl);
+      if(!Number.isFinite(hi)) continue;
+      let next=hi;
+      if(Number.isFinite(x.pts) && typeof computeNewExactHandicap==='function'){
+        try{
+          const gender=String(x.pl?.gender||x.pl?.sex||'M');
+          const calc=computeNewExactHandicap(hi,gender,x.pts,x.back9,winnerKeys.has(x.key));
+          if(Number.isFinite(Number(calc?.nextExact))) next=Number(calc.nextExact);
+        }catch(_){}
+      }
+      const prev=byKey.get(x.key);
+      if(!prev || !Number.isFinite(prev.dateMs) || x.dateMs>=prev.dateMs){
+        byKey.set(x.key,{name:String(x.pl?.name||x.pl?.player||x.pl?.playerName||''),previousHI:hi,newHI:Math.max(0,Math.min(36,next)),dateMs:x.dateMs,points:x.pts,source:'Current-year handicap export'});
+      }
+    }
+  }
+  return byKey;
+}
+function WP_latestPlayerHcap(p, handicapMap){
+  const fromExport=handicapMap?.get?.(WP_norm(p?.name));
+  if(Number.isFinite(Number(fromExport?.newHI))) return Number(fromExport.newHI);
   const s=WP_series(p); const r=s.length?s[s.length-1]:null;
   return WP_num(r?.startExact,r?.handicapIndex,r?.index,r?.hi,r?.hcap,r?.playingHcap,p?.startExact,p?.handicapIndex,p?.index,p?.hi,p?.hcap,p?.metrics?.avgHcap);
 }
 function WP_roundHasLayout(r){
   const ps=WP_pars(r), si=WP_si(r); return ps.filter(Number.isFinite).length>=9&&si.filter(Number.isFinite).length>=9;
 }
-function WP_layoutForPlayer(model,event,p,courseKey){
+function WP_layoutForPlayer(model,event,p,courseKey,handicapMap){
   const mineInEvent=event?.entries?.find(x=>String(x.player?.name||"")===String(p?.name||""))?.round||null;
   const sameCourse=WP_series(p).filter(r=>WP_norm(WP_course(r))===WP_norm(courseKey)).reverse();
   let base=[mineInEvent,...sameCourse,event?.winnerRound,...(event?.entries||[]).map(x=>x.round)].find(r=>r&&WP_roundHasLayout(r))||mineInEvent||sameCourse[0]||event?.winnerRound||event?.entries?.[0]?.round||null;
   if(!base) return null;
   const ps=WP_pars(base), sis=WP_si(base), ys=WP_yards(base);
   const parTotal=ps.reduce((s,v)=>s+(Number.isFinite(v)?v:0),0);
-  const hi=WP_latestPlayerHcap(p);
+  const hi=WP_latestPlayerHcap(p,handicapMap);
   const slope=WP_num(base?.teeSlope,base?.slope,base?.slopeRating,base?.courseSlope);
   const rating=WP_num(base?.teeRating,base?.rating,base?.courseRating);
   let ch=NaN;
@@ -15075,8 +15126,8 @@ function WP_playerHistorySignals(p,courseKey){
   const avg=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:NaN;
   return {holeAvg:exact.map(avg),parAvg:new Map(Array.from(parMap.entries()).map(([k,v])=>[k,avg(v)]))};
 }
-function WP_makePlayerPlan(model,event,p,courseKey){
-  const layout=WP_layoutForPlayer(model,event,p,courseKey); if(!layout) return null;
+function WP_makePlayerPlan(model,event,p,courseKey,handicapMap){
+  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap); if(!layout) return null;
   const sig=WP_playerHistorySignals(p,courseKey); const holes=[];
   for(let i=0;i<18;i++){
     const par=Number(layout.pars[i]), si=Number(layout.si[i]), yard=Number(layout.yards[i]);
@@ -15122,12 +15173,12 @@ function WP_makePlayerPlan(model,event,p,courseKey){
   return {player:p,layout,holes,total,attacks,dangers,front,back};
 }
 function WP_escape(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
-function WP_generateWinningPlanHTML({model,courseKey,playerNames}){
+function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap}){
   try{
     const event=WP_findLatestEventAtCourse(model,courseKey); if(!event)return{ok:false,error:"No previous Stableford event was found for that course."};
     const players=(Array.isArray(model?.players)?model.players:[]).filter(p=>(playerNames||[]).includes(String(p?.name||"")));
     if(!players.length)return{ok:false,error:"Choose at least one player."};
-    const plans=players.map(p=>WP_makePlayerPlan(model,event,p,courseKey)).filter(Boolean);
+    const plans=players.map(p=>WP_makePlayerPlan(model,event,p,courseKey,handicapMap)).filter(Boolean);
     if(!plans.length)return{ok:false,error:"The selected course does not have enough Par / Stroke Index data to build a plan."};
     const c=event.courseName||courseKey;
     const css=`<style>
@@ -15149,13 +15200,14 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames}){
 }
 
 
-function PreRoundPlannerView({ seasonModel, seasonYear, setView, runSeasonAnalysis }) {
+function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, setView, runSeasonAnalysis }) {
   const courses = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
   const players = React.useMemo(() => (Array.isArray(seasonModel?.players) ? seasonModel.players : [])
     .filter(p => p && String(p?.name || "").trim())
     .sort((a,b)=>String(a.name).localeCompare(String(b.name))), [seasonModel]);
   const [courseKey, setCourseKey] = React.useState("");
   const [selectedPlayers, setSelectedPlayers] = React.useState([]);
+  const handicapMap = React.useMemo(() => WP_currentYearHandicapMap(seasonRoundsAllYears, currentYear), [seasonRoundsAllYears, currentYear]);
 
   React.useEffect(() => {
     if (!courseKey && courses.length) setCourseKey(courses[0].key);
@@ -15174,7 +15226,7 @@ function PreRoundPlannerView({ seasonModel, seasonYear, setView, runSeasonAnalys
 
   const generatePlan = () => {
     try {
-      const r = WP_generateWinningPlanHTML({ model: seasonModel, courseKey, playerNames: selectedPlayers });
+      const r = WP_generateWinningPlanHTML({ model: seasonModel, courseKey, playerNames: selectedPlayers, handicapMap });
       if (!r?.ok) { alert(r?.error || "Could not build winning plan."); return; }
       window.__dslSeasonReportParams = {
         model: seasonModel,
@@ -15204,8 +15256,9 @@ function PreRoundPlannerView({ seasonModel, seasonYear, setView, runSeasonAnalys
             <div>
               <button type="button" onClick={()=>setView("home")} className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-black text-white/90 hover:bg-white/15">← Home</button>
               <div className="text-[10px] font-black tracking-[.2em] uppercase text-emerald-200">Den Golf · Pre-Round Intelligence</div>
+              <div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[10px] font-black text-white">ALL YEARS COURSE HISTORY</span><span className="rounded-full border border-blue-200/30 bg-blue-300/10 px-3 py-1 text-[10px] font-black text-blue-100">LATEST {currentYear} HANDICAPS</span></div>
               <h1 className="mt-2 text-3xl md:text-5xl font-black tracking-[-.04em] leading-none">Build the route to a win.</h1>
-              <p className="mt-3 max-w-3xl text-sm md:text-base text-white/75 leading-relaxed">Choose where you are playing next, see what won there last time, then give each golfer a personalised 18-hole Stableford target that reaches one point more with the least unnecessary risk.</p>
+              <p className="mt-3 max-w-3xl text-sm md:text-base text-white/75 leading-relaxed">Choose where you are playing next, see what won there last time across all recorded years, then give each golfer a personalised 18-hole Stableford target that reaches one point more with the least unnecessary risk.</p>
             </div>
             <div className="grid grid-cols-3 gap-2 min-w-[300px]">
               <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur"><div className="text-[9px] font-black uppercase tracking-widest text-white/55">Handicap pace</div><div className="mt-1 text-2xl font-black">36</div></div>
@@ -15246,9 +15299,9 @@ function PreRoundPlannerView({ seasonModel, seasonYear, setView, runSeasonAnalys
               <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
                 <div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white text-sm font-black">3</div><div><div className="text-[10px] font-black tracking-widest uppercase text-slate-400">Golfers</div><div className="font-black text-slate-900">Who needs a plan?</div></div></div>
                 <div className="mt-4 max-h-52 overflow-auto rounded-2xl border border-slate-200 bg-white p-2">
-                  {players.map(p=>{ const name=String(p.name); const checked=selectedPlayers.includes(name); return <label key={name} className={`flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold ${checked?"bg-emerald-50 text-emerald-900":"text-slate-700 hover:bg-slate-50"}`}><input type="checkbox" checked={checked} onChange={()=>togglePlayer(name)} className="h-4 w-4"/><span className="flex-1">{name}</span>{checked?<span className="text-emerald-600">✓</span>:null}</label>; })}
+                  {players.map(p=>{ const name=String(p.name); const checked=selectedPlayers.includes(name); const hx=handicapMap.get(WP_norm(name)); const hi=Number(hx?.newHI); return <label key={name} className={`flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-bold ${checked?"bg-emerald-50 text-emerald-900":"text-slate-700 hover:bg-slate-50"}`}><input type="checkbox" checked={checked} onChange={()=>togglePlayer(name)} className="h-4 w-4"/><span className="flex-1">{name}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ${Number.isFinite(hi)?"bg-blue-50 text-blue-700":"bg-slate-100 text-slate-400"}`}>{Number.isFinite(hi)?`HI ${hi.toFixed(1)}`:"HI —"}</span>{checked?<span className="text-emerald-600">✓</span>:null}</label>; })}
                 </div>
-                <div className="mt-3 flex items-center justify-between gap-3"><div className="text-xs font-bold text-slate-500">{selectedPlayers.length} selected</div><button type="button" className="text-xs font-black text-slate-700 underline" onClick={()=>setSelectedPlayers(selectedPlayers.length===players.length?[]:players.map(p=>String(p.name)))}>{selectedPlayers.length===players.length?"Clear all":"Select all"}</button></div>
+                <div className="mt-3 flex items-center justify-between gap-3"><div className="text-xs font-bold text-slate-500">{selectedPlayers.length} selected</div><button type="button" className="text-xs font-black text-slate-700 underline" onClick={()=>setSelectedPlayers(selectedPlayers.length===players.length?[]:players.map(p=>String(p.name)))}>{selectedPlayers.length===players.length?"Clear all":"Select all"}</button></div><div className="mt-2 rounded-xl bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-800">Handicap source: latest {currentYear} handicap from the current-year handicap export.</div>
               </div>
             </div>
           </section>
@@ -19114,6 +19167,16 @@ const handleAdminPassword = React.useCallback((pw) => {
           return _filterSeasonRounds(Array.isArray(seasonRounds) ? seasonRounds : [], seasonYear, seasonLimit);
         }, [seasonRounds, seasonYear, seasonLimit]);
 
+        // Pre-Round Intelligence deliberately ignores the Season Analysis year/window.
+        // It uses every stored round from every year, while player handicaps are
+        // sourced separately from the current calendar-year handicap export logic.
+        const preRoundModelAllYears = React.useMemo(() => {
+          try {
+            const all = _filterSeasonRounds(Array.isArray(seasonRounds) ? seasonRounds : [], "All", "All");
+            return buildSeasonPlayerModel(all, { hiddenKeys: hiddenKeySet });
+          } catch (e) { return null; }
+        }, [seasonRounds, hiddenPlayerKeys]);
+
         // All rounds in the selected season (ignores seasonLimit)
         // Used by Winner Odds so the model can use the full in-season history.
         const seasonRoundsInSeasonAll = React.useMemo(() => {
@@ -21683,8 +21746,9 @@ if (res.error) toast("Error: " + res.error.message);
 )}
 {view === "pre_round" && (
   <PreRoundPlannerView
-    seasonModel={seasonModel}
-    seasonYear={seasonYear}
+    seasonModel={preRoundModelAllYears}
+    seasonRoundsAllYears={seasonRounds}
+    currentYear={new Date().getFullYear()}
     setView={setView}
     runSeasonAnalysis={loadAllGamesAndBuildPlayerModel}
   />
