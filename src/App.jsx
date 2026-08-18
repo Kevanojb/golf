@@ -12495,13 +12495,16 @@ const postRoundIntel = (() => {
         const sis=arrSI(latest);
         const ys=arrYards(latest);
         const gs=arrGross(latest);
+        const pts=arrPts(latest);
 
-        // Calculate the actual Course Handicap for this round.
-        // Prefer WHS HI/Slope/Rating, then fall back to stored playing hcap.
+        // Calculate the actual Course Handicap for this round when the detailed
+        // course layout exists. This remains the preferred / exact gross route.
         const parTotal=ps.reduce((s,v)=>s+(Number.isFinite(Number(v))?Number(v):0),0);
         const hi=Number.isFinite(Number(latest?.startExact))?Number(latest.startExact)
           : Number.isFinite(Number(latest?.handicapIndex))?Number(latest.handicapIndex)
           : Number.isFinite(Number(latest?.handicap))?Number(latest.handicap)
+          : Number.isFinite(Number(__sourcePlayer?.startExact))?Number(__sourcePlayer.startExact)
+          : Number.isFinite(Number(__sourcePlayer?.handicapIndex))?Number(__sourcePlayer.handicapIndex)
           : NaN;
         const slope=Number.isFinite(Number(latest?.teeSlope))?Number(latest.teeSlope)
           : Number.isFinite(Number(latest?.slope))?Number(latest.slope)
@@ -12514,12 +12517,15 @@ const postRoundIntel = (() => {
 
         let ch=NaN;
         if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0){
-          ch=WHS_courseHandicap(hi,slope,rating,parTotal);
+          try { ch=WHS_courseHandicap(hi,slope,rating,parTotal); } catch(_) {}
         }
         if(!Number.isFinite(ch)){
           ch=Number.isFinite(Number(latest?.courseHandicap))?Number(latest.courseHandicap)
             : Number.isFinite(Number(latest?.playingHcap))?Number(latest.playingHcap)
             : Number.isFinite(Number(latest?.hcap))?Number(latest.hcap)
+            : Number.isFinite(Number(__sourcePlayer?.courseHandicap))?Number(__sourcePlayer.courseHandicap)
+            : Number.isFinite(Number(__sourcePlayer?.playingHcap))?Number(__sourcePlayer.playingHcap)
+            : Number.isFinite(Number(__sourcePlayer?.hcap))?Number(__sourcePlayer.hcap)
             : NaN;
         }
 
@@ -12530,47 +12536,101 @@ const postRoundIntel = (() => {
           return Math.floor(h/18)+((h%18)>0&&s<=(h%18)?1:0);
         };
 
-        const holes=[];
-        const n=Math.min(18,Math.max(ps.length,sis.length,ys.length,gs.length));
-        for(let i=0;i<n;i++){
+        const finishSnapshot=(holes, actual, target, basis, extra={})=>{
+          const delta=Number(target)-Number(actual);
+          const losses=holes.filter(h=>Number(h.cost)>0).sort((a,b)=>(Number(b.cost)-Number(a.cost))||(a.hole-b.hole));
+          const totalLoss=losses.reduce((s,h)=>s+Number(h.cost||0),0);
+          const top3Loss=losses.slice(0,3).reduce((s,h)=>s+Number(h.cost||0),0);
+          const damageShare=totalLoss?top3Loss/totalLoss:0;
+          const topSet=new Set(losses.slice(0,3).map(h=>h.hole));
+          const restDelta=holes.filter(h=>!topSet.has(h.hole)).reduce((s,h)=>s+Number(h.delta||0),0);
+          return {ok:true,basis,ch,holes,actual,target,delta,losses,totalLoss,top3Loss,damageShare,restDelta,...extra};
+        };
+
+        // ----------------------------------------------------------
+        // ROUTE A — exact gross / playing-to-handicap snapshot.
+        // ----------------------------------------------------------
+        const grossHoles=[];
+        const nGross=Math.min(18,Math.max(ps.length,sis.length,ys.length,gs.length));
+        for(let i=0;i<nGross;i++){
           const par=Number(ps[i]),si=Number(sis[i]),yard=Number(ys[i]),gross=Number(gs[i]);
           if(!Number.isFinite(par)||!Number.isFinite(gross)||gross<=0)continue;
           const strokes=rec(si);
           const target=par+strokes;
-          holes.push({
+          grossHoles.push({
             hole:i+1,par,si,yard:Number.isFinite(yard)?yard:NaN,
-            gross,strokes,target,
+            gross,points:Number.isFinite(Number(pts[i]))?Number(pts[i]):NaN,
+            strokes,target,
             delta:target-gross,
             cost:Math.max(0,gross-target),
             gain:Math.max(0,target-gross)
           });
         }
-        if(!holes.length){
-          try{
-            console.warn("Exact handicap snapshot has no usable holes", {
-              player: String(__sourcePlayer?.name || playerName || ""),
-              round: latest,
-              pars: ps,
-              si: sis,
-              gross: gs,
-              teeLabel: latest?.teeLabel || latest?.teeName || latest?.tee || "",
-              sourceSeriesCount: Array.isArray(__sourcePlayer?.series) ? __sourcePlayer.series.length : 0
-            });
-          }catch(_){}
-          return {ok:false};
+        if(grossHoles.length){
+          const actual=grossHoles.reduce((s,h)=>s+h.gross,0);
+          const target=grossHoles.reduce((s,h)=>s+h.target,0);
+          return finishSnapshot(grossHoles,actual,target,"gross");
         }
 
-        const actual=holes.reduce((s,h)=>s+h.gross,0);
-        const target=holes.reduce((s,h)=>s+h.target,0);
-        const delta=target-actual;
-        const losses=holes.filter(h=>h.cost>0).sort((a,b)=>(b.cost-a.cost)||(a.hole-b.hole));
-        const totalLoss=losses.reduce((s,h)=>s+h.cost,0);
-        const top3Loss=losses.slice(0,3).reduce((s,h)=>s+h.cost,0);
-        const damageShare=totalLoss?top3Loss/totalLoss:0;
-        const topSet=new Set(losses.slice(0,3).map(h=>h.hole));
-        const restDelta=holes.filter(h=>!topSet.has(h.hole)).reduce((s,h)=>s+h.delta,0);
+        // ----------------------------------------------------------
+        // ROUTE B — Stableford fallback.
+        // A first-time player can have a perfectly valid scorecard in the
+        // Overview (e.g. 37 points / 80 gross) while the historical round
+        // object has no copied Par/SI layout yet. Do NOT fail the report.
+        // Two Stableford points = playing exactly to handicap on a hole, so
+        // points-vs-2 gives a direct playing-to-handicap measure without
+        // needing Par or Stroke Index. A 0-point hole is represented as -2,
+        // i.e. at least net-double-bogey damage; this is deliberately labelled
+        // as a Stableford basis in the report rather than pretending it is an
+        // exact gross-hole reconstruction.
+        // ----------------------------------------------------------
+        const pointHoles=[];
+        const nPts=Math.min(18,pts.length);
+        for(let i=0;i<nPts;i++){
+          const p=Number(pts[i]);
+          if(!Number.isFinite(p)||p<0)continue;
+          const d=p-2;
+          const gross=Number(gs[i]);
+          const par=Number(ps[i]);
+          const si=Number(sis[i]);
+          const yard=Number(ys[i]);
+          pointHoles.push({
+            hole:i+1,
+            par:Number.isFinite(par)?par:NaN,
+            si:Number.isFinite(si)?si:NaN,
+            yard:Number.isFinite(yard)?yard:NaN,
+            gross:Number.isFinite(gross)&&gross>0?gross:NaN,
+            points:p,
+            strokes:Number.isFinite(si)&&Number.isFinite(ch)?rec(si):NaN,
+            target:2,
+            delta:d,
+            cost:Math.max(0,-d),
+            gain:Math.max(0,d),
+            stablefordFallback:true
+          });
+        }
+        if(pointHoles.length){
+          const actual=pointHoles.reduce((s,h)=>s+Number(h.points||0),0);
+          const target=pointHoles.length*2;
+          return finishSnapshot(pointHoles,actual,target,"stableford",{
+            pointFallback:true,
+            grossTotal:Number.isFinite(Number(latest?.gross))?Number(latest.gross)
+              : Number.isFinite(Number(latest?.grossTotal))?Number(latest.grossTotal)
+              : Number.isFinite(Number(__sourcePlayer?.gross))?Number(__sourcePlayer.gross)
+              : NaN
+          });
+        }
 
-        return {ok:true,ch,holes,actual,target,delta,losses,totalLoss,top3Loss,damageShare,restDelta};
+        try{
+          console.warn("Exact handicap snapshot has no usable gross OR Stableford holes", {
+            player: String(__sourcePlayer?.name || playerName || ""),
+            round: latest,
+            pars: ps, si: sis, gross: gs, points: pts,
+            teeLabel: latest?.teeLabel || latest?.teeName || latest?.tee || "",
+            sourceSeriesCount: Array.isArray(__sourcePlayer?.series) ? __sourcePlayer.series.length : 0
+          });
+        }catch(_){}
+        return {ok:false};
       }catch(e){
         try{console.error("Exact handicap snapshot failed:",e);}catch(_){}
         return {ok:false};
@@ -12798,6 +12858,33 @@ const postRoundIntel = (() => {
         return {ok:false,rows:[],keep:[],fix:null,watch:null};
       }
     })();
+
+    // If the detailed Par/SI layout is missing for a first recorded round,
+    // exactCategories may legitimately have no gross-based round summary even
+    // though the Stableford fallback above has a complete 18-hole performance
+    // picture. Seed a one-round baseline so the report renders a useful Part 2
+    // instead of appearing broken. Do not call these gross doubles/pars.
+    if (exactHandicap?.ok && exactHandicap?.basis === "stableford" && exactCategories?.ok && !(exactCategories.roundSummaries||[]).length) {
+      const hs=Array.isArray(exactHandicap.holes)?exactHandicap.holes:[];
+      const dateRaw=latest?.date||latest?.roundDate||latest?.playedAt||latest?.played_on||"";
+      const dateObj=new Date(dateRaw);
+      const dateLabel=dateRaw ? (isNaN(dateObj.getTime())?String(dateRaw):dateObj.toLocaleDateString(undefined,{day:"2-digit",month:"short"})) : "R1";
+      exactCategories.roundSummaries=[{
+        ri:0,dateLabel,
+        course:String(latest?.courseName||latest?.course||""),
+        tee:String(latest?.teeName||latest?.teeLabel||latest?.tee||""),
+        ch:exactHandicap.ch,
+        actual:exactHandicap.actual,
+        target:exactHandicap.target,
+        delta:exactHandicap.delta,
+        top3Loss:exactHandicap.top3Loss,
+        parsOrBetter:hs.filter(h=>Number(h.points)>=2).length,
+        doublesPlus:hs.filter(h=>Number(h.points)===0).length,
+        birdiesPlus:hs.filter(h=>Number(h.points)>=3).length,
+        holes:hs,
+        metricBasis:"stableford"
+      }];
+    }
 
     const eventName=String(latest?.eventName||latest?.event||latest?.competition||latest?.courseName||latest?.course||"Latest round");
 
@@ -13360,6 +13447,9 @@ const scorecardIntel = (() => {
     ${(postRoundIntel?.exactHandicap?.ok) ? `
       ${(() => {
         const eh=postRoundIntel.exactHandicap;
+        const ehIsPoints=String(eh?.basis||"gross") === "stableford";
+        const ehUnit=ehIsPoints?"points":"strokes";
+        const ehUnitPerHole=ehIsPoints?"points/hole":"strokes/hole";
         const d=Number(eh.delta||0);
         const capped=Math.max(-8,Math.min(8,d));
         const angle=-90+((capped+8)/16)*180;
@@ -13390,12 +13480,12 @@ const scorecardIntel = (() => {
         const latestPriority=latestWeakness&&latestWeakness.avg<-.05
           ? {
               title:`Today's biggest leak: ${latestWeakness.label}`,
-              detail:`This round, ${latestWeakness.label} averaged ${Math.abs(latestWeakness.avg).toFixed(2)} strokes per hole worse than your handicap target across ${latestWeakness.n} holes.`
+              detail:`This round, ${latestWeakness.label} averaged ${Math.abs(latestWeakness.avg).toFixed(2)} ${ehIsPoints?"points":"strokes"} per hole worse than your handicap target across ${latestWeakness.n} holes.`
             }
           : latestCostliest.length
             ? {
                 title:`Today's damage was concentrated on ${latestCostliest.length===1?`Hole ${latestCostliest[0].hole}`:`Holes ${latestCostliest.map(h=>h.hole).join(", ")}`}`,
-                detail:`Those holes accounted for ${latestCostliest.reduce((sum,h)=>sum+Number(h.cost||0),0).toFixed(0)} strokes lost to your handicap target in this round.`
+                detail:`Those holes accounted for ${latestCostliest.reduce((sum,h)=>sum+Number(h.cost||0),0).toFixed(0)} ${ehIsPoints?"Stableford points":"strokes"} lost to your handicap target in this round.`
               }
             : {
                 title:"No clear scoring leak today",
@@ -13403,9 +13493,9 @@ const scorecardIntel = (() => {
               };
         const verdict=d>=2?"Beat handicap target":d>0?"Slightly better than handicap":d<=-3&&eh.damageShare>=.65?"Good golf, damaged by a few holes":d<0?"Below handicap target":"Played to handicap";
         const story=eh.losses.length&&eh.damageShare>=.65
-          ? `${Math.round(eh.damageShare*100)}% of all strokes lost to handicap target came from the three costliest holes. The other holes combined were ${eh.restDelta>=0?`${eh.restDelta.toFixed(0)} strokes better than target`:`${Math.abs(eh.restDelta).toFixed(0)} strokes below target`}.`
-          : d>0?`You beat your handicap target by ${d.toFixed(0)} strokes.`:d<0?`You finished ${Math.abs(d).toFixed(0)} strokes above handicap target.`:"You played exactly to handicap target.";
-        const latestSummary=d>0?`${Math.abs(d).toFixed(0)} strokes better than target`:d<0?`${Math.abs(d).toFixed(0)} strokes worse than target`:"Played exactly to target";
+          ? `${Math.round(eh.damageShare*100)}% of all ${ehIsPoints?"Stableford damage":"strokes lost"} to handicap target came from the three costliest holes. The other holes combined were ${eh.restDelta>=0?`${eh.restDelta.toFixed(0)} ${ehUnit} better than target`:`${Math.abs(eh.restDelta).toFixed(0)} ${ehUnit} below target`}.`
+          : d>0?`You beat your handicap target by ${d.toFixed(0)} ${ehUnit}.`:d<0?`You finished ${Math.abs(d).toFixed(0)} ${ehUnit} below handicap target.`:"You played exactly to handicap target.";
+        const latestSummary=d>0?`${Math.abs(d).toFixed(0)} ${ehUnit} better than target`:d<0?`${Math.abs(d).toFixed(0)} ${ehUnit} worse than target`:"Played exactly to target";
         const latestTone=d>0?"PRsignGood":d<0?"PRsignBad":"";
         const totalGain=(eh.holes||[]).reduce((sum,h)=>sum+Math.max(0,Number(h.delta||0)),0);
         return `
@@ -13415,16 +13505,16 @@ const scorecardIntel = (() => {
             <div class="PRquickHint">Positive = better than handicap target</div>
           </div>
           <div class="PRquickGrid">
-            <div class="PRquickCard"><div class="PRquickK">Latest round</div><div class="PRquickV ${latestTone}">${PR_escapeHtml(latestSummary)}</div><div class="PRquickS">Gross ${eh.actual} vs target ${eh.target}</div></div>
-            <div class="PRquickCard"><div class="PRquickK">Best area today</div><div class="PRquickV">${latestStrength?PR_escapeHtml(latestStrength.label):"No clear standout"}</div><div class="PRquickS">${latestStrength?`${latestStrength.avg>=0?"GAIN ":"LOSS "}${Math.abs(latestStrength.avg).toFixed(2)} strokes/hole · ${latestStrength.n} holes`:"This round was broadly even by category"}</div></div>
-            <div class="PRquickCard"><div class="PRquickK">${latestWeakness&&latestWeakness.avg<-.05?"Biggest leak today":"Category check today"}</div><div class="PRquickV">${latestWeakness&&latestWeakness.avg<-.05?PR_escapeHtml(latestWeakness.label):"No category weakness"}</div><div class="PRquickS">${latestWeakness&&latestWeakness.avg<-.05?`LOSS ${Math.abs(latestWeakness.avg).toFixed(2)} strokes/hole · ${latestWeakness.n} holes`:"Every major category was at or above handicap target"}</div></div>
+            <div class="PRquickCard"><div class="PRquickK">Latest round</div><div class="PRquickV ${latestTone}">${PR_escapeHtml(latestSummary)}</div><div class="PRquickS">${ehIsPoints?`Stableford ${eh.actual} pts vs 36-point pace`:`Gross ${eh.actual} vs target ${eh.target}`}</div></div>
+            <div class="PRquickCard"><div class="PRquickK">Best area today</div><div class="PRquickV">${latestStrength?PR_escapeHtml(latestStrength.label):"No clear standout"}</div><div class="PRquickS">${latestStrength?`${latestStrength.avg>=0?"GAIN ":"LOSS "}${Math.abs(latestStrength.avg).toFixed(2)} ${ehUnitPerHole} · ${latestStrength.n} holes`:"This round was broadly even by category"}</div></div>
+            <div class="PRquickCard"><div class="PRquickK">${latestWeakness&&latestWeakness.avg<-.05?"Biggest leak today":"Category check today"}</div><div class="PRquickV">${latestWeakness&&latestWeakness.avg<-.05?PR_escapeHtml(latestWeakness.label):"No category weakness"}</div><div class="PRquickS">${latestWeakness&&latestWeakness.avg<-.05?`LOSS ${Math.abs(latestWeakness.avg).toFixed(2)} ${ehUnitPerHole} · ${latestWeakness.n} holes`:"Every major category was at or above handicap target"}</div></div>
             <div class="PRquickCard"><div class="PRquickK">Costliest holes today</div><div class="PRquickV">${latestCostliest.length?PR_escapeHtml(latestCostliest.map(h=>`H${h.hole}`).join(" · ")):"None"}</div><div class="PRquickS">${latestCostliest.length?`${latestCostliest.reduce((sum,h)=>sum+Number(h.cost||0),0).toFixed(0)} total strokes lost on these holes`:"No holes finished below target"}</div></div>
           </div>
         </div>
 
         <div class="PRvisualGrid">
           <div class="PRvisualCard">
-            <div class="PRsecTitle">Round vs Handicap</div>
+            <div class="PRsecTitle">${ehIsPoints?"Round vs Handicap — Stableford":"Round vs Handicap"}</div>
             <svg class="PRgauge" viewBox="0 0 420 235">
               <defs>
                 <linearGradient id="prRed" x1="0" x2="1"><stop offset="0" stop-color="#7f1d1d"/><stop offset="1" stop-color="#ef4444"/></linearGradient>
@@ -13444,8 +13534,8 @@ const scorecardIntel = (() => {
               <circle cx="210" cy="195" r="14" fill="#0f172a"/><circle cx="210" cy="195" r="5" fill="#fff"/>
             </svg>
             <div class="PRtriples">
-              <div class="PRmini"><div class="PRminiK">Actual</div><div class="PRminiV">${eh.actual}</div></div>
-              <div class="PRmini"><div class="PRminiK">Handicap target</div><div class="PRminiV">${eh.target}</div></div>
+              <div class="PRmini"><div class="PRminiK">${ehIsPoints?"Points":"Actual"}</div><div class="PRminiV">${eh.actual}</div></div>
+              <div class="PRmini"><div class="PRminiK">${ehIsPoints?"36-point pace":"Handicap target"}</div><div class="PRminiV">${eh.target}</div></div>
               <div class="PRmini"><div class="PRminiK">Difference</div><div class="PRminiV ${d>0?"PRgood":d<0?"PRbad":""}">${d>=0?"+":""}${d.toFixed(0)}</div></div>
             </div>
           </div>
@@ -13458,11 +13548,11 @@ const scorecardIntel = (() => {
                 <div style="font-size:11px;font-weight:950;">Hole ${h.hole}</div>
                 <div class="PRcostTrack"><div class="PRcostFill" style="width:${Math.min(100,Math.max(18,h.cost*34))}%"></div></div>
                 <div style="font-size:12px;font-weight:950;color:#b91c1c;text-align:right;">LOSS ${h.cost.toFixed(0)}</div>
-                <div class="PRcostAudit">Gross ${h.gross} · target ${h.target} · Par ${h.par} · SI ${Number.isFinite(h.si)?h.si:"—"} · receives ${h.strokes}</div>
+                <div class="PRcostAudit">${ehIsPoints?`Stableford ${Number(h.points).toFixed(0)} pts · target 2 pts${Number.isFinite(h.gross)?` · gross ${h.gross}`:""}`:`Gross ${h.gross} · target ${h.target} · Par ${h.par} · SI ${Number.isFinite(h.si)?h.si:"—"} · receives ${h.strokes}`}</div>
               </div>`).join("")}
             <div class="PRnetSummary">
-              <div class="PRnetCell"><div class="PRnetK">Shots gained</div><div class="PRnetV PRsignGood">${totalGain.toFixed(0)}</div></div>
-              <div class="PRnetCell"><div class="PRnetK">Shots lost</div><div class="PRnetV PRsignBad">${Math.max(0,Number(eh.totalLoss||0)).toFixed(0)}</div></div>
+              <div class="PRnetCell"><div class="PRnetK">${ehIsPoints?"Points gained":"Shots gained"}</div><div class="PRnetV PRsignGood">${totalGain.toFixed(0)}</div></div>
+              <div class="PRnetCell"><div class="PRnetK">${ehIsPoints?"Points lost":"Shots lost"}</div><div class="PRnetV PRsignBad">${Math.max(0,Number(eh.totalLoss||0)).toFixed(0)}</div></div>
               <div class="PRnetCell"><div class="PRnetK">Net vs target</div><div class="PRnetV ${d>=0?"PRsignGood":"PRsignBad"}">${d>=0?"GAIN ":"LOSS "}${Math.abs(d).toFixed(0)}</div></div>
             </div>
           </div>
@@ -13606,6 +13696,7 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length === 1) ? (() => {
   const pars0=Number(r0?.parsOrBetter||0);
   const doubles0=Number(r0?.doublesPlus||0);
   const damage0=Number(r0?.top3Loss||0);
+  const r0Points=String(r0?.metricBasis||"") === "stableford";
   return `
   <div class="PRvizSection PRgameDnaPage">
     <div class="PRpartHeader" style="margin-top:0;margin-bottom:12px;">
@@ -13625,22 +13716,22 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length === 1) ? (() => {
       <div class="PRchartBox">
         <div class="PRvizTitle" style="font-size:12px;">Round 1 vs handicap target</div>
         <div style="font-size:28px;font-weight:950;margin-top:8px;color:${d0>=0?"#15803d":"#b91c1c"};">${d0>=0?"+":""}${d0.toFixed(0)}</div>
-        <div class="PRvizSub" style="margin-top:4px;">${d0>=0?"strokes better than":"strokes below"} the playing-to-handicap target.</div>
+        <div class="PRvizSub" style="margin-top:4px;">${d0>=0?(r0Points?"Stableford points better than":"strokes better than"):(r0Points?"Stableford points below":"strokes below")} the playing-to-handicap target.</div>
       </div>
       <div class="PRchartBox">
         <div class="PRvizTitle" style="font-size:12px;">Solid holes baseline</div>
         <div style="font-size:28px;font-weight:950;margin-top:8px;">${pars0}</div>
-        <div class="PRvizSub" style="margin-top:4px;">Pars or better in this first recorded round.</div>
+        <div class="PRvizSub" style="margin-top:4px;">${r0Points?"Holes scoring 2+ Stableford points in this first recorded round.":"Pars or better in this first recorded round."}</div>
       </div>
       <div class="PRchartBox">
-        <div class="PRvizTitle" style="font-size:12px;">Big-number baseline</div>
+        <div class="PRvizTitle" style="font-size:12px;">${r0Points?"0-point-hole baseline":"Big-number baseline"}</div>
         <div style="font-size:28px;font-weight:950;margin-top:8px;">${doubles0}</div>
-        <div class="PRvizSub" style="margin-top:4px;">Double bogeys or worse. Future rounds will show whether this is typical.</div>
+        <div class="PRvizSub" style="margin-top:4px;">${r0Points?"0-point holes. Future rounds will show whether this is typical.":"Double bogeys or worse. Future rounds will show whether this is typical."}</div>
       </div>
       <div class="PRchartBox">
         <div class="PRvizTitle" style="font-size:12px;">Top-3-hole damage</div>
         <div style="font-size:28px;font-weight:950;margin-top:8px;">${damage0.toFixed(0)}</div>
-        <div class="PRvizSub" style="margin-top:4px;">strokes lost on the three costliest holes — your benchmark to beat next time.</div>
+        <div class="PRvizSub" style="margin-top:4px;">${r0Points?"Stableford points lost":"strokes lost"} on the three costliest holes — your benchmark to beat next time.</div>
       </div>
     </div>
 
