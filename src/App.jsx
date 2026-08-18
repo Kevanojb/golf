@@ -12637,6 +12637,40 @@ const postRoundIntel = (() => {
       }
     })();
 
+    // One-round exact snapshot safety net. A current round never needs history:
+    // if the main exact snapshot missed for any reason, rebuild it from this same
+    // round's par/SI/gross arrays and the already-computed Course Handicap.
+    if (!exactHandicap?.ok) {
+      try {
+        const ps2=arrPars(latest), si2=arrSI(latest), yd2=arrYards(latest), gs2=arrGross(latest);
+        const ch2=Number.isFinite(Number(virtualCH)) ? Number(virtualCH)
+          : Number.isFinite(Number(latest?.courseHandicap)) ? Number(latest.courseHandicap)
+          : Number.isFinite(Number(latest?.playingHcap)) ? Number(latest.playingHcap)
+          : Number.isFinite(Number(latest?.hcap)) ? Number(latest.hcap)
+          : NaN;
+        const rec2=(si)=>{
+          const h=Math.max(0,Math.round(Number(ch2)||0)), s=Number(si);
+          if(!Number.isFinite(s)||s<1||s>18)return 0;
+          return Math.floor(h/18)+((h%18)>0&&s<=(h%18)?1:0);
+        };
+        const hs2=[];
+        const n2=Math.min(18,Math.max(ps2.length,si2.length,yd2.length,gs2.length));
+        for(let i=0;i<n2;i++){
+          const par=Number(ps2[i]), si=Number(si2[i]), gross=Number(gs2[i]), yard=Number(yd2[i]);
+          if(!Number.isFinite(par)||!Number.isFinite(gross)||gross<=0)continue;
+          const strokes=rec2(si), target=par+strokes, delta=target-gross;
+          hs2.push({hole:i+1,par,si,yard:Number.isFinite(yard)?yard:NaN,gross,strokes,target,delta,cost:Math.max(0,-delta),gain:Math.max(0,delta)});
+        }
+        if(hs2.length){
+          const actual=hs2.reduce((s,h)=>s+h.gross,0), target=hs2.reduce((s,h)=>s+h.target,0);
+          const losses=hs2.filter(h=>h.cost>0).sort((a,b)=>(b.cost-a.cost)||(a.hole-b.hole));
+          const totalLoss=losses.reduce((s,h)=>s+h.cost,0), top3Loss=losses.slice(0,3).reduce((s,h)=>s+h.cost,0);
+          const topSet=new Set(losses.slice(0,3).map(h=>h.hole));
+          Object.assign(exactHandicap,{ok:true,basis:"gross-round-only",ch:ch2,holes:hs2,actual,target,delta:target-actual,losses,totalLoss,top3Loss,damageShare:totalLoss?top3Loss/totalLoss:0,restDelta:hs2.filter(h=>!topSet.has(h.hole)).reduce((s,h)=>s+h.delta,0)});
+        }
+      } catch(e) { try{console.error("One-round exact snapshot rebuild failed:",e);}catch(_){} }
+    }
+
     // Exact handicap-target history for the visual action cards.
     const exactCategories = (() => {
       try{
@@ -12799,7 +12833,7 @@ const postRoundIntel = (() => {
             const goodRate=x.goodCount/x.appearances;
             const dominantPar=Array.from(x.parCounts.entries()).sort((a,b)=>b[1]-a[1])[0]?.[0]??NaN;
             return {...x,avgDelta,badRate,goodRate,dominantPar};
-          }).filter(x=>x.appearances>=2);
+          }).filter(x=>x.appearances>=1);
 
           const nemesis=holeRows.filter(x=>x.avgDelta<0&&(x.appearances>=3||(x.appearances>=2&&x.badRate===1)))
             .sort((a,b)=>(Math.abs(b.avgDelta)*b.badRate*Math.sqrt(b.appearances))-(Math.abs(a.avgDelta)*a.badRate*Math.sqrt(a.appearances))).slice(0,3);
@@ -13690,71 +13724,19 @@ const scorecardIntel = (() => {
   </div>
 </div>
 
-${(postRoundIntel.exactCategories?.roundSummaries?.length === 1) ? (() => {
-  const r0=postRoundIntel.exactCategories.roundSummaries[0];
-  const d0=Number(r0?.delta||0);
-  const pars0=Number(r0?.parsOrBetter||0);
-  const doubles0=Number(r0?.doublesPlus||0);
-  const damage0=Number(r0?.top3Loss||0);
-  const r0Points=String(r0?.metricBasis||"") === "stableford";
-  return `
-  <div class="PRvizSection PRgameDnaPage">
-    <div class="PRpartHeader" style="margin-top:0;margin-bottom:12px;">
-      <span class="PRpartTag">Part 2</span>
-      <span class="PRpartTitle">${PR_escapeHtml(reportPeriodLabel)}</span>
-    </div>
-    <div class="PRvizTitle">Your Game — Baseline Established</div>
-    <div class="PRvizSub">1 round analysed · enough for a latest-round baseline, but not enough to call anything a recurring pattern yet.</div>
-
-    <div class="PRpatternCallout" style="margin-top:12px;">
-      <div class="PRpatternK">MORE ROUNDS NEEDED FOR RECURRING PATTERNS</div>
-      <div class="PRpatternV">Your first round gives us a starting point — not a trend.</div>
-      <div class="PRpatternS">After more rounds, this section will identify recurring holes, form direction and what separates your better and poorer scores. We deliberately do not label one-round results as confirmed strengths or weaknesses.</div>
-    </div>
-
-    <div class="PRgeneralGrid" style="margin-top:12px;">
-      <div class="PRchartBox">
-        <div class="PRvizTitle" style="font-size:12px;">Round 1 vs handicap target</div>
-        <div style="font-size:28px;font-weight:950;margin-top:8px;color:${d0>=0?"#15803d":"#b91c1c"};">${d0>=0?"+":""}${d0.toFixed(0)}</div>
-        <div class="PRvizSub" style="margin-top:4px;">${d0>=0?(r0Points?"Stableford points better than":"strokes better than"):(r0Points?"Stableford points below":"strokes below")} the playing-to-handicap target.</div>
-      </div>
-      <div class="PRchartBox">
-        <div class="PRvizTitle" style="font-size:12px;">Solid holes baseline</div>
-        <div style="font-size:28px;font-weight:950;margin-top:8px;">${pars0}</div>
-        <div class="PRvizSub" style="margin-top:4px;">${r0Points?"Holes scoring 2+ Stableford points in this first recorded round.":"Pars or better in this first recorded round."}</div>
-      </div>
-      <div class="PRchartBox">
-        <div class="PRvizTitle" style="font-size:12px;">${r0Points?"0-point-hole baseline":"Big-number baseline"}</div>
-        <div style="font-size:28px;font-weight:950;margin-top:8px;">${doubles0}</div>
-        <div class="PRvizSub" style="margin-top:4px;">${r0Points?"0-point holes. Future rounds will show whether this is typical.":"Double bogeys or worse. Future rounds will show whether this is typical."}</div>
-      </div>
-      <div class="PRchartBox">
-        <div class="PRvizTitle" style="font-size:12px;">Top-3-hole damage</div>
-        <div style="font-size:28px;font-weight:950;margin-top:8px;">${damage0.toFixed(0)}</div>
-        <div class="PRvizSub" style="margin-top:4px;">${r0Points?"Stableford points lost":"strokes lost"} on the three costliest holes — your benchmark to beat next time.</div>
-      </div>
-    </div>
-
-    <div class="PRgamePlan" style="margin-top:12px;">
-      <div class="PRvizTitle">What happens next</div>
-      <div class="PRvizSub">Record another round and the report will start comparing Round 2 with this baseline. Recurring-pattern labels remain withheld until there is enough evidence.</div>
-    </div>
-  </div>`;
-})() : ""}
-
-${(postRoundIntel.exactCategories?.roundSummaries?.length >= 2) ? `
+${(postRoundIntel.exactCategories?.roundSummaries?.length >= 1) ? `
 <div class="PRvizSection PRgameDnaPage">
   <div class="PRpartHeader" style="margin-top:0;margin-bottom:12px;">
     <span class="PRpartTag">Part 2</span>
     <span class="PRpartTitle">${PR_escapeHtml(reportPeriodLabel)}</span>
   </div>
-  <div class="PRvizTitle">Your Game — Pattern & Trend</div>
-  <div class="PRvizSub">${PR_num(postRoundIntel.exactCategories.roundSummaries.length,0)} rounds analysed · compared against the exact playing-to-handicap target for each round.</div>
+  <div class="PRvizTitle">${postRoundIntel.exactCategories.roundSummaries.length===1?"Your 2026 Game — Current DNA Profile":"Your Game — Pattern & Trend"}</div>
+  <div class="PRvizSub">${postRoundIntel.exactCategories.roundSummaries.length===1?"1 round analysed · all 2026 and DNA figures below use that complete round. This is a current profile, not yet a recurring trend.":`${PR_num(postRoundIntel.exactCategories.roundSummaries.length,0)} rounds analysed · compared against the exact playing-to-handicap target for each round.`}</div>
 
   <div class="PRgeneralGrid PRseasonTopGrid">
     <div class="PRchartBox">
-      <div class="PRvizTitle" style="font-size:12px;">Form trend — recent rounds</div>
-      <div class="PRvizSub">Each dot is labelled in strokes versus handicap target. Dashed trend shows direction of travel.</div>
+      <div class="PRvizTitle" style="font-size:12px;">${postRoundIntel.exactCategories.roundSummaries.length===1?"2026 performance snapshot":"Form trend — recent rounds"}</div>
+      <div class="PRvizSub">${postRoundIntel.exactCategories.roundSummaries.length===1?"Your first 2026 round plotted against handicap target. Trend direction will appear when more rounds are added.":"Each dot is labelled in strokes versus handicap target. Dashed trend shows direction of travel."}</div>
       ${(() => {
         const rs=postRoundIntel.exactCategories.roundSummaries.slice(-10);
         const vals=rs.map(r=>Number(r.delta||0));
@@ -13866,7 +13848,7 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length >= 2) ? `
   <div class="PRgeneralGrid PRseasonEvidenceGrid">
     <div class="PRchartBox PRgoodBadCard">
       <div class="PRvizTitle" style="font-size:12px;">Good rounds vs poor rounds</div>
-      <div class="PRvizSub">${postRoundIntel.exactCategories.goodBad ? PR_escapeHtml(postRoundIntel.exactCategories.goodBad.headline) : "Need at least four rounds for this comparison."}</div>
+      <div class="PRvizSub">${postRoundIntel.exactCategories.goodBad ? PR_escapeHtml(postRoundIntel.exactCategories.goodBad.headline) : (postRoundIntel.exactCategories.roundSummaries.length===1?"Round 1 scoring data shown elsewhere on this page; good-v-poor comparison unlocks after four rounds.":"Need at least four rounds for this comparison.")}</div>
       ${postRoundIntel.exactCategories.goodBad ? (() => {
         const gb=postRoundIntel.exactCategories.goodBad;
         const ms=gb.metrics;
@@ -13907,7 +13889,7 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length >= 2) ? `
 
     <div class="PRchartBox PRheatmapCard">
       <div class="PRvizTitle" style="font-size:12px;">Recent-round consistency heatmap</div>
-      <div class="PRvizSub">Repeated red columns reveal recurring hole problems immediately.</div>
+      <div class="PRvizSub">${postRoundIntel.exactCategories.roundSummaries.length===1?"All 18 holes from Round 1 versus handicap target; repeated patterns will emerge as rounds are added.":"Repeated red columns reveal recurring hole problems immediately."}</div>
       <div class="PRheat">
         <div class="PRheatGrid">
           <div></div>${Array.from({length:18},(_,i)=>`<div class="PRheatHead">${i+1}</div>`).join("")}
@@ -14038,6 +14020,7 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
   // Rank the strongest actionable signal into ONE headline opportunity.
   const opportunityCandidates=[];
   const dnaRounds=Math.max(1,Number(cats.roundSummaries?.length||1));
+  const isSingleRoundDNA=dnaRounds===1;
   if(dna.nemesis?.length){
     const h=dna.nemesis[0];
     opportunityCandidates.push({
@@ -14062,9 +14045,9 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
     opportunityCandidates.push({
       score:Math.abs(Number(cats.fix.avg||0))*Math.sqrt(Math.max(1,cats.fix.n))/3,
       title:`Improve ${cats.fix.displayLabel}`,
-      detail:`This category averages ${cats.fix.avg.toFixed(2)} strokes per hole versus handicap target across ${cats.fix.n} holes.`,
+      detail:isSingleRoundDNA?`In Round 1 this category averaged ${cats.fix.avg.toFixed(2)} strokes per hole versus handicap target across ${cats.fix.n} holes.`:`This category averages ${cats.fix.avg.toFixed(2)} strokes per hole versus handicap target across ${cats.fix.n} holes.`,
       impact:fi,
-      confidence:cats.fix.status||"LOW EVIDENCE"
+      confidence:isSingleRoundDNA?"CURRENT ROUND":(cats.fix.status||"LOW EVIDENCE")
     });
   }
   if(cats.goodBad?.driver){
@@ -14107,8 +14090,8 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
 
   return `
   <div class="PRvizSection PRcourseDnaPage">
-    <div class="PRvizTitle">Course DNA — Recurring Patterns</div>
-    <div class="PRvizSub">Repeated tendencies that may not be obvious from a single scorecard.</div>
+    <div class="PRvizTitle">${isSingleRoundDNA?"Course DNA — Round 1 Profile":"Course DNA — Recurring Patterns"}</div>
+    <div class="PRvizSub">${isSingleRoundDNA?"A complete hole-by-hole DNA view of the only 2026 round recorded so far. These are Round 1 facts; recurring labels remain withheld until more evidence exists.":"Repeated tendencies that may not be obvious from a single scorecard."}</div>
 
     <div class="PRopportunity">
       <div class="PRoppK">Score-protection focus</div>
@@ -14125,7 +14108,7 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
 
     <div class="PRchartBox" style="margin-top:12px;">
       <div class="PRvizTitle" style="font-size:12px;">18-hole course fingerprint</div>
-      <div class="PRvizSub">Recurring performance by hole number. Deep red = persistent cost; green = repeated strength.</div>
+      <div class="PRvizSub">${isSingleRoundDNA?"Round 1 performance by hole number. Red = below target; green = above target.":"Recurring performance by hole number. Deep red = persistent cost; green = repeated strength."}</div>
       <div class="PRfingerprint">
         ${holeFingerprint.map(h=>{
           const v=Number(h.avgDelta);
