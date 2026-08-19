@@ -15668,6 +15668,328 @@ function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
   const totalGross=holes.reduce((s,h)=>s+h.targetGross,0);
   return WP_enrichPlanVisuals({player:p,layout,holes,mode,total,pointsTotal:total,totalGross,attacks,primaryAttacks,stretchGains,dangers,front,back,targetRequested:desired});
 }
+
+// =========================================================
+// LIVE REPLANNING
+// Re-optimises ONLY the holes still to play, using the same
+// exact-hole / target-hit-rate / gross-difficulty logic as
+// the pre-round Stableford planner.
+// =========================================================
+function WP_liveCandidates(h){
+  const arr=[];
+  const exactAvg=Number(h.holePtsAvg);
+  const exactValues=(h.exactPtsValues||[]).map(Number).filter(Number.isFinite);
+  const exactN=exactValues.length || Number(h.exactPtsN)||0;
+  const personalExpected=(exactN>=2&&Number.isFinite(exactAvg)) ? exactAvg : Number(h.expectedPts);
+  const evidenceStrength=Math.min(1,exactN/3);
+
+  for(let pts=0;pts<=5;pts++){
+    const dev=pts-personalExpected;
+    let cost=dev*dev*(1.45+evidenceStrength*.35);
+    if(pts>=4) cost+=(pts-3)*1.2;
+    if(pts===0) cost+=.25;
+
+    if(exactN>=2 && exactValues.length){
+      const hitCount=exactValues.filter(v=>v>=pts).length;
+      const hitRate=hitCount/exactValues.length;
+      const rateStrength=Math.min(1,exactValues.length/4);
+      const requiredGross=h.par+h.strokes+2-pts;
+      const requiredVsPar=requiredGross-h.par;
+
+      if(pts>=3){
+        cost += (0.60-hitRate)*4.2*rateStrength;
+        if(hitRate>=0.99) cost-=1.15*rateStrength;
+        else if(hitRate>=0.66) cost-=0.75*rateStrength;
+        else if(hitRate>=0.50) cost-=0.30*rateStrength;
+        else if(hitRate<=0.34) cost+=0.65*rateStrength;
+
+        if(requiredVsPar===0) cost-=0.70;
+        else if(requiredVsPar===1) cost-=0.90;
+        else if(requiredVsPar<0) cost+=Math.abs(requiredVsPar)*0.85;
+        if(h.strokes>=1) cost-=0.22*Math.min(2,h.strokes);
+      }else if(pts===2){
+        cost += (0.45-hitRate)*0.55*rateStrength;
+      }
+    }
+
+    if(exactN>=2&&Number.isFinite(exactAvg)){
+      if(pts>=3&&exactAvg>=2.45) cost-=Math.min(1.10,(exactAvg-2.35)*.90)*evidenceStrength;
+      if(pts===2&&exactAvg>=2.65) cost+=(exactAvg-2.55)*.65*evidenceStrength;
+      if(pts>=3&&exactAvg<=1.65) cost+=(1.75-exactAvg)*1.20*evidenceStrength;
+      if(pts===2&&exactAvg<=1.55) cost-=Math.min(.40,(1.65-exactAvg)*.40)*evidenceStrength;
+    }
+    arr.push({value:pts,cost,pts});
+  }
+  return arr;
+}
+
+function WP_applyLiveHoleStrategy(h){
+  const pts=Number(h.targetPts);
+  const exactAvg=Number(h.holePtsAvg);
+  const exactValues=(h.exactPtsValues||[]).map(Number).filter(Number.isFinite);
+  const exactN=exactValues.length || Number(h.exactPtsN)||0;
+
+  h.personalExpectedPts=(exactN>=2&&Number.isFinite(exactAvg))?exactAvg:Number(h.expectedPts);
+  h.targetHitCount=exactValues.filter(v=>v>=pts).length;
+  h.targetHitN=exactValues.length;
+  h.targetHitRate=h.targetHitN ? h.targetHitCount/h.targetHitN : NaN;
+  h.upsideHitCount=exactValues.filter(v=>v>=Math.min(6,pts+1)).length;
+  h.upsideHitRate=h.targetHitN ? h.upsideHitCount/h.targetHitN : NaN;
+
+  h.baseline2HitCount=exactValues.filter(v=>v>=2).length;
+  h.baseline2HitN=exactValues.length;
+  h.baseline2HitRate=h.baseline2HitN ? h.baseline2HitCount/h.baseline2HitN : NaN;
+  h.gain3HitCount=exactValues.filter(v=>v>=3).length;
+  h.gain3HitN=exactValues.length;
+  h.gain3HitRate=h.gain3HitN ? h.gain3HitCount/h.gain3HitN : NaN;
+
+  h.planCue='NORMAL';
+  h.upsideGross=h.targetGross-1;
+  h.upsidePts=Math.min(6,pts+1);
+
+  if(pts>=3){
+    h.strategy='ATTACK';
+    const reqVsPar=Number(h.targetGross)-Number(h.par);
+    const hit=Number(h.targetHitRate);
+    if(Number(h.targetHitN)>=2 && Number.isFinite(hit)){
+      if(hit>=0.66){ h.attackTier='PRIMARY'; h.planCue='PRIMARY_ATTACK'; }
+      else { h.attackTier='STRETCH'; h.planCue='STRETCH_GAIN'; }
+    }else if(reqVsPar>=0){
+      h.attackTier='PRIMARY'; h.planCue='PRIMARY_ATTACK';
+    }else{
+      h.attackTier='STRETCH'; h.planCue='STRETCH_GAIN';
+    }
+  }else if(pts===2){
+    const strongExact=exactN>=2&&((Number.isFinite(h.upsideHitRate)&&h.upsideHitRate>=0.50)||(Number.isFinite(exactAvg)&&exactAvg>=2.55));
+    const weakExact=exactN>=2&&((Number.isFinite(h.targetHitRate)&&h.targetHitRate<=0.50)||(Number.isFinite(exactAvg)&&exactAvg<=1.60));
+    if(strongExact){ h.strategy='OPPORTUNITY'; h.planCue='OPPORTUNITY'; }
+    else{
+      h.strategy='PROTECT';
+      h.planCue=(h.targetGross>h.par&&weakExact)?'SMART_BOGEY':(h.targetGross>h.par?'BOGEY_ON_PLAN':'PROTECT');
+    }
+  }else if(pts===1){
+    h.strategy='ACCEPT'; h.planCue='DAMAGE_CONTROL';
+  }else{
+    h.strategy='RESET'; h.planCue='DAMAGE_CONTROL';
+  }
+}
+
+function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
+  const tempHI=options?.tempHI;
+  const target=Math.max(18,Math.min(72,Math.round(Number(options?.target)||40)));
+  const actualGross=Array.from({length:18},(_,i)=>{
+    const n=Number(options?.actualGross?.[i]);
+    return Number.isFinite(n)&&n>0 ? Math.round(n) : NaN;
+  });
+
+  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI);
+  if(!layout) return null;
+  const sig=WP_playerHistorySignals(p,courseKey);
+  const holes=[];
+
+  for(let i=0;i<18;i++){
+    const par=Number(layout.pars[i]), si=Number(layout.si[i]), yard=Number(layout.yards[i]);
+    if(!Number.isFinite(par)) continue;
+    const strokes=WP_strokesReceived(layout.ch,si);
+    const prof=WP_expectedHoleProfile(sig,i+1,par,si,yard,strokes);
+    holes.push({hole:i+1,par,si,yard,strokes,...prof});
+  }
+  if(holes.length<9) return null;
+
+  // Original route is the benchmark we compare today's live position against.
+  const original=WP_makePlayerPlan(model,event,p,courseKey,handicapMap,{
+    mode:'stableford',target,tempHI
+  });
+
+  let actualPts=0, actualGrossTotal=0, holesPlayed=0;
+  holes.forEach(h=>{
+    const g=actualGross[h.hole-1];
+    if(Number.isFinite(g)){
+      const pts=Math.max(0,Math.min(6,2+h.par+h.strokes-g));
+      h.played=true;
+      h.actualGross=g;
+      h.actualPts=pts;
+      h.targetGross=g;
+      h.targetPts=pts;
+      h.strategy='PLAYED';
+      h.planCue='PLAYED';
+      h.reason=`Completed: ${g} gross · ${pts} point${pts===1?'':'s'}`;
+      actualPts+=pts;
+      actualGrossTotal+=g;
+      holesPlayed++;
+    }
+  });
+
+  const remaining=holes.filter(h=>!h.played);
+  const holesLeft=remaining.length;
+  const pointsStillNeeded=Math.max(0,target-actualPts);
+  const maxRemaining=holesLeft*5;
+
+  // If ahead of target pace, don't generate absurd 0/1-point instructions.
+  // Keep a sensible 2-points-per-hole protection route. If behind, solve the
+  // exact number still required, up to what is mathematically possible.
+  let remainingGoal=pointsStillNeeded;
+  if(holesLeft>0){
+    remainingGoal=Math.max(remainingGoal,Math.min(holesLeft*2,maxRemaining));
+    remainingGoal=Math.min(remainingGoal,maxRemaining);
+  }
+
+  let solved={choices:[]};
+  if(holesLeft){
+    solved=WP_dpExact(remaining,remainingGoal,WP_liveCandidates);
+    if(!solved) return null;
+  }
+
+  remaining.forEach((h,i)=>{
+    const pts=Number(solved?.choices?.[i]?.pts ?? 2);
+    h.targetPts=pts;
+    h.targetGross=h.par+h.strokes+2-pts;
+    WP_applyLiveHoleStrategy(h);
+    h.reason=h.exactPtsN
+      ? `Replanned from your ${h.exactPtsN} previous score${h.exactPtsN===1?'':'s'} here`
+      : `Replanned from your Par ${h.par} / SI ${Number.isFinite(h.si)?h.si:'—'} profile`;
+  });
+
+  const plannedThrough=(original?.holes||[])
+    .filter(h=>Number.isFinite(actualGross[h.hole-1]))
+    .reduce((s,h)=>s+Number(h.targetPts||0),0);
+  const deltaVsOriginal=actualPts-plannedThrough;
+
+  const projectedRemaining=remaining.reduce((s,h)=>s+Number(h.targetPts||0),0);
+  const projectedTotal=actualPts+projectedRemaining;
+  const projectedGross=actualGrossTotal+remaining.reduce((s,h)=>s+Number(h.targetGross||0),0);
+
+  const originalFutureAttacks=new Set((original?.holes||[])
+    .filter(h=>!Number.isFinite(actualGross[h.hole-1]) && Number(h.targetPts)>=3)
+    .map(h=>h.hole));
+  const revisedFutureAttacks=new Set(remaining.filter(h=>Number(h.targetPts)>=3).map(h=>h.hole));
+  const releasedGains=[...originalFutureAttacks].filter(x=>!revisedFutureAttacks.has(x));
+  const newGains=[...revisedFutureAttacks].filter(x=>!originalFutureAttacks.has(x));
+
+  const attackRank=(h)=>{
+    const hit=Number.isFinite(Number(h.gain3HitRate))?Number(h.gain3HitRate):-1;
+    const gainGross=Number(h.par)+Number(h.strokes)-1;
+    const reqVsPar=gainGross-Number(h.par);
+    const grossEase=Number.isFinite(reqVsPar)?Math.max(-2,Math.min(2,reqVsPar)):0;
+    const avg=Number.isFinite(Number(h.personalExpectedPts))?Number(h.personalExpectedPts):0;
+    return hit*100+grossEase*8+avg*3;
+  };
+  const attacks=remaining.filter(h=>Number(h.targetPts)>=3||h.planCue==='OPPORTUNITY').sort((a,b)=>attackRank(b)-attackRank(a));
+  const primaryAttacks=remaining.filter(h=>h.planCue==='PRIMARY_ATTACK').sort((a,b)=>attackRank(b)-attackRank(a));
+  const stretchGains=remaining.filter(h=>h.planCue==='STRETCH_GAIN').sort((a,b)=>attackRank(b)-attackRank(a));
+  const dangers=remaining.slice().sort((a,b)=>Number(a.personalExpectedPts)-Number(b.personalExpectedPts)).slice(0,3);
+
+  const targetPossible=(actualPts+maxRemaining)>=target;
+  const requiredRate=holesLeft ? pointsStillNeeded/holesLeft : 0;
+  const status=!holesLeft
+    ? (actualPts>=target?'TARGET ACHIEVED':'ROUND COMPLETE')
+    : !targetPossible
+      ? 'TARGET NOW OUT OF REACH'
+      : deltaVsOriginal>=2
+        ? 'AHEAD OF PLAN'
+        : deltaVsOriginal<=-2
+          ? 'BEHIND PLAN'
+          : 'ON PLAN';
+
+  const front=holes.filter(h=>h.hole<=9).reduce((s,h)=>s+Number(h.targetPts||0),0);
+  const total=holes.reduce((s,h)=>s+Number(h.targetPts||0),0);
+
+  const plan=WP_enrichPlanVisuals({
+    player:p,layout,holes,mode:'live',
+    total,pointsTotal:projectedTotal,totalGross:projectedGross,
+    attacks,primaryAttacks,stretchGains,dangers,
+    front,back:total-front,targetRequested:target
+  });
+
+  Object.assign(plan,{
+    liveTarget:target,actualPts,actualGrossTotal,holesPlayed,holesLeft,
+    pointsStillNeeded,remainingGoal,requiredRate,plannedThrough,deltaVsOriginal,
+    projectedTotal,projectedGross,targetPossible,status,releasedGains,newGains,
+    originalPlan:original
+  });
+  return plan;
+}
+
+function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,actualGross=[]}){
+  try{
+    const event=WP_findLatestEventAtCourse(model,courseKey);
+    if(!event) return {ok:false,error:'No previous Stableford event was found for that course.'};
+    const p=(Array.isArray(model?.players)?model.players:[]).find(x=>String(x?.name||'')===String(playerName||''));
+    if(!p) return {ok:false,error:'Choose one player for Live Replan.'};
+
+    const scores=(actualGross||[]).map(Number);
+    if(!scores.some(x=>Number.isFinite(x)&&x>0)) return {ok:false,error:'Enter at least one completed-hole gross score.'};
+
+    const plan=WP_makeLiveReplan(model,event,p,courseKey,handicapMap,{target,tempHI,actualGross});
+    if(!plan) return {ok:false,error:'Could not build the live replan.'};
+
+    const c=event.courseName||courseKey;
+    const l=plan.layout;
+    const delta=Number(plan.deltaVsOriginal)||0;
+    const deltaLabel=delta>0?`+${delta}`:`${delta}`;
+    const deltaTone=delta>0?'good':delta<0?'bad':'mid';
+    const changedText=[
+      plan.releasedGains?.length ? `Pressure removed from ${plan.releasedGains.map(x=>'H'+x).join(' · ')}` : '',
+      plan.newGains?.length ? `New gains moved to ${plan.newGains.map(x=>'H'+x).join(' · ')}` : ''
+    ].filter(Boolean).join(' · ') || 'The remaining route is still close to the original plan.';
+
+    const css=`<style>
+      .LR{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#0b1f36;background:#fff;max-width:760px;margin:0 auto}.LR *{box-sizing:border-box}
+      .LRhdr{background:linear-gradient(120deg,#071d35,#0b3e61 55%,#08775f);color:#fff;border-radius:28px;padding:26px 28px}.LReye{font-size:10px;font-weight:950;letter-spacing:.18em;text-transform:uppercase;color:#a7f3d0}.LRtitle{font-size:38px;font-weight:950;letter-spacing:-.045em;line-height:1;margin-top:8px}.LRsub{font-size:12px;opacity:.78;margin-top:8px}
+      .LRdash{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:13px}.LRstat{border:1px solid #dbe5ee;border-radius:15px;padding:11px;background:#fff}.LRk{font-size:8px;font-weight:950;letter-spacing:.1em;text-transform:uppercase;color:#64748b}.LRv{font-size:22px;font-weight:950;margin-top:3px}.LRstat.hero{background:#0b1f36;color:#fff;border-color:#0b1f36}.LRstat.hero .LRk{color:#bfdbfe}.LRstat.good{background:#ecfdf5;border-color:#a7f3d0}.LRstat.bad{background:#fff1f2;border-color:#fecdd3}.LRstat.mid{background:#eff6ff;border-color:#bfdbfe}
+      .LRmsg{margin-top:12px;border-radius:16px;border:1px solid #dbe5ee;background:#f8fafc;padding:12px 14px}.LRmsg b{display:block;font-size:14px}.LRmsg span{font-size:10px;color:#64748b}
+      .LRsec{margin-top:16px}.LRsec h3{font-size:18px;margin:0 0 8px;font-weight:950}.LRstrip{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:5px}.LRcell{border:1px solid #dbe5ee;border-radius:10px;padding:6px 4px;text-align:center;background:#f8fafc}.LRcell.played{background:#eef2ff;border-color:#c7d2fe}.LRcell.attack{background:#ecfdf5;border-color:#a7f3d0}.LRcell.stretch{background:#fffbeb;border-color:#fde68a}.LRcell.protect{background:#f8fafc}.LRh{font-size:8px;font-weight:950;color:#64748b}.LRg{font-size:22px;font-weight:950;line-height:1;margin-top:3px}.LRp{font-size:8px;font-weight:900;color:#475569;margin-top:2px}
+      .LRholes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.LRhole{border:1px solid #dbe5ee;border-radius:15px;padding:11px;background:#f8fafc}.LRhole.attack{background:#ecfdf5;border-color:#a7f3d0}.LRhole.stretch{background:#fffbeb;border-color:#fde68a}.LRtop{display:flex;justify-content:space-between;gap:8px}.LRtag{font-size:8px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.LRgross{font-size:36px;font-weight:950;line-height:1;margin-top:6px}.LRpts{font-size:13px;font-weight:950}.LRreason{font-size:9px;color:#475569;line-height:1.3;margin-top:6px}
+      .LRplayed{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}.LRplayedCell{border:1px solid #c7d2fe;background:#eef2ff;border-radius:10px;padding:7px;text-align:center}.LRfoot{font-size:9px;color:#64748b;margin-top:14px;border-top:1px solid #e2e8f0;padding-top:9px}
+      @media(max-width:700px){.LRdash{grid-template-columns:repeat(2,1fr)}.LRdash .hero{grid-column:1/-1}.LRstrip{grid-template-columns:repeat(6,1fr)}.LRholes{grid-template-columns:repeat(2,1fr)}.LRplayed{grid-template-columns:repeat(3,1fr)}.LRtitle{font-size:30px}}
+      .PRpdfExportRoot .LRdash{grid-template-columns:repeat(5,minmax(0,1fr))!important}.PRpdfExportRoot .LRstrip{grid-template-columns:repeat(9,minmax(0,1fr))!important}.PRpdfExportRoot .LRholes{grid-template-columns:repeat(3,minmax(0,1fr))!important}
+    </style>`;
+
+    const routeStrip=`<div class="LRstrip">${plan.holes.map(h=>{
+      const cls=h.played?'played':h.planCue==='PRIMARY_ATTACK'?'attack':h.planCue==='STRETCH_GAIN'?'stretch':'protect';
+      const g=h.played?h.actualGross:h.targetGross;
+      const pts=h.played?h.actualPts:h.targetPts;
+      return `<div class="LRcell ${cls}"><div class="LRh">H${h.hole}${h.played?' · DONE':''}</div><div class="LRg">${g}</div><div class="LRp">${pts} pt${pts===1?'':'s'}</div></div>`;
+    }).join('')}</div>`;
+
+    const played=`<div class="LRplayed">${plan.holes.filter(h=>h.played).map(h=>`<div class="LRplayedCell"><div class="LRh">H${h.hole}</div><div style="font-size:17px;font-weight:950">${h.actualGross} gross</div><div class="LRp">${h.actualPts} pt${h.actualPts===1?'':'s'}</div></div>`).join('')}</div>`;
+
+    const future=plan.holes.filter(h=>!h.played).map(h=>{
+      const cue=String(h.planCue||'PROTECT');
+      const cls=cue==='PRIMARY_ATTACK'?'attack':cue==='STRETCH_GAIN'?'stretch':'protect';
+      const tag=cue==='PRIMARY_ATTACK'?'PRIMARY ATTACK':cue==='STRETCH_GAIN'?'STRETCH GAIN':cue==='OPPORTUNITY'?'OPPORTUNITY':cue==='SMART_BOGEY'?'BANK IT':'PROTECT';
+      const n=Number(h.gain3HitN)||0,cnt=Number(h.gain3HitCount)||0,pct=n?Math.round(cnt/n*100):NaN;
+      let reason='';
+      if(cue==='PRIMARY_ATTACK') reason=`Best-supported place to find the extra point${Number.isFinite(pct)?` · 3+ pts ${pct}%`:''}.`;
+      else if(cue==='STRETCH_GAIN') reason=`The new target needs a gain here, but don't manufacture it${Number.isFinite(pct)?` · 3+ pts ${pct}%`:''}.`;
+      else if(cue==='OPPORTUNITY') reason=`Baseline is enough; take the bonus point only if it comes naturally.`;
+      else if(cue==='SMART_BOGEY') reason=`Two points is a good outcome here — don't chase par.`;
+      else reason=`Bank the planned score and keep the round moving.`;
+      return `<div class="LRhole ${cls}"><div class="LRtop"><div class="LRtag">H${h.hole} · PAR ${h.par} · SI ${Number.isFinite(h.si)?h.si:'—'}</div><div class="LRtag">${tag}</div></div><div class="LRgross">${h.targetGross}</div><div class="LRpts">${h.targetPts} pts · ${h.strokes} shot${h.strokes===1?'':'s'}</div><div class="LRreason">${reason}</div></div>`;
+    }).join('');
+
+    const html=`${css}<div class="LR"><div class="LRhdr"><div class="LReye">DEN GOLF · LIVE REPLAN</div><div class="LRtitle">${WP_escape(p.name)}</div><div class="LRsub">${WP_escape(c)} · target ${plan.liveTarget} pts · ${l.temporaryHI?`Temporary HI ${Number(l.hi).toFixed(1)} → CH ${l.ch}`:`Den handicap ${Number(l.denHandicap).toFixed(1)}`}</div></div>
+      <div class="LRdash">
+        <div class="LRstat hero"><div class="LRk">Round target</div><div class="LRv">${plan.liveTarget}</div></div>
+        <div class="LRstat"><div class="LRk">Points banked</div><div class="LRv">${plan.actualPts}</div></div>
+        <div class="LRstat ${deltaTone}"><div class="LRk">Vs original plan</div><div class="LRv">${deltaLabel}</div></div>
+        <div class="LRstat"><div class="LRk">Still needed</div><div class="LRv">${plan.pointsStillNeeded}</div></div>
+        <div class="LRstat"><div class="LRk">Holes left</div><div class="LRv">${plan.holesLeft}</div></div>
+      </div>
+      <div class="LRmsg"><b>${WP_escape(plan.status)} · projected ${plan.projectedTotal} pts</b><span>${WP_escape(changedText)}${plan.holesLeft?` · Need ${plan.requiredRate.toFixed(2)} pts/hole from here to hit ${plan.liveTarget}.`:''}</span></div>
+      <div class="LRsec"><h3>Revised route at a glance</h3>${routeStrip}</div>
+      <div class="LRsec"><h3>Scores already banked</h3>${played}</div>
+      <div class="LRsec"><h3>From the next hole</h3><div class="LRholes">${future}</div></div>
+      <div class="LRfoot">Every replan preserves completed scores, then re-optimises only the remaining holes using your exact-hole 3+ achievement rate first, gross score required for the gain second, then exact-hole average, SI, Par, yardage and recent form.</div>
+    </div>`;
+
+    return {ok:true,event,plan,htmlFragment:html};
+  }catch(e){
+    console.error('Live replan failed',e);
+    return {ok:false,error:`Could not build live replan${e?.message?`: ${e.message}`:'.'}`};
+  }
+}
+
 function WP_escape(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
 function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mode='winning',customTarget,tempHandicaps={}}){
   try{
@@ -15778,9 +16100,11 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     .sort((a,b)=>String(a.name).localeCompare(String(b.name))), [seasonModel]);
   const [courseKey, setCourseKey] = React.useState("");
   const [selectedPlayers, setSelectedPlayers] = React.useState([]);
-  const [planMode, setPlanMode] = React.useState("winning"); // winning | stableford | gross
+  const [planMode, setPlanMode] = React.useState("winning"); // winning | stableford | gross | live
   const [customPoints, setCustomPoints] = React.useState(40);
   const [customGross, setCustomGross] = React.useState(85);
+  const [liveScores, setLiveScores] = React.useState(()=>Array(18).fill(""));
+
   const [tempHandicaps, setTempHandicaps] = React.useState({});
   const handicapMap = React.useMemo(() => WP_currentYearHandicapMap(seasonRoundsAllYears, currentYear), [seasonRoundsAllYears, currentYear]);
 
@@ -15792,15 +16116,71 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   const event = React.useMemo(() => WP_findLatestEventAtCourse(seasonModel, courseKey), [seasonModel, courseKey]);
   const selectedCourse = courses.find(c => c.key === courseKey) || null;
   const winnerPts = Number(event?.winningPoints);
-  const target = planMode === "winning" ? Number(event?.targetPoints) : (planMode === "stableford" ? Number(customPoints) : Number(customGross));
+  const target = planMode === "winning" ? Number(event?.targetPoints) : (planMode === "gross" ? Number(customGross) : Number(customPoints));
   const extraNeeded = planMode !== "gross" && Number.isFinite(target) ? Math.max(0, target - 36) : NaN;
 
+  const livePlayer = React.useMemo(()=>{
+    if(planMode!=="live" || selectedPlayers.length!==1) return null;
+    return players.find(p=>String(p?.name||"")===String(selectedPlayers[0])) || null;
+  },[planMode,selectedPlayers,players]);
+  const liveLayout = React.useMemo(()=>{
+    if(!livePlayer || !event) return null;
+    return WP_layoutForPlayer(seasonModel,event,livePlayer,courseKey,handicapMap,tempHandicaps?.[String(livePlayer?.name||"")]);
+  },[livePlayer,event,seasonModel,courseKey,handicapMap,tempHandicaps]);
+  const livePreview = React.useMemo(()=>{
+    if(!liveLayout) return {played:0,pts:0,gross:0};
+    let played=0,pts=0,gross=0;
+    for(let i=0;i<18;i++){
+      const g=Number(liveScores[i]);
+      const par=Number(liveLayout.pars?.[i]);
+      const si=Number(liveLayout.si?.[i]);
+      if(!Number.isFinite(g)||g<=0||!Number.isFinite(par)) continue;
+      const shots=WP_strokesReceived(liveLayout.ch,si);
+      pts+=Math.max(0,Math.min(6,2+par+shots-g));
+      gross+=g; played++;
+    }
+    return {played,pts,gross};
+  },[liveLayout,liveScores]);
+
   const togglePlayer = (name) => {
-    setSelectedPlayers(prev => prev.includes(name) ? prev.filter(x => x !== name) : [...prev, name]);
+    setSelectedPlayers(prev => {
+      if(planMode==="live") return prev.includes(name) ? [] : [name];
+      return prev.includes(name) ? prev.filter(x => x !== name) : [...prev, name];
+    });
+  };
+
+  const choosePlanMode = (m) => {
+    setPlanMode(m);
+    if(m==="live" && selectedPlayers.length>1) setSelectedPlayers([selectedPlayers[0]]);
+  };
+
+  React.useEffect(()=>{
+    setLiveScores(Array(18).fill(""));
+  },[courseKey]);
+
+  const setLiveScore=(i,v)=>{
+    setLiveScores(prev=>{ const next=prev.slice(); next[i]=v; return next; });
   };
 
   const generatePlan = () => {
     try {
+      if(planMode==="live"){
+        if(selectedPlayers.length!==1){ alert("Choose exactly one player for Live Replan."); return; }
+        const r=WP_generateLiveReplanHTML({
+          model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
+          target:Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],actualGross:liveScores
+        });
+        if(!r?.ok){ alert(r?.error||"Could not build live replan."); return; }
+        window.__dslSeasonReportParams={
+          model:seasonModel,
+          playerName:`Live-Replan-${r.event.courseName||"course"}-${selectedPlayers[0]}`,
+          yearLabel:"All Years",seasonLimit:"all",scoringMode:"stableford",
+          lensMode:"liveReplan",comparatorMode:"target"
+        };
+        PR_showInlineSeasonReport(r.htmlFragment);
+        return;
+      }
+
       const r = WP_generateWinningPlanHTML({ model: seasonModel, courseKey, playerNames: selectedPlayers, handicapMap, mode: planMode, customTarget: target, tempHandicaps });
       if (!r?.ok) { alert(r?.error || "Could not build winning plan."); return; }
       window.__dslSeasonReportParams = {
@@ -15833,7 +16213,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
               <div className="text-[10px] font-black tracking-[.2em] uppercase text-emerald-200">Den Golf · Pre-Round Intelligence</div>
               <div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[10px] font-black text-white">ALL YEARS COURSE HISTORY</span><span className="rounded-full border border-blue-200/30 bg-blue-300/10 px-3 py-1 text-[10px] font-black text-blue-100">FIXED DEN HANDICAPS · TEMP WHS OPTIONAL</span></div>
               <h1 className="mt-2 text-3xl md:text-5xl font-black tracking-[-.04em] leading-none">Build the route to a win.</h1>
-              <p className="mt-3 max-w-3xl text-sm md:text-base text-white/75 leading-relaxed">Choose the course and target. Den Society handicaps are used as fixed playing handicaps; enter a temporary HI only when you want a WHS Course Handicap. The optimiser then builds the most likely 18-hole route from each golfer's history.</p>
+              <p className="mt-3 max-w-3xl text-sm md:text-base text-white/75 leading-relaxed">Choose the course and target, or switch to Live Replan once the round starts. Den Society handicaps are used as fixed playing handicaps; enter a temporary HI only when you want a WHS Course Handicap. The optimiser builds the route from each golfer's history and can recalculate it after every completed hole.</p>
             </div>
             <div className="grid grid-cols-3 gap-2 min-w-[300px]">
               <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur"><div className="text-[9px] font-black uppercase tracking-widest text-white/55">Handicap pace</div><div className="mt-1 text-2xl font-black">36</div></div>
@@ -15887,19 +16267,65 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
           {event && <section className="content-card p-5 md:p-7">
             <div className="text-[10px] font-black uppercase tracking-[.18em] text-slate-400">Choose your destination</div>
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-3">
-              {[['winning','🏆','Beat likely winning score','Let Den Golf set the target'],['stableford','🎯','Choose Stableford target','Build an exact points route'],['gross','⛳','Choose gross target','Build an exact stroke route']].map(([m,icon,title,sub])=><button key={m} type="button" onClick={()=>setPlanMode(m)} className={`rounded-2xl border p-4 text-left transition ${planMode===m?'border-emerald-400 bg-emerald-50 shadow-sm':'border-slate-200 bg-white hover:bg-slate-50'}`}><div className="text-2xl">{icon}</div><div className="mt-2 font-black text-slate-900">{title}</div><div className="mt-1 text-xs text-slate-500">{sub}</div></button>)}
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              {[
+                ['winning','🏆','Beat likely winning score','Let Den Golf set the target'],
+                ['stableford','🎯','Choose Stableford target','Build an exact points route'],
+                ['gross','⛳','Choose gross target','Build an exact stroke route'],
+                ['live','🔄','Live Replan','Enter scores as you play and rebuild the safest route']
+              ].map(([m,icon,title,sub])=><button key={m} type="button" onClick={()=>choosePlanMode(m)} className={`rounded-2xl border p-4 text-left transition ${planMode===m?'border-emerald-400 bg-emerald-50 shadow-sm':'border-slate-200 bg-white hover:bg-slate-50'}`}><div className="text-2xl">{icon}</div><div className="mt-2 font-black text-slate-900">{title}</div><div className="mt-1 text-xs text-slate-500">{sub}</div></button>)}
             </div>
             {planMode==='stableford'?<div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4"><label className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Target Stableford points</label><div className="mt-2 flex items-center gap-3"><input type="number" min="18" max="72" step="1" value={customPoints} onChange={e=>setCustomPoints(e.target.value)} className="w-28 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-2xl font-black text-slate-900"/><span className="font-black text-emerald-800">points</span></div><div className="mt-2 text-xs text-emerald-800">The optimizer will use your previous rounds, exact-hole record, SI and Par profile to decide where those points are most realistically made.</div></div>:null}
             {planMode==='gross'?<div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4"><label className="text-[10px] font-black uppercase tracking-widest text-blue-700">Target gross score</label><div className="mt-2 flex items-center gap-3"><input type="number" min="54" max="180" step="1" value={customGross} onChange={e=>setCustomGross(e.target.value)} className="w-28 rounded-xl border border-blue-300 bg-white px-3 py-2 text-2xl font-black text-slate-900"/><span className="font-black text-blue-800">gross</span></div><div className="mt-2 text-xs text-blue-800">The optimizer allocates pars, bogeys and worse scores to the holes where your history says they are most likely, while making the 18-hole total equal your chosen gross score.</div></div>:null}
+
+            {planMode==='live'?<div className="mt-4 rounded-3xl border border-violet-200 bg-gradient-to-b from-violet-50 to-white p-4 md:p-5">
+              <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-[.16em] text-violet-700">Live Replan</div>
+                  <div className="mt-1 text-xl font-black text-slate-900">Enter the gross score after each hole.</div>
+                  <div className="mt-1 text-xs text-slate-600">The system locks in what has already happened and reallocates only the remaining holes. A good hole removes pressure later; a bad hole moves the required gains to the most realistic alternatives.</div>
+                </div>
+                <div className="rounded-2xl border border-violet-200 bg-white p-3 min-w-[160px]">
+                  <label className="text-[9px] font-black uppercase tracking-widest text-violet-700">Round target</label>
+                  <div className="mt-1 flex items-center gap-2"><input type="number" min="18" max="72" step="1" value={customPoints} onChange={e=>setCustomPoints(e.target.value)} className="w-20 rounded-xl border border-violet-300 px-2 py-2 text-xl font-black text-slate-900"/><span className="text-sm font-black text-violet-700">pts</span></div>
+                </div>
+              </div>
+
+              {selectedPlayers.length!==1?<div className="mt-4 rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-bold text-amber-800">Live Replan works for one golfer at a time. Select one player above.</div>:null}
+
+              {selectedPlayers.length===1 && liveLayout?<>
+                <div className="mt-4 grid grid-cols-3 gap-2">
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3"><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Holes entered</div><div className="mt-1 text-2xl font-black text-slate-900">{livePreview.played}</div></div>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3"><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Points banked</div><div className="mt-1 text-2xl font-black text-emerald-700">{livePreview.pts}</div></div>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3"><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Still needed</div><div className="mt-1 text-2xl font-black text-violet-700">{Math.max(0,Number(customPoints||0)-livePreview.pts)}</div></div>
+                </div>
+
+                <div className="mt-4 grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-9 gap-2">
+                  {Array.from({length:18},(_,i)=>{
+                    const par=Number(liveLayout.pars?.[i]);
+                    const si=Number(liveLayout.si?.[i]);
+                    const g=Number(liveScores[i]);
+                    const shots=WP_strokesReceived(liveLayout.ch,si);
+                    const pts=Number.isFinite(g)&&g>0&&Number.isFinite(par)?Math.max(0,Math.min(6,2+par+shots-g)):NaN;
+                    return <div key={i} className={`rounded-2xl border p-2 ${Number.isFinite(pts)?'border-violet-200 bg-violet-50':'border-slate-200 bg-white'}`}>
+                      <div className="flex items-center justify-between gap-1"><span className="text-[9px] font-black text-slate-500">H{i+1}</span><span className="text-[8px] font-bold text-slate-400">P{Number.isFinite(par)?par:'—'}</span></div>
+                      <input inputMode="numeric" type="number" min="1" max="15" step="1" placeholder="—" value={liveScores[i]} onChange={e=>setLiveScore(i,e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-1 py-1.5 text-center text-lg font-black text-slate-900"/>
+                      <div className={`mt-1 text-center text-[9px] font-black ${Number.isFinite(pts)?'text-violet-700':'text-slate-300'}`}>{Number.isFinite(pts)?`${pts} pts`:'gross'}</div>
+                    </div>;
+                  })}
+                </div>
+                <div className="mt-3 flex items-center justify-between gap-3"><div className="text-[10px] text-slate-500">You can re-run this after every hole. Previously entered scores stay fixed in the recalculation.</div><button type="button" onClick={()=>setLiveScores(Array(18).fill(""))} className="text-xs font-black text-violet-700 underline">Clear scores</button></div>
+              </>:null}
+            </div>:null}
+
           </section>}
 
           {event && <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
             <div className="grid grid-cols-1 md:grid-cols-[1.25fr_.75fr]">
               <div className="p-5 md:p-7">
-                <div className="text-[10px] font-black uppercase tracking-[.18em] text-slate-400">{planMode==='winning'?'The winning equation':planMode==='stableford'?'Your points target':'Your gross target'}</div>
-                {planMode==='gross'?<div className="mt-2"><span className="text-6xl font-black tracking-[-.05em] text-slate-900">{Number.isFinite(target)?Math.round(target):'—'}</span><span className="ml-3 text-xl font-black text-blue-600">GROSS</span></div>:<div className="mt-2 flex items-baseline gap-3 flex-wrap"><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">36</span><span className="text-3xl font-black text-slate-300">+</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-emerald-600">{Number.isFinite(extraNeeded)?extraNeeded.toFixed(0):"—"}</span><span className="text-3xl font-black text-slate-300">=</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">{Number.isFinite(target)?Math.round(target):'—'}</span></div>}
-                <div className="mt-2 text-sm text-slate-600">{planMode==='winning'?'The engine finds the lowest-risk holes to beat the credible winning benchmark.':planMode==='stableford'?'The engine builds an exact points total, putting the extra points on the holes your previous rounds, Stroke Index and Par profile say are most likely.':'The engine builds an exact gross total, placing pars, bogeys and higher scores on the holes where your own history says they are most likely.'}</div>
+                <div className="text-[10px] font-black uppercase tracking-[.18em] text-slate-400">{planMode==='winning'?'The winning equation':planMode==='stableford'?'Your points target':planMode==='live'?'Live round target':'Your gross target'}</div>
+                {planMode==='gross'?<div className="mt-2"><span className="text-6xl font-black tracking-[-.05em] text-slate-900">{Number.isFinite(target)?Math.round(target):'—'}</span><span className="ml-3 text-xl font-black text-blue-600">GROSS</span></div>:planMode==='live'?<div className="mt-2 flex items-baseline gap-3 flex-wrap"><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-violet-700">{livePreview.pts}</span><span className="text-xl font-black text-slate-400">BANKED</span><span className="text-3xl font-black text-slate-300">→</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">{Number.isFinite(target)?Math.round(target):'—'}</span><span className="text-xl font-black text-violet-700">TARGET</span></div>:<div className="mt-2 flex items-baseline gap-3 flex-wrap"><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">36</span><span className="text-3xl font-black text-slate-300">+</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-emerald-600">{Number.isFinite(extraNeeded)?extraNeeded.toFixed(0):"—"}</span><span className="text-3xl font-black text-slate-300">=</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">{Number.isFinite(target)?Math.round(target):'—'}</span></div>}
+                <div className="mt-2 text-sm text-slate-600">{planMode==='winning'?'The engine finds the lowest-risk holes to beat the credible winning benchmark.':planMode==='stableford'?'The engine builds an exact points total, putting the extra points on the holes your previous rounds, Stroke Index and Par profile say are most likely.':planMode==='live'?'Completed holes are locked. The engine recalculates the safest remaining route to the target and moves pressure away from holes you no longer need to attack.':'The engine builds an exact gross total, placing pars, bogeys and higher scores on the holes where your own history says they are most likely.'}</div>
               </div>
               <div className="border-t md:border-t-0 md:border-l border-slate-200 bg-slate-50 p-5 md:p-7">
                 <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">How the plan thinks</div>
@@ -15908,8 +16334,11 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
             </div>
           </section>}
 
-          <button type="button" disabled={!event || !selectedPlayers.length || !Number.isFinite(target)} onClick={generatePlan} className="w-full rounded-3xl px-6 py-5 text-lg md:text-xl font-black text-white shadow-xl disabled:cursor-not-allowed disabled:opacity-40" style={{background:"linear-gradient(90deg,#071d35 0%,#0b3e61 45%,#08775f 100%)"}}>
-            {event ? `Build ${selectedPlayers.length || ""} ${planMode==='winning'?'Winning':planMode==='stableford'?'Stableford':'Gross'} Route${selectedPlayers.length===1?"":"s"} · Target ${Number.isFinite(target)?Math.round(target):'—'} ${planMode==='gross'?'gross':'pts'}` : "Choose a course with a previous result"}
+          <button type="button" disabled={!event || !selectedPlayers.length || !Number.isFinite(target) || (planMode==='live' && (selectedPlayers.length!==1 || livePreview.played<1))} onClick={generatePlan} className="w-full rounded-3xl px-6 py-5 text-lg md:text-xl font-black text-white shadow-xl disabled:cursor-not-allowed disabled:opacity-40" style={{background:planMode==='live'?"linear-gradient(90deg,#4c1d95 0%,#6d28d9 48%,#08775f 100%)":"linear-gradient(90deg,#071d35 0%,#0b3e61 45%,#08775f 100%)"}}>
+            {event ? (planMode==='live'
+              ? `🔄 Recalculate Remaining ${18-livePreview.played} Holes · ${livePreview.pts} pts banked · Target ${Number.isFinite(target)?Math.round(target):'—'}`
+              : `Build ${selectedPlayers.length || ""} ${planMode==='winning'?'Winning':planMode==='stableford'?'Stableford':'Gross'} Route${selectedPlayers.length===1?"":"s"} · Target ${Number.isFinite(target)?Math.round(target):'—'} ${planMode==='gross'?'gross':'pts'}`
+            ) : "Choose a course with a previous result"}
           </button>
         </>
       )}
