@@ -15426,6 +15426,171 @@ function WP_expectedHoleProfile(sig,hole,par,si,yard,strokes){
     exactGrossRel:exactRel,siGrossRel:siRel,parGrossRel:parRel
   };
 }
+
+// =========================================================
+// RISK & PROBABILITY ENGINE
+// Modelled estimates from the golfer's own scoring history.
+// Small exact-hole samples are deliberately shrunk toward the
+// broader expected profile so 3/3 is not treated like 10/10.
+// These are estimates, not guarantees.
+// =========================================================
+function WP_sd(values){
+  const a=(values||[]).map(Number).filter(Number.isFinite);
+  if(a.length<2) return NaN;
+  const m=WP_avg(a);
+  return Math.sqrt(a.reduce((s,v)=>s+(v-m)*(v-m),0)/(a.length-1));
+}
+function WP_gaussianPrior(min,max,mean,sigma){
+  const out=[];
+  const sd=Math.max(.45,Number(sigma)||1);
+  let sum=0;
+  for(let x=min;x<=max;x++){
+    const z=(x-mean)/sd;
+    const w=Math.exp(-.5*z*z);
+    out.push([x,w]); sum+=w;
+  }
+  if(!sum) return out.map(([x])=>[x,1/(max-min+1)]);
+  return out.map(([x,w])=>[x,w/sum]);
+}
+function WP_exactPriorStrength(n){
+  const N=Math.max(0,Number(n)||0);
+  if(N>=10) return .8;
+  if(N>=7) return 1.1;
+  if(N>=5) return 1.6;
+  if(N>=3) return 2.4;
+  if(N>=1) return 3.4;
+  return 5.0;
+}
+function WP_stablefordPmf(h){
+  if(h?.played && Number.isFinite(Number(h.actualPts))){
+    const pmf=Array(7).fill(0); pmf[Math.max(0,Math.min(6,Math.round(Number(h.actualPts))))]=1; return pmf;
+  }
+  const vals=(h?.exactPtsValues||[]).map(Number).filter(Number.isFinite).map(v=>Math.max(0,Math.min(6,Math.round(v))));
+  const n=vals.length;
+  const mean=Number.isFinite(Number(h?.personalExpectedPts))?Number(h.personalExpectedPts):
+    (Number.isFinite(Number(h?.expectedPts))?Number(h.expectedPts):2);
+  const empiricalSd=WP_sd(vals);
+  const sigma=Number.isFinite(empiricalSd)?Math.max(.65,Math.min(1.6,empiricalSd)):1.0;
+  const priorStrength=WP_exactPriorStrength(n);
+  const prior=WP_gaussianPrior(0,6,Math.max(0,Math.min(6,mean)),sigma);
+  const counts=Array(7).fill(0);
+  vals.forEach(v=>counts[v]+=1);
+  prior.forEach(([x,p])=>counts[x]+=p*priorStrength);
+  const total=counts.reduce((s,v)=>s+v,0)||1;
+  return counts.map(v=>v/total);
+}
+function WP_grossPmf(h){
+  if(h?.played && Number.isFinite(Number(h.actualGross))){
+    const g=Math.max(1,Math.round(Number(h.actualGross)));
+    const pmf=Array(g+1).fill(0); pmf[g]=1; return pmf;
+  }
+  const par=Math.max(3,Math.round(Number(h?.par)||4));
+  const rel=(h?.exactGrossValues||[]).map(Number).filter(Number.isFinite);
+  const vals=rel.map(v=>Math.max(1,Math.round(par+v)));
+  const n=vals.length;
+  const mean=Number.isFinite(Number(h?.expectedGross))?Number(h.expectedGross):(par+Number(h?.strokes||0));
+  const empiricalSd=WP_sd(vals);
+  const sigma=Number.isFinite(empiricalSd)?Math.max(.75,Math.min(2.0,empiricalSd)):1.15;
+  const min=1, max=Math.max(par+7,Math.ceil(mean+4));
+  const priorStrength=WP_exactPriorStrength(n);
+  const prior=WP_gaussianPrior(min,max,mean,sigma);
+  const counts=Array(max+1).fill(0);
+  vals.forEach(v=>{ if(v<=max) counts[v]+=1; });
+  prior.forEach(([x,p])=>counts[x]+=p*priorStrength);
+  const total=counts.reduce((s,v)=>s+v,0)||1;
+  return counts.map(v=>v/total);
+}
+function WP_probAtLeast(pmf,x){
+  const t=Math.max(0,Math.ceil(Number(x)||0));
+  let s=0; for(let i=t;i<(pmf||[]).length;i++) s+=Number(pmf[i])||0;
+  return Math.max(0,Math.min(1,s));
+}
+function WP_probAtMost(pmf,x){
+  const t=Math.min((pmf||[]).length-1,Math.floor(Number(x)||0));
+  let s=0; for(let i=0;i<=t;i++) s+=Number(pmf[i])||0;
+  return Math.max(0,Math.min(1,s));
+}
+function WP_holeRisk(h,target,mode='stableford'){
+  if(mode==='gross'){
+    const pmf=WP_grossPmf(h);
+    return {
+      successProb:WP_probAtMost(pmf,target),
+      blowupProb:1-WP_probAtMost(pmf,Number(target)+1)
+    };
+  }
+  const pmf=WP_stablefordPmf(h);
+  return {
+    successProb:WP_probAtLeast(pmf,target),
+    blowupProb:(Number(pmf[0])||0)+(Number(pmf[1])||0)
+  };
+}
+function WP_convolvePmfs(pmfs){
+  let dist=[1];
+  for(const pmf of (pmfs||[])){
+    const next=Array(dist.length+pmf.length-1).fill(0);
+    for(let i=0;i<dist.length;i++){
+      const a=Number(dist[i])||0; if(!a) continue;
+      for(let j=0;j<pmf.length;j++){
+        const b=Number(pmf[j])||0; if(b) next[i+j]+=a*b;
+      }
+    }
+    dist=next;
+  }
+  const total=dist.reduce((s,v)=>s+v,0)||1;
+  return dist.map(v=>v/total);
+}
+function WP_distQuantile(dist,q){
+  const target=Math.max(0,Math.min(1,Number(q)||0));
+  let c=0;
+  for(let i=0;i<(dist||[]).length;i++){ c+=Number(dist[i])||0; if(c>=target) return i; }
+  return Math.max(0,(dist||[]).length-1);
+}
+function WP_probPctText(prob){
+  const p=Math.max(0,Math.min(1,Number(prob)||0));
+  if(p>0&&p<.01) return '<1%';
+  if(p>.99&&p<1) return '>99%';
+  return `${Math.round(p*100)}%`;
+}
+function WP_probabilitySummary(plan){
+  if(!plan||!Array.isArray(plan.holes)||!plan.holes.length) return {};
+  const isGross=plan.mode==='gross';
+  const pmfs=plan.holes.map(h=>isGross?WP_grossPmf(h):WP_stablefordPmf(h));
+  const dist=WP_convolvePmfs(pmfs);
+  const target=Math.round(Number(plan.targetRequested ?? (isGross?plan.totalGross:plan.pointsTotal))||0);
+  const targetProb=isGross?WP_probAtMost(dist,target):WP_probAtLeast(dist,target);
+  let mode=0,best=-1;
+  dist.forEach((v,i)=>{ if(v>best){best=v;mode=i;} });
+  const q25=WP_distQuantile(dist,.25), q50=WP_distQuantile(dist,.50), q75=WP_distQuantile(dist,.75);
+
+  let riskLabel='LONG SHOT', riskTone='hard';
+  if(targetProb>=.62){riskLabel='REALISTIC';riskTone='good';}
+  else if(targetProb>=.38){riskLabel='ACHIEVABLE';riskTone='mid';}
+  else if(targetProb>=.18){riskLabel='AMBITIOUS';riskTone='warn';}
+
+  const exactNs=plan.holes.map(h=>isGross?Number(h.exactGrossN||0):Number(h.exactPtsN||0));
+  const avgExact=exactNs.reduce((s,v)=>s+v,0)/Math.max(1,exactNs.length);
+  const dataConfidence=avgExact>=6?'HIGH':avgExact>=3?'MEDIUM':avgExact>=1?'LIMITED':'LOW';
+
+  const ladder=isGross
+    ? [target+2,target,target-2].filter(x=>x>0).map(x=>({target:x,prob:WP_probAtMost(dist,x)}))
+    : [Math.max(0,target-2),target,target+2].map(x=>({target:x,prob:WP_probAtLeast(dist,x)}));
+
+  return {
+    targetProbability:targetProb,
+    targetProbabilityText:WP_probPctText(targetProb),
+    probabilityLabel:riskLabel,
+    probabilityTone:riskTone,
+    mostLikelyTotal:mode,
+    probabilityQ25:q25,
+    probabilityMedian:q50,
+    probabilityQ75:q75,
+    probabilityLadder:ladder,
+    probabilityDataConfidence:dataConfidence,
+    probabilityAvgExactRounds:avgExact,
+    probabilityDistribution:dist
+  };
+}
+
 function WP_dpExact(holes,target,candidateFn){
   let states=new Map([[0,{cost:0,choices:[]}]]);
   for(const h of holes){
@@ -15502,6 +15667,11 @@ function WP_enrichPlanVisuals(plan){
   plan.plannedGains=plannedGains;
   plan.onPlanBogeys=onPlanBogeys;
   plan.onPlanDoubles=onPlanDoubles;
+
+  // Add a modelled round-level probability from the golfer's own hole history.
+  // This is deliberately separate from Route Fit: Route Fit = similarity to
+  // historical expectations; probability = modelled chance of reaching target.
+  Object.assign(plan,WP_probabilitySummary(plan));
   return plan;
 }
 
@@ -15529,6 +15699,9 @@ function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
         let cost=dev*dev*1.25;
         if(g<h.par-1) cost+=2.5*(h.par-1-g);
         if(g>h.par+3) cost+=.7*(g-(h.par+3));
+        const risk=WP_holeRisk(h,g,'gross');
+        cost += -Math.log(Math.max(.04,risk.successProb))*0.65;
+        cost += risk.blowupProb*.35;
         arr.push({value:g,cost,gross:g});
       }
       return arr;
@@ -15617,6 +15790,15 @@ function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
         if(pts===2&&exactAvg>=2.65) cost+=(exactAvg-2.55)*.65*evidenceStrength;
         if(pts>=3&&exactAvg<=1.65) cost+=(1.75-exactAvg)*1.20*evidenceStrength;
         if(pts===2&&exactAvg<=1.55) cost-=Math.min(.40,(1.65-exactAvg)*.40)*evidenceStrength;
+      }
+
+      // Risk adjustment: among routes that hit the same final total, prefer
+      // hole targets with the higher modelled chance of being achieved and
+      // lower historical 0/1-point damage risk.
+      if(pts>=2){
+        const risk=WP_holeRisk(h,pts,'stableford');
+        cost += -Math.log(Math.max(.04,risk.successProb))*0.95;
+        if(pts>=3) cost += risk.blowupProb*0.85;
       }
       arr.push({value:pts,cost,pts});
     }
@@ -15779,6 +15961,11 @@ function WP_liveCandidates(h){
       if(pts>=3&&exactAvg<=1.65) cost+=(1.75-exactAvg)*1.20*evidenceStrength;
       if(pts===2&&exactAvg<=1.55) cost-=Math.min(.40,(1.65-exactAvg)*.40)*evidenceStrength;
     }
+    if(pts>=2){
+      const risk=WP_holeRisk(h,pts,'stableford');
+      cost += -Math.log(Math.max(.04,risk.successProb))*0.95;
+      if(pts>=3) cost += risk.blowupProb*.85;
+    }
     arr.push({value:pts,cost,pts});
   }
   return arr;
@@ -15859,7 +16046,7 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
 
   // Original route is the benchmark we compare today's live position against.
   const original=WP_makePlayerPlan(model,event,p,courseKey,handicapMap,{
-    mode:'stableford',target,tempHI
+    mode:'stableford',target,tempHI,tempMode:options?.tempMode
   });
 
   let actualPts=0, actualGrossTotal=0, holesPlayed=0;
@@ -15968,6 +16155,10 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
     projectedTotal,projectedGross,targetPossible,status,releasedGains,newGains,
     originalPlan:original
   });
+  plan.originalTargetProbability=Number(original?.targetProbability);
+  plan.originalTargetProbabilityText=original?.targetProbabilityText||'—';
+  plan.probabilityChange=(Number.isFinite(plan.targetProbability)&&Number.isFinite(plan.originalTargetProbability))
+    ? plan.targetProbability-plan.originalTargetProbability : NaN;
   return plan;
 }
 
@@ -15997,7 +16188,7 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
     const css=`<style>
       .LR{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#0b1f36;background:#fff;max-width:760px;margin:0 auto}.LR *{box-sizing:border-box}
       .LRhdr{background:linear-gradient(120deg,#071d35,#0b3e61 55%,#08775f);color:#fff;border-radius:28px;padding:26px 28px}.LReye{font-size:10px;font-weight:950;letter-spacing:.18em;text-transform:uppercase;color:#a7f3d0}.LRtitle{font-size:38px;font-weight:950;letter-spacing:-.045em;line-height:1;margin-top:8px}.LRsub{font-size:12px;opacity:.78;margin-top:8px}
-      .LRdash{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-top:13px}.LRstat{border:1px solid #dbe5ee;border-radius:15px;padding:11px;background:#fff}.LRk{font-size:8px;font-weight:950;letter-spacing:.1em;text-transform:uppercase;color:#64748b}.LRv{font-size:22px;font-weight:950;margin-top:3px}.LRstat.hero{background:#0b1f36;color:#fff;border-color:#0b1f36}.LRstat.hero .LRk{color:#bfdbfe}.LRstat.good{background:#ecfdf5;border-color:#a7f3d0}.LRstat.bad{background:#fff1f2;border-color:#fecdd3}.LRstat.mid{background:#eff6ff;border-color:#bfdbfe}
+      .LRdash{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:13px}.LRstat{border:1px solid #dbe5ee;border-radius:15px;padding:11px;background:#fff}.LRk{font-size:8px;font-weight:950;letter-spacing:.1em;text-transform:uppercase;color:#64748b}.LRv{font-size:22px;font-weight:950;margin-top:3px}.LRstat.hero{background:#0b1f36;color:#fff;border-color:#0b1f36}.LRstat.hero .LRk{color:#bfdbfe}.LRstat.good{background:#ecfdf5;border-color:#a7f3d0}.LRstat.bad{background:#fff1f2;border-color:#fecdd3}.LRstat.mid{background:#eff6ff;border-color:#bfdbfe}
       .LRmsg{margin-top:12px;border-radius:16px;border:1px solid #dbe5ee;background:#f8fafc;padding:12px 14px}.LRmsg b{display:block;font-size:14px}.LRmsg span{font-size:10px;color:#64748b}
       .LRsec{margin-top:16px}.LRsec h3{font-size:18px;margin:0 0 8px;font-weight:950}.LRstrip{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:5px}.LRcell{border:1px solid #dbe5ee;border-radius:10px;padding:6px 4px;text-align:center;background:#f8fafc}.LRcell.played{background:#eef2ff;border-color:#c7d2fe}.LRcell.attack{background:#ecfdf5;border-color:#a7f3d0}.LRcell.stretch{background:#fffbeb;border-color:#fde68a}.LRcell.protect{background:#f8fafc}.LRh{font-size:8px;font-weight:950;color:#64748b}.LRg{font-size:22px;font-weight:950;line-height:1;margin-top:3px}.LRp{font-size:8px;font-weight:900;color:#475569;margin-top:2px}
       .LRholes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.LRhole{border:1px solid #dbe5ee;border-radius:15px;padding:11px;background:#f8fafc}.LRhole.attack{background:#ecfdf5;border-color:#a7f3d0}.LRhole.stretch{background:#fffbeb;border-color:#fde68a}.LRtop{display:flex;justify-content:space-between;gap:8px}.LRtag{font-size:8px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.LRgross{font-size:36px;font-weight:950;line-height:1;margin-top:6px}.LRpts{font-size:13px;font-weight:950}.LRreason{font-size:9px;color:#475569;line-height:1.3;margin-top:6px}
@@ -16036,8 +16227,9 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
         <div class="LRstat ${deltaTone}"><div class="LRk">Vs original plan</div><div class="LRv">${deltaLabel}</div></div>
         <div class="LRstat"><div class="LRk">Still needed</div><div class="LRv">${plan.pointsStillNeeded}</div></div>
         <div class="LRstat"><div class="LRk">Holes left</div><div class="LRv">${plan.holesLeft}</div></div>
+        <div class="LRstat ${plan.probabilityTone||'mid'}"><div class="LRk">Chance of ${plan.liveTarget}</div><div class="LRv">${WP_escape(plan.targetProbabilityText||'—')}</div><div style="font-size:8px;color:#64748b">${WP_escape(plan.probabilityLabel||'')}</div></div>
       </div>
-      <div class="LRmsg"><b>${WP_escape(plan.status)} · projected ${plan.projectedTotal} pts</b><span>${WP_escape(changedText)}${plan.holesLeft?` · Need ${plan.requiredRate.toFixed(2)} pts/hole from here to hit ${plan.liveTarget}.`:''}</span></div>
+      <div class="LRmsg"><b>${WP_escape(plan.status)} · projected ${plan.projectedTotal} pts</b><span>${WP_escape(changedText)}${plan.holesLeft?` · Need ${plan.requiredRate.toFixed(2)} pts/hole from here to hit ${plan.liveTarget}.`:''}${Number.isFinite(plan.probabilityChange)?` · Target chance ${plan.originalTargetProbabilityText} → ${plan.targetProbabilityText} (${plan.probabilityChange>=0?'+':''}${Math.round(plan.probabilityChange*100)} pts).`:''}</span></div>
       <div class="LRsec"><h3>Revised route at a glance</h3>${routeStrip}</div>
       <div class="LRsec"><h3>Scores already banked</h3>${played}</div>
       <div class="LRsec"><h3>From the next hole</h3><div class="LRholes">${future}</div></div>
@@ -16063,8 +16255,8 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
     if(!plans.length)return{ok:false,error:"The selected course does not have enough Par / Stroke Index data to build a plan."};
     const c=event.courseName||courseKey;
     const css=`<style>
-      .WP{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#0b1f36;background:#fff;max-width:760px;margin:0 auto}.WP *{box-sizing:border-box}.WPhdr{background:linear-gradient(120deg,#0b2747 0%,#123c61 58%,#0b7a6e 100%);color:white;border-radius:28px;padding:28px 30px;position:relative;overflow:hidden}.WPeyebrow{font-size:11px;font-weight:900;letter-spacing:.16em;text-transform:uppercase;opacity:.75}.WPtitle{font-size:38px;line-height:1;font-weight:950;letter-spacing:-.045em;margin-top:9px}.WPsub{font-size:13px;margin-top:9px;opacity:.85}.WPbenchmark{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:14px 0 10px}.WPstat{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:linear-gradient(180deg,#fff,#f7fafc)}.WPk{font-size:9px;letter-spacing:.11em;text-transform:uppercase;font-weight:900;color:#64748b}.WPv{font-size:20px;font-weight:950;margin-top:4px}.WPplayer{margin-top:20px;border:1px solid #dbe5ee;border-radius:24px;padding:16px;background:#fff}.WPplayer+.WPplayer{break-before:page}.WPplayerHead{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;border-bottom:1px solid #e6edf3;padding-bottom:12px}.WPname{font-size:28px;font-weight:950}.WPmeta{font-size:11px;color:#64748b;margin-top:4px}.WPtarget{font-size:34px;font-weight:950;color:#08775f;line-height:1}.WPribbon{margin:14px 0;background:#0b1f36;color:#fff;border-radius:18px;padding:13px 15px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px}.WPribbon b{font-size:18px}.WPsmall{font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.08em;font-weight:800}.WPholes{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px}.WPhole{border-radius:15px;padding:10px;border:1px solid #dfe7ef;min-height:148px}.WPscoreLine{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:7px}.WPscoreLabel{font-size:8px;letter-spacing:.12em;text-transform:uppercase;font-weight:950;color:#64748b}.WPgrossBig{font-size:40px;font-weight:950;line-height:.95;color:#0b1f36}.WPpointsPill{font-size:15px;font-weight:950;padding:8px 9px;border-radius:11px;background:#0b1f36;color:#fff;white-space:nowrap}.WPscoreEq{font-size:9px;font-weight:850;margin-top:7px;color:#334155}.WPhole.attack{background:linear-gradient(160deg,#ecfdf5,#d8fae9);border-color:#9ee7c8}.WPhole.attack:has(.WPtag){position:relative}.WPhole.opportunity{background:linear-gradient(160deg,#f0fdf9,#e7f8f3);border-color:#99d9ca}.WPhole.protect{background:linear-gradient(160deg,#f8fafc,#eef4f8)}.WPhole.accept{background:linear-gradient(160deg,#fff8e8,#fff0c7);border-color:#f4d38f}.WPhole.reset{background:#fff1f2;border-color:#fecdd3}.WPhole.onplan-bogey{background:linear-gradient(160deg,#fffafa,#fff5f5);border-color:#f3d7d7}.WPhole.onplan-double{background:linear-gradient(160deg,#fff7f7,#ffeded);border-color:#efcccc}.WPonPlan{margin-top:7px;border-radius:9px;padding:5px 7px;font-size:8px;line-height:1.2;font-weight:950;letter-spacing:.055em;text-transform:uppercase;color:#9f3a38;background:rgba(185,28,28,.055);border:1px solid rgba(185,28,28,.10)}.WPonPlan b{color:#7f1d1d}.WPupside{margin-top:7px;border-radius:9px;padding:6px 7px;font-size:8px;line-height:1.25;font-weight:900;color:#075e54;background:#ecfdf5;border:1px solid #a7f3d0}.WPupside b{color:#065f46}.WPbank{margin-top:7px;border-radius:9px;padding:6px 7px;font-size:8px;line-height:1.25;font-weight:900;color:#92400e;background:#fff7ed;border:1px solid #fed7aa}.WPbank b{color:#7c2d12}.WPhit{margin-top:7px;border-radius:9px;padding:6px 7px;font-size:8px;line-height:1.25;font-weight:900;background:#f8fafc;border:1px solid #dbe5ee;color:#334155}.WPhit strong{color:#0b1f36}.WPhit.good{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}.WPhit.warn{background:#fffbeb;border-color:#fde68a;color:#92400e}.WPhit.bad{background:#fff1f2;border-color:#fecdd3;color:#9f1239}.WPgainAudit{margin-top:7px;border:1px solid #dbe5ee;border-radius:10px;background:rgba(255,255,255,.76);padding:7px}.WPgainAuditTitle{font-size:7px;font-weight:950;letter-spacing:.10em;text-transform:uppercase;color:#64748b}.WPgainAuditRows{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:5px}.WPgainAuditRow{border-radius:8px;padding:5px 6px;background:#f8fafc;border:1px solid #e2e8f0}.WPgainAuditRow.gain{background:#ecfdf5;border-color:#a7f3d0}.WPgainAuditK{font-size:7px;font-weight:900;color:#64748b;text-transform:uppercase}.WPgainAuditV{font-size:11px;font-weight:950;color:#0f172a;margin-top:1px}.WPgainAuditHint{font-size:7px;line-height:1.2;color:#64748b;margin-top:4px}.WPgainSummary{margin-top:12px;border:1px solid #dbe5ee;border-radius:18px;padding:12px;background:linear-gradient(180deg,#ffffff,#f8fafc)}.WPgainSummaryTitle{font-size:17px;font-weight:950;color:#0b1f36}.WPgainSummarySub{font-size:9px;color:#64748b;margin-top:3px}.WPgainGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:10px}.WPgainCard{border:1px solid #dbe5ee;border-radius:12px;padding:9px;background:#fff}.WPgainCard.primary{background:#ecfdf5;border-color:#a7f3d0}.WPgainCard.stretch{background:#fffbeb;border-color:#fde68a}.WPgainCardH{display:flex;justify-content:space-between;gap:6px;align-items:center}.WPgainCardHole{font-size:13px;font-weight:950}.WPgainCardTag{font-size:7px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.WPgainCardV{font-size:18px;font-weight:950;line-height:1.05;margin-top:5px}.WPgainCardMeta{font-size:8px;color:#64748b;margin-top:3px;line-height:1.25}.WPliveReason{font-size:8px;line-height:1.3;color:#475569;margin-top:6px;font-weight:800}.WPliveReason strong{color:#0b1f36}.WPhn{font-size:10px;font-weight:950;color:#64748b}.WPtag{display:inline-block;margin-top:6px;font-size:8px;letter-spacing:.08em;font-weight:950;padding:4px 6px;border-radius:999px;background:#0b1f36;color:white}.WPwhy{font-size:8px;color:#64748b;margin-top:5px;line-height:1.2}.WPsection{margin-top:14px}.WPsectionTitle{font-size:18px;font-weight:950}.WPrules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:8px}.WPrule{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:#f8fafc}.WPrule strong{display:block;font-size:13px;margin-top:4px}.WPdanger{color:#b42318}.WPattack{color:#08775f}.WPfoot{font-size:9px;color:#64748b;margin-top:12px;padding-top:9px;border-top:1px solid #e6edf3}.WPprintNote{font-size:11px;color:#475569;margin:9px 0}.WPbenchNote{border-radius:16px;padding:11px 13px;margin:0 0 18px;border:1px solid #dbe5ee;background:#f8fafc;font-size:10px;color:#475569}.WProuteSummary{display:grid;grid-template-columns:1.25fr repeat(4,minmax(0,1fr));gap:8px;margin:12px 0}.WPsum{border:1px solid #dfe7ef;border-radius:14px;padding:10px;background:#fff}.WPsum.hero{background:linear-gradient(145deg,#071d35,#0b3e61);color:#fff;border-color:#071d35}.WPsum.hero .WPk{color:#bfdbfe}.WPsumV{font-size:22px;font-weight:950;line-height:1.05;margin-top:4px}.WPfit.good{background:#ecfdf5;border-color:#a7f3d0}.WPfit.mid{background:#eff6ff;border-color:#bfdbfe}.WPfit.warn{background:#fffbeb;border-color:#fde68a}.WPfit.hard{background:#fff1f2;border-color:#fecdd3}.WProuteStrip{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:5px;margin-top:9px}.WPrCell{border:1px solid #dfe7ef;border-radius:10px;padding:6px 4px;text-align:center;background:#f8fafc}.WPrCell.attack{background:#ecfdf5;border-color:#a7f3d0}.WPrCell.opportunity{background:#f0fdfa;border-color:#99f6e4}.WPrCell.accept{background:#fff7ed;border-color:#fed7aa}.WPrCell.reset{background:#fff1f2;border-color:#fecdd3}.WPrCell.bogey{box-shadow:inset 0 -3px 0 rgba(185,28,28,.10)}.WPrH{font-size:8px;font-weight:950;color:#64748b}.WPrGross{font-size:22px;font-weight:950;line-height:1;margin-top:3px}.WPrPts{font-size:8px;font-weight:900;color:#475569;margin-top:2px}.WPcheckpoints{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px;margin-top:9px}.WPcp{border:1px solid #dfe7ef;border-radius:12px;padding:8px;text-align:center;background:#fff}.WPcpH{font-size:8px;font-weight:950;color:#64748b;text-transform:uppercase}.WPcpV{font-size:18px;font-weight:950;margin-top:3px}.WPevidence{margin-top:7px;border-top:1px dashed rgba(100,116,139,.25);padding-top:6px}.WPevidenceTitle{font-size:7px;font-weight:950;letter-spacing:.1em;text-transform:uppercase;color:#64748b}.WPevidenceRow{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}.WPeChip{font-size:7px;font-weight:800;border:1px solid #dbe5ee;border-radius:999px;background:rgba(255,255,255,.7);padding:3px 5px;color:#475569}.WPconfidenceBar{height:6px;border-radius:999px;background:#e2e8f0;overflow:hidden;margin-top:6px}.WPconfidenceBar span{display:block;height:100%;background:linear-gradient(90deg,#0f766e,#10b981)}
-      @media(max-width:700px){.WPbenchmark{grid-template-columns:repeat(2,1fr)}.WProuteSummary{grid-template-columns:repeat(2,1fr)}.WPsum.hero{grid-column:1/-1}.WProuteStrip{grid-template-columns:repeat(6,1fr)}.WPcheckpoints{grid-template-columns:repeat(3,1fr)}.WPholes{grid-template-columns:repeat(3,1fr)}.WPrules{grid-template-columns:1fr}.WPtitle{font-size:30px}}
+      .WP{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#0b1f36;background:#fff;max-width:760px;margin:0 auto}.WP *{box-sizing:border-box}.WPhdr{background:linear-gradient(120deg,#0b2747 0%,#123c61 58%,#0b7a6e 100%);color:white;border-radius:28px;padding:28px 30px;position:relative;overflow:hidden}.WPeyebrow{font-size:11px;font-weight:900;letter-spacing:.16em;text-transform:uppercase;opacity:.75}.WPtitle{font-size:38px;line-height:1;font-weight:950;letter-spacing:-.045em;margin-top:9px}.WPsub{font-size:13px;margin-top:9px;opacity:.85}.WPbenchmark{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:14px 0 10px}.WPstat{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:linear-gradient(180deg,#fff,#f7fafc)}.WPk{font-size:9px;letter-spacing:.11em;text-transform:uppercase;font-weight:900;color:#64748b}.WPv{font-size:20px;font-weight:950;margin-top:4px}.WPplayer{margin-top:20px;border:1px solid #dbe5ee;border-radius:24px;padding:16px;background:#fff}.WPplayer+.WPplayer{break-before:page}.WPplayerHead{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;border-bottom:1px solid #e6edf3;padding-bottom:12px}.WPname{font-size:28px;font-weight:950}.WPmeta{font-size:11px;color:#64748b;margin-top:4px}.WPtarget{font-size:34px;font-weight:950;color:#08775f;line-height:1}.WPribbon{margin:14px 0;background:#0b1f36;color:#fff;border-radius:18px;padding:13px 15px;display:grid;grid-template-columns:1.2fr 1fr 1fr;gap:10px}.WPribbon b{font-size:18px}.WPsmall{font-size:10px;opacity:.7;text-transform:uppercase;letter-spacing:.08em;font-weight:800}.WPholes{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px}.WPhole{border-radius:15px;padding:10px;border:1px solid #dfe7ef;min-height:148px}.WPscoreLine{display:flex;align-items:flex-end;justify-content:space-between;gap:8px;margin-top:7px}.WPscoreLabel{font-size:8px;letter-spacing:.12em;text-transform:uppercase;font-weight:950;color:#64748b}.WPgrossBig{font-size:40px;font-weight:950;line-height:.95;color:#0b1f36}.WPpointsPill{font-size:15px;font-weight:950;padding:8px 9px;border-radius:11px;background:#0b1f36;color:#fff;white-space:nowrap}.WPscoreEq{font-size:9px;font-weight:850;margin-top:7px;color:#334155}.WPhole.attack{background:linear-gradient(160deg,#ecfdf5,#d8fae9);border-color:#9ee7c8}.WPhole.attack:has(.WPtag){position:relative}.WPhole.opportunity{background:linear-gradient(160deg,#f0fdf9,#e7f8f3);border-color:#99d9ca}.WPhole.protect{background:linear-gradient(160deg,#f8fafc,#eef4f8)}.WPhole.accept{background:linear-gradient(160deg,#fff8e8,#fff0c7);border-color:#f4d38f}.WPhole.reset{background:#fff1f2;border-color:#fecdd3}.WPhole.onplan-bogey{background:linear-gradient(160deg,#fffafa,#fff5f5);border-color:#f3d7d7}.WPhole.onplan-double{background:linear-gradient(160deg,#fff7f7,#ffeded);border-color:#efcccc}.WPonPlan{margin-top:7px;border-radius:9px;padding:5px 7px;font-size:8px;line-height:1.2;font-weight:950;letter-spacing:.055em;text-transform:uppercase;color:#9f3a38;background:rgba(185,28,28,.055);border:1px solid rgba(185,28,28,.10)}.WPonPlan b{color:#7f1d1d}.WPupside{margin-top:7px;border-radius:9px;padding:6px 7px;font-size:8px;line-height:1.25;font-weight:900;color:#075e54;background:#ecfdf5;border:1px solid #a7f3d0}.WPupside b{color:#065f46}.WPbank{margin-top:7px;border-radius:9px;padding:6px 7px;font-size:8px;line-height:1.25;font-weight:900;color:#92400e;background:#fff7ed;border:1px solid #fed7aa}.WPbank b{color:#7c2d12}.WPhit{margin-top:7px;border-radius:9px;padding:6px 7px;font-size:8px;line-height:1.25;font-weight:900;background:#f8fafc;border:1px solid #dbe5ee;color:#334155}.WPhit strong{color:#0b1f36}.WPhit.good{background:#ecfdf5;border-color:#a7f3d0;color:#065f46}.WPhit.warn{background:#fffbeb;border-color:#fde68a;color:#92400e}.WPhit.bad{background:#fff1f2;border-color:#fecdd3;color:#9f1239}.WPgainAudit{margin-top:7px;border:1px solid #dbe5ee;border-radius:10px;background:rgba(255,255,255,.76);padding:7px}.WPgainAuditTitle{font-size:7px;font-weight:950;letter-spacing:.10em;text-transform:uppercase;color:#64748b}.WPgainAuditRows{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-top:5px}.WPgainAuditRow{border-radius:8px;padding:5px 6px;background:#f8fafc;border:1px solid #e2e8f0}.WPgainAuditRow.gain{background:#ecfdf5;border-color:#a7f3d0}.WPgainAuditK{font-size:7px;font-weight:900;color:#64748b;text-transform:uppercase}.WPgainAuditV{font-size:11px;font-weight:950;color:#0f172a;margin-top:1px}.WPgainAuditHint{font-size:7px;line-height:1.2;color:#64748b;margin-top:4px}.WPgainSummary{margin-top:12px;border:1px solid #dbe5ee;border-radius:18px;padding:12px;background:linear-gradient(180deg,#ffffff,#f8fafc)}.WPgainSummaryTitle{font-size:17px;font-weight:950;color:#0b1f36}.WPgainSummarySub{font-size:9px;color:#64748b;margin-top:3px}.WPgainGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:10px}.WPgainCard{border:1px solid #dbe5ee;border-radius:12px;padding:9px;background:#fff}.WPgainCard.primary{background:#ecfdf5;border-color:#a7f3d0}.WPgainCard.stretch{background:#fffbeb;border-color:#fde68a}.WPgainCardH{display:flex;justify-content:space-between;gap:6px;align-items:center}.WPgainCardHole{font-size:13px;font-weight:950}.WPgainCardTag{font-size:7px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.WPgainCardV{font-size:18px;font-weight:950;line-height:1.05;margin-top:5px}.WPgainCardMeta{font-size:8px;color:#64748b;margin-top:3px;line-height:1.25}.WPliveReason{font-size:8px;line-height:1.3;color:#475569;margin-top:6px;font-weight:800}.WPliveReason strong{color:#0b1f36}.WPhn{font-size:10px;font-weight:950;color:#64748b}.WPtag{display:inline-block;margin-top:6px;font-size:8px;letter-spacing:.08em;font-weight:950;padding:4px 6px;border-radius:999px;background:#0b1f36;color:white}.WPwhy{font-size:8px;color:#64748b;margin-top:5px;line-height:1.2}.WPsection{margin-top:14px}.WPsectionTitle{font-size:18px;font-weight:950}.WPrules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:8px}.WPrule{border:1px solid #dce5ee;border-radius:16px;padding:12px;background:#f8fafc}.WPrule strong{display:block;font-size:13px;margin-top:4px}.WPdanger{color:#b42318}.WPattack{color:#08775f}.WPfoot{font-size:9px;color:#64748b;margin-top:12px;padding-top:9px;border-top:1px solid #e6edf3}.WPprintNote{font-size:11px;color:#475569;margin:9px 0}.WPbenchNote{border-radius:16px;padding:11px 13px;margin:0 0 18px;border:1px solid #dbe5ee;background:#f8fafc;font-size:10px;color:#475569}.WProuteSummary{display:grid;grid-template-columns:1.25fr repeat(4,minmax(0,1fr));gap:8px;margin:12px 0}.WPsum{border:1px solid #dfe7ef;border-radius:14px;padding:10px;background:#fff}.WPsum.hero{background:linear-gradient(145deg,#071d35,#0b3e61);color:#fff;border-color:#071d35}.WPsum.hero .WPk{color:#bfdbfe}.WPsumV{font-size:22px;font-weight:950;line-height:1.05;margin-top:4px}.WPfit.good{background:#ecfdf5;border-color:#a7f3d0}.WPfit.mid{background:#eff6ff;border-color:#bfdbfe}.WPfit.warn{background:#fffbeb;border-color:#fde68a}.WPfit.hard{background:#fff1f2;border-color:#fecdd3}.WProuteStrip{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:5px;margin-top:9px}.WPrCell{border:1px solid #dfe7ef;border-radius:10px;padding:6px 4px;text-align:center;background:#f8fafc}.WPrCell.attack{background:#ecfdf5;border-color:#a7f3d0}.WPrCell.opportunity{background:#f0fdfa;border-color:#99f6e4}.WPrCell.accept{background:#fff7ed;border-color:#fed7aa}.WPrCell.reset{background:#fff1f2;border-color:#fecdd3}.WPrCell.bogey{box-shadow:inset 0 -3px 0 rgba(185,28,28,.10)}.WPrH{font-size:8px;font-weight:950;color:#64748b}.WPrGross{font-size:22px;font-weight:950;line-height:1;margin-top:3px}.WPrPts{font-size:8px;font-weight:900;color:#475569;margin-top:2px}.WPcheckpoints{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:7px;margin-top:9px}.WPcp{border:1px solid #dfe7ef;border-radius:12px;padding:8px;text-align:center;background:#fff}.WPcpH{font-size:8px;font-weight:950;color:#64748b;text-transform:uppercase}.WPcpV{font-size:18px;font-weight:950;margin-top:3px}.WPevidence{margin-top:7px;border-top:1px dashed rgba(100,116,139,.25);padding-top:6px}.WPevidenceTitle{font-size:7px;font-weight:950;letter-spacing:.1em;text-transform:uppercase;color:#64748b}.WPevidenceRow{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}.WPeChip{font-size:7px;font-weight:800;border:1px solid #dbe5ee;border-radius:999px;background:rgba(255,255,255,.7);padding:3px 5px;color:#475569}.WPconfidenceBar{height:6px;border-radius:999px;background:#e2e8f0;overflow:hidden;margin-top:6px}.WPconfidenceBar span{display:block;height:100%;background:linear-gradient(90deg,#0f766e,#10b981)}.WPprob{margin-top:10px;border:1px solid #dbe5ee;border-radius:18px;padding:12px;background:linear-gradient(135deg,#f8fafc,#fff)}.WPprobTop{display:grid;grid-template-columns:1.15fr 1fr 1fr;gap:8px}.WPprobMain{border-radius:14px;padding:12px;background:#0b1f36;color:#fff}.WPprobMain.good{background:linear-gradient(145deg,#065f46,#047857)}.WPprobMain.mid{background:linear-gradient(145deg,#1e3a8a,#2563eb)}.WPprobMain.warn{background:linear-gradient(145deg,#92400e,#d97706)}.WPprobMain.hard{background:linear-gradient(145deg,#7f1d1d,#b91c1c)}.WPprobPct{font-size:34px;font-weight:950;line-height:1}.WPprobBox{border:1px solid #e2e8f0;border-radius:14px;padding:10px;background:#fff}.WPprobLadder{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:8px}.WPprobStep{border:1px solid #e2e8f0;border-radius:10px;padding:7px;text-align:center;background:#fff}.WPprobStep b{display:block;font-size:15px}.WPprobNote{font-size:8px;color:#64748b;margin-top:7px;line-height:1.35}
+      @media(max-width:700px){.WPprobTop{grid-template-columns:1fr 1fr}.WPprobMain{grid-column:1/-1}.WPbenchmark{grid-template-columns:repeat(2,1fr)}.WProuteSummary{grid-template-columns:repeat(2,1fr)}.WPsum.hero{grid-column:1/-1}.WProuteStrip{grid-template-columns:repeat(6,1fr)}.WPcheckpoints{grid-template-columns:repeat(3,1fr)}.WPholes{grid-template-columns:repeat(3,1fr)}.WPrules{grid-template-columns:1fr}.WPtitle{font-size:30px}}
       .PRpdfExportRoot .WPholes{grid-template-columns:repeat(6,minmax(0,1fr))!important}.PRpdfExportRoot .WPbenchmark{grid-template-columns:repeat(4,minmax(0,1fr))!important}.PRpdfExportRoot .WPrules{grid-template-columns:repeat(3,minmax(0,1fr))!important}.PRpdfExportRoot .WProuteStrip{grid-template-columns:repeat(9,minmax(0,1fr))!important}.PRpdfExportRoot .WPcheckpoints{grid-template-columns:repeat(6,minmax(0,1fr))!important}.PRpdfExportRoot .WProuteSummary{grid-template-columns:1.25fr repeat(4,minmax(0,1fr))!important}
     </style>`;
     const modeTitle=mode==='gross'?'Custom Gross Route':mode==='stableford'?'Custom Stableford Route':'Winning Game Plan';
@@ -16134,6 +16326,8 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
         ? `${Math.max(0,plan.improvementRequired).toFixed(1)} strokes`
         : `+${Math.max(0,plan.improvementRequired).toFixed(1)} pts`;
       const routeSummary=`<div class="WProuteSummary"><div class="WPsum hero"><div class="WPk">Your mission</div><div class="WPsumV">${targetTop}</div><div style="font-size:9px;opacity:.72;margin-top:4px">Normal profile: ${normalLabel}</div></div><div class="WPsum"><div class="WPk">Improvement needed</div><div class="WPsumV">${improvementLabel}</div></div><div class="WPsum"><div class="WPk">Attack / upside</div><div class="WPsumV">${(plan.strategyCounts?.ATTACK||0)+(plan.strategyCounts?.OPPORTUNITY||0)}</div><div style="font-size:8px;color:#64748b">${plan.strategyCounts?.OPPORTUNITY||0} opportunity holes</div></div><div class="WPsum"><div class="WPk">Protect</div><div class="WPsumV">${plan.strategyCounts?.PROTECT||0}</div><div style="font-size:8px;color:#64748b">holes · damage ${(plan.strategyCounts?.ACCEPT||0)+(plan.strategyCounts?.RESET||0)}</div></div><div class="WPsum WPfit ${plan.routeFitTone||'mid'}"><div class="WPk">Route fit</div><div class="WPsumV">${plan.routeFitScore}/100</div><div style="font-size:8px;font-weight:900;margin-top:3px">${WP_escape(plan.routeFitLabel||'')}</div></div></div>`;
+      const probabilityPanel=`<div class="WPprob"><div class="WPprobTop"><div class="WPprobMain ${plan.probabilityTone||'mid'}"><div class="WPk" style="color:rgba(255,255,255,.72)">MODELLED TARGET CHANCE</div><div class="WPprobPct">${WP_escape(plan.targetProbabilityText||'—')}</div><div style="font-size:10px;font-weight:950;margin-top:4px">${WP_escape(plan.probabilityLabel||'')}</div></div><div class="WPprobBox"><div class="WPk">Most likely outcome</div><div class="WPsumV">${Math.round(plan.mostLikelyTotal||0)} ${isGross?'gross':'pts'}</div><div style="font-size:8px;color:#64748b;margin-top:3px">Middle 50%: ${Math.round(plan.probabilityQ25||0)}–${Math.round(plan.probabilityQ75||0)}</div></div><div class="WPprobBox"><div class="WPk">Data confidence</div><div class="WPsumV" style="font-size:18px">${WP_escape(plan.probabilityDataConfidence||'—')}</div><div style="font-size:8px;color:#64748b;margin-top:3px">${Number(plan.probabilityAvgExactRounds||0).toFixed(1)} exact-course rounds/hole avg</div></div></div><div class="WPprobLadder">${(plan.probabilityLadder||[]).map(x=>`<div class="WPprobStep"><span class="WPk">${Math.round(x.target)} ${isGross?'gross':'pts'}</span><b>${WP_probPctText(x.prob)}</b></div>`).join('')}</div><div class="WPprobNote">This is a modelled estimate from your historical scoring distribution, with small exact-hole samples shrunk toward your wider Par / SI / yardage profile. It is not a guarantee. Route Fit remains a separate measure of how closely the requested route resembles your normal scoring.</div></div>`;
+
 
       const routeStrip=`<div class="WProuteStrip">${plan.holes.map(h=>{const op=Number(h.targetGross)-Number(h.par);const cue=String(h.planCue||'');const genuineBogey=(cue==='SMART_BOGEY'||cue==='BOGEY_ON_PLAN'||cue==='DAMAGE_CONTROL')&&op>=1;const cls=`${String(h.strategy||'protect').toLowerCase()} ${genuineBogey?'bogey':''}`;return `<div class="WPrCell ${cls}"><div class="WPrH">H${h.hole} · P${h.par}</div><div class="WPrGross">${h.targetGross}</div><div class="WPrPts">${h.targetPts} pt${h.targetPts===1?'':'s'}${cue==='OPPORTUNITY'?` · +1 available`:''}</div></div>`;}).join('')}</div>`;
 
@@ -16143,9 +16337,11 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
       const checkpoints=`<div class="WPcheckpoints">${(plan.checkpoints||[]).map(cp=>`<div class="WPcp"><div class="WPcpH">After ${cp.hole}</div><div class="WPcpV">${Math.round(cp.value)}</div><div style="font-size:7px;color:#64748b">${isGross?'gross':'pts'}</div></div>`).join('')}</div>`;
 
       return `<section class="WPplayer"><div class="WPplayerHead"><div><div class="WPeyebrow" style="color:#0b7a6e;opacity:1">PERSONALISED ROUTE</div><div class="WPname">${WP_escape(p?.name||'Player')}</div><div class="WPmeta">${l.temporaryHI
-  ? `Temporary HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'} → Course Handicap ${l.ch}`
+  ? (l.handicapMethod==='TEMP_FIXED'
+      ? `Temporary fixed handicap ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'} · Playing Handicap ${l.ch}`
+      : `Temporary HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'} → Course Handicap ${l.ch}`)
   : `Den Handicap ${Number.isFinite(l.denHandicap)?Number(l.denHandicap).toFixed(1):'—'} · Playing Handicap ${l.ch}`}
-  ${l.teeName?'· '+WP_escape(l.teeName):''}</div></div><div style="text-align:right"><div class="WPk">TARGET</div><div class="WPtarget">${targetTop}</div></div></div><div class="WPribbon">${ribbon}</div>${routeSummary}<div class="WPsection"><div class="WPsectionTitle">Route at a glance</div><div class="WPprintNote">The BIG number is the score that keeps your route on pace. Green cells are attack or proven opportunity holes; neutral cells are protect holes; the subtle red underline is used only where your history says accepting bogey or worse is genuinely sensible.</div>${routeStrip}</div><div class="WPsection"><div class="WPsectionTitle">Your checkpoints</div><div class="WPprintNote">Use these as live pace markers. You only need to know whether you are ahead of, on, or behind the planned cumulative total.</div>${checkpoints}</div><div class="WPsection"><div class="WPsectionTitle">Why these holes?</div><div class="WPprintNote">The full 2+/3+ audit still drives the optimiser, but the live report only shows the gain holes you actually need to think about.</div>${gainSummary}</div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route</div><div class="WPprintNote">Use the BIG gross number live on the course. PRIMARY ATTACK = proven gain. STRETCH GAIN = target needs it, but don't force it. OPPORTUNITY = bonus point available. PROTECT = bank the planned score.</div><div class="WPholes">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Round strategy</div><div class="WPrules" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="WPrule"><div class="WPk">1 · FOLLOW THE GROSS NUMBER</div><strong>That is the score to make on each hole.</strong></div><div class="WPrule"><div class="WPk">2 · PRIMARY ATTACKS</div><strong class="WPattack">${WP_escape(primaryAttackText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Chosen first by 3+ achievement rate, then by the gross score needed for 3 points.</div></div><div class="WPrule"><div class="WPk">3 · STRETCH GAINS</div><strong style="color:#b45309">${WP_escape(stretchGainText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Needed by the target, but historically less reliable.</div></div><div class="WPrule"><div class="WPk">4 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong></div></div></div><div class="WPfoot">Route fit is a similarity-to-history score, not a probability of success. Optimised from all recorded rounds for ${WP_escape(p?.name||'this player')}: exact-hole history first, then SI, Par, yardage and recent form. Course-management cues compare the planned score with your own historical expectation and exact-hole target-achievement rate, so required gains are placed first by exact-hole target achievement rate, then by the gross score required (par/bogey preferred over birdie when evidence is similar), with exact-hole average, SI, Par, yardage and recent form used as supporting evidence. ${l.temporaryHI
+  ${l.teeName?'· '+WP_escape(l.teeName):''}</div></div><div style="text-align:right"><div class="WPk">TARGET</div><div class="WPtarget">${targetTop}</div></div></div><div class="WPribbon">${ribbon}</div>${routeSummary}${probabilityPanel}<div class="WPsection"><div class="WPsectionTitle">Route at a glance</div><div class="WPprintNote">The BIG number is the score that keeps your route on pace. Green cells are attack or proven opportunity holes; neutral cells are protect holes; the subtle red underline is used only where your history says accepting bogey or worse is genuinely sensible.</div>${routeStrip}</div><div class="WPsection"><div class="WPsectionTitle">Your checkpoints</div><div class="WPprintNote">Use these as live pace markers. You only need to know whether you are ahead of, on, or behind the planned cumulative total.</div>${checkpoints}</div><div class="WPsection"><div class="WPsectionTitle">Why these holes?</div><div class="WPprintNote">The full 2+/3+ audit still drives the optimiser, but the live report only shows the gain holes you actually need to think about.</div>${gainSummary}</div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route</div><div class="WPprintNote">Use the BIG gross number live on the course. PRIMARY ATTACK = proven gain. STRETCH GAIN = target needs it, but don't force it. OPPORTUNITY = bonus point available. PROTECT = bank the planned score.</div><div class="WPholes">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Round strategy</div><div class="WPrules" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="WPrule"><div class="WPk">1 · FOLLOW THE GROSS NUMBER</div><strong>That is the score to make on each hole.</strong></div><div class="WPrule"><div class="WPk">2 · PRIMARY ATTACKS</div><strong class="WPattack">${WP_escape(primaryAttackText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Chosen first by 3+ achievement rate, then by the gross score needed for 3 points.</div></div><div class="WPrule"><div class="WPk">3 · STRETCH GAINS</div><strong style="color:#b45309">${WP_escape(stretchGainText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Needed by the target, but historically less reliable.</div></div><div class="WPrule"><div class="WPk">4 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong></div></div></div><div class="WPfoot">Route fit is a similarity-to-history score. The separate target-chance figure is a modelled probability estimate from the golfer's historical hole-score distribution, with small samples deliberately shrunk toward broader player history. Optimised from all recorded rounds for ${WP_escape(p?.name||'this player')}: exact-hole history first, then SI, Par, yardage and recent form. Course-management cues compare the planned score with your own historical expectation and exact-hole target-achievement rate, so required gains are placed first by exact-hole target achievement rate, then by the gross score required (par/bogey preferred over birdie when evidence is similar), with exact-hole average, SI, Par, yardage and recent form used as supporting evidence. ${l.temporaryHI
   ? (l.usedWHSFallback?'Temporary HI used; WHS tee data was incomplete so a stored/fallback Course Handicap was used.':'Temporary HI converted to the tee-specific WHS Course Handicap before SI allocation.')
   : 'Latest current-year Den Society handicap used directly as the fixed playing handicap — no Slope/Rating conversion.'}</div></section>`;
     }).join('');
