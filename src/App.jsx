@@ -3324,7 +3324,7 @@ function Home({
                   Build the smartest 18-hole route for the score you actually want to achieve — using your handicap, the course and your own playing history.
                 </div>
 
-                <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8,marginTop:14}} className="wp-home-mode-grid">
+                <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:8,marginTop:14}} className="wp-home-mode-grid">
                   <div style={{border:"1px solid #bbf7d0",background:"#f0fdf4",borderRadius:14,padding:"10px 11px"}}>
                     <div style={{fontSize:18,lineHeight:1}}>🏆</div>
                     <div style={{fontSize:12,fontWeight:900,color:"#14532d",marginTop:5}}>WIN THE COMPETITION</div>
@@ -3340,6 +3340,11 @@ function Home({
                     <div style={{fontSize:12,fontWeight:900,color:"#78350f",marginTop:5}}>TARGET A GROSS SCORE</div>
                     <div style={{fontSize:10,color:"#475569",marginTop:3,lineHeight:1.35}}>Choose the gross score you want to shoot and let the system map out the most likely way to get there.</div>
                   </div>
+                  <div style={{border:"1px solid #ddd6fe",background:"#f5f3ff",borderRadius:14,padding:"10px 11px"}}>
+                    <div style={{fontSize:18,lineHeight:1}}>🔄</div>
+                    <div style={{fontSize:12,fontWeight:900,color:"#5b21b6",marginTop:5}}>LIVE REPLAN</div>
+                    <div style={{fontSize:10,color:"#475569",marginTop:3,lineHeight:1.35}}>Enter scores during the round and automatically rebuild the safest remaining route.</div>
+                  </div>
                 </div>
 
                 <div style={{marginTop:10,fontSize:10,color:"#64748b",fontWeight:700}}>
@@ -3350,7 +3355,53 @@ function Home({
                 <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("pre_round"); }} style={{background:"linear-gradient(180deg,#10b981,#047857)",color:"white",minWidth:170}}>
                   <span>→ Build My Game Plan</span>
                 </button>
-                <div className="hm-pill">3 MODES</div>
+                <div className="hm-pill">4 MODES</div>
+              </div>
+            </div>
+          </button>
+
+          {/* LIVE REPLAN — MAIN MENU ENTRY */}
+          <button
+            className="hm-card heroish"
+            onClick={() => {
+              try { window.__WP_START_MODE = "live"; } catch {}
+              setView("pre_round");
+            }}
+            style={{
+              textAlign:"left",
+              cursor:"pointer",
+              color:"#0f172a",
+              border:"1px solid rgba(109,40,217,.30)",
+              background:"linear-gradient(135deg,#f5f3ff 0%,#ffffff 46%,#ecfdf5 100%)",
+              boxShadow:"0 14px 34px rgba(76,29,149,.10)"
+            }}
+          >
+            <div className="hm-card-inner">
+              <div style={{ minWidth:0, flex:1 }}>
+                <div style={{display:"inline-flex",alignItems:"center",gap:7,padding:"5px 9px",borderRadius:999,background:"rgba(109,40,217,.10)",color:"#6d28d9",fontSize:10,fontWeight:900,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8}}>🔄 On-Course Intelligence</div>
+                <h3 style={{color:"#0f172a",marginBottom:4}}>Live Replan</h3>
+                <div className="hm-desc" style={{color:"#475569",maxWidth:760}}>
+                  Enter your gross score as you play. The system locks in completed holes and instantly rebuilds the safest route to your target.
+                </div>
+                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:12}}>
+                  <span style={{fontSize:10,fontWeight:900,color:"#5b21b6",background:"#ede9fe",border:"1px solid #ddd6fe",borderRadius:999,padding:"5px 8px"}}>POINTS BANKED</span>
+                  <span style={{fontSize:10,fontWeight:900,color:"#047857",background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:999,padding:"5px 8px"}}>NEW ATTACK HOLES</span>
+                  <span style={{fontSize:10,fontWeight:900,color:"#0f172a",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:999,padding:"5px 8px"}}>AHEAD / BEHIND PLAN</span>
+                </div>
+              </div>
+              <div className="hm-card-action">
+                <button
+                  className="hm-linkbtn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    try { window.__WP_START_MODE = "live"; } catch {}
+                    setView("pre_round");
+                  }}
+                  style={{background:"linear-gradient(180deg,#7c3aed,#5b21b6)",color:"white",minWidth:170}}
+                >
+                  <span>→ Start Live Replan</span>
+                </button>
+                <div className="hm-pill">LIVE</div>
               </div>
             </div>
           </button>
@@ -15220,7 +15271,7 @@ function WP_latestPlayerHcap(p, handicapMap){
 function WP_roundHasLayout(r){
   const ps=WP_pars(r), si=WP_si(r); return ps.filter(Number.isFinite).length>=9&&si.filter(Number.isFinite).length>=9;
 }
-function WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI){
+function WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,tempMode="whs"){
   const mineInEvent=event?.entries?.find(x=>String(x.player?.name||"")===String(p?.name||""))?.round||null;
   const sameCourse=WP_series(p).filter(r=>WP_norm(WP_course(r))===WP_norm(courseKey)).reverse();
   let base=[mineInEvent,...sameCourse,event?.winnerRound,...(event?.entries||[]).map(x=>x.round)].find(r=>r&&WP_roundHasLayout(r))||mineInEvent||sameCourse[0]||event?.winnerRound||event?.entries?.[0]?.round||null;
@@ -15231,12 +15282,16 @@ function WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI){
   // Handicap rules for the Pre-Round Planner:
   // 1) No temporary value entered = use the player's latest DEN SOCIETY handicap
   //    as a FIXED playing handicap. Do NOT apply Slope/Rating conversion.
-  // 2) Temporary handicap entered = treat it as a WHS Handicap Index and convert
-  //    it to the tee-specific Course Handicap before allocating strokes by SI.
+  // 2) Temporary handicap entered can be used in TWO ways:
+  //    a) WHS mode: treat it as a Handicap Index and convert to Course Handicap.
+  //    b) FIXED mode: use the entered number directly as the playing handicap,
+  //       with no Slope/Rating conversion (useful for society/corporate games
+  //       where a fixed handicap is issued outside the Den Society).
   const denHandicap=WP_latestPlayerHcap(p,handicapMap);
   const overrideRaw=String(tempHI??"").trim();
   const override=overrideRaw==="" ? NaN : Number(overrideRaw);
   const temporaryHI=Number.isFinite(override)&&override>=0;
+  const temporaryMode=String(tempMode||"whs").toLowerCase()==="fixed" ? "fixed" : "whs";
   const hi=temporaryHI ? override : denHandicap;
   const slope=WP_num(base?.teeSlope,base?.slope,base?.slopeRating,base?.courseSlope);
   const rating=WP_num(base?.teeRating,base?.rating,base?.courseRating);
@@ -15247,18 +15302,24 @@ function WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI){
   let usedWHSFallback=false;
 
   if(temporaryHI){
-    handicapMethod="TEMP_WHS";
-    handicapMethodLabel="Temporary HI → WHS Course Handicap";
-    try{
-      if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0&&typeof WHS_courseHandicap==="function"){
-        ch=WHS_courseHandicap(hi,slope,rating,parTotal);
+    if(temporaryMode==="fixed"){
+      handicapMethod="TEMP_FIXED";
+      handicapMethodLabel="Temporary fixed playing handicap";
+      ch=Math.round(override);
+    }else{
+      handicapMethod="TEMP_WHS";
+      handicapMethodLabel="Temporary HI → WHS Course Handicap";
+      try{
+        if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0&&typeof WHS_courseHandicap==="function"){
+          ch=WHS_courseHandicap(hi,slope,rating,parTotal);
+        }
+      }catch(_){ }
+      // If the course does not contain enough WHS tee data, preserve usability but
+      // make the fallback explicit in the generated plan.
+      if(!Number.isFinite(ch)){
+        usedWHSFallback=true;
+        ch=Math.round(WP_num(base?.courseHandicap,base?.playingHcap,base?.hcap,hi,0));
       }
-    }catch(_){ }
-    // If the course does not contain enough WHS tee data, preserve usability but
-    // make the fallback explicit in the generated plan.
-    if(!Number.isFinite(ch)){
-      usedWHSFallback=true;
-      ch=Math.round(WP_num(base?.courseHandicap,base?.playingHcap,base?.hcap,hi,0));
     }
   }else{
     // Den Society mode: the exported/current Den handicap IS the playing handicap.
@@ -15269,7 +15330,7 @@ function WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI){
   ch=Math.max(0,Math.round(ch||0));
   return {
     round:base,pars:ps,si:sis,yards:ys,parTotal,
-    hi,denHandicap,ch,teeName:WP_tee(base),slope,rating,temporaryHI,
+    hi,denHandicap,ch,teeName:WP_tee(base),slope,rating,temporaryHI,temporaryMode,
     handicapMethod,handicapMethodLabel,usedWHSFallback
   };
 }
@@ -15447,7 +15508,7 @@ function WP_enrichPlanVisuals(plan){
 function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
   const mode=String(options?.mode||'winning');
   const tempHI=options?.tempHI;
-  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI); if(!layout) return null;
+  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,options?.tempMode); if(!layout) return null;
   const sig=WP_playerHistorySignals(p,courseKey); const holes=[];
   for(let i=0;i<18;i++){
     const par=Number(layout.pars[i]), si=Number(layout.si[i]), yard=Number(layout.yards[i]);
@@ -15782,7 +15843,7 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
     return Number.isFinite(n)&&n>0 ? Math.round(n) : NaN;
   });
 
-  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI);
+  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,options?.tempMode);
   if(!layout) return null;
   const sig=WP_playerHistorySignals(p,courseKey);
   const holes=[];
@@ -15910,7 +15971,7 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
   return plan;
 }
 
-function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,actualGross=[]}){
+function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,tempMode="whs",actualGross=[]}){
   try{
     const event=WP_findLatestEventAtCourse(model,courseKey);
     if(!event) return {ok:false,error:'No previous Stableford event was found for that course.'};
@@ -15920,7 +15981,7 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
     const scores=(actualGross||[]).map(Number);
     if(!scores.some(x=>Number.isFinite(x)&&x>0)) return {ok:false,error:'Enter at least one completed-hole gross score.'};
 
-    const plan=WP_makeLiveReplan(model,event,p,courseKey,handicapMap,{target,tempHI,actualGross});
+    const plan=WP_makeLiveReplan(model,event,p,courseKey,handicapMap,{target,tempHI,tempMode,actualGross});
     if(!plan) return {ok:false,error:'Could not build the live replan.'};
 
     const c=event.courseName||courseKey;
@@ -15968,7 +16029,7 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
       return `<div class="LRhole ${cls}"><div class="LRtop"><div class="LRtag">H${h.hole} · PAR ${h.par} · SI ${Number.isFinite(h.si)?h.si:'—'}</div><div class="LRtag">${tag}</div></div><div class="LRgross">${h.targetGross}</div><div class="LRpts">${h.targetPts} pts · ${h.strokes} shot${h.strokes===1?'':'s'}</div><div class="LRreason">${reason}</div></div>`;
     }).join('');
 
-    const html=`${css}<div class="LR"><div class="LRhdr"><div class="LReye">DEN GOLF · LIVE REPLAN</div><div class="LRtitle">${WP_escape(p.name)}</div><div class="LRsub">${WP_escape(c)} · target ${plan.liveTarget} pts · ${l.temporaryHI?`Temporary HI ${Number(l.hi).toFixed(1)} → CH ${l.ch}`:`Den handicap ${Number(l.denHandicap).toFixed(1)}`}</div></div>
+    const html=`${css}<div class="LR"><div class="LRhdr"><div class="LReye">DEN GOLF · LIVE REPLAN</div><div class="LRtitle">${WP_escape(p.name)}</div><div class="LRsub">${WP_escape(c)} · target ${plan.liveTarget} pts · ${l.temporaryHI?(l.handicapMethod==="TEMP_FIXED"?`Temporary fixed handicap ${Number(l.hi).toFixed(1)} · PH ${l.ch}`:`Temporary HI ${Number(l.hi).toFixed(1)} → CH ${l.ch}`):`Den handicap ${Number(l.denHandicap).toFixed(1)}`}</div></div>
       <div class="LRdash">
         <div class="LRstat hero"><div class="LRk">Round target</div><div class="LRv">${plan.liveTarget}</div></div>
         <div class="LRstat"><div class="LRk">Points banked</div><div class="LRv">${plan.actualPts}</div></div>
@@ -15991,14 +16052,14 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
 }
 
 function WP_escape(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
-function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mode='winning',customTarget,tempHandicaps={}}){
+function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mode='winning',customTarget,tempHandicaps={},tempHandicapModes={}}){
   try{
     const event=WP_findLatestEventAtCourse(model,courseKey); if(!event)return{ok:false,error:"No previous Stableford event was found for that course."};
     const players=(Array.isArray(model?.players)?model.players:[]).filter(p=>(playerNames||[]).includes(String(p?.name||"")));
     if(!players.length)return{ok:false,error:"Choose at least one player."};
     const target=(mode==='winning')?event.targetPoints:Number(customTarget);
     if(!Number.isFinite(target)) return {ok:false,error:'Enter a valid target score.'};
-    const plans=players.map(p=>WP_makePlayerPlan(model,event,p,courseKey,handicapMap,{mode,target,tempHI:tempHandicaps?.[String(p?.name||'')]})).filter(Boolean);
+    const plans=players.map(p=>WP_makePlayerPlan(model,event,p,courseKey,handicapMap,{mode,target,tempHI:tempHandicaps?.[String(p?.name||'')],tempMode:tempHandicapModes?.[String(p?.name||'')]||"whs"})).filter(Boolean);
     if(!plans.length)return{ok:false,error:"The selected course does not have enough Par / Stroke Index data to build a plan."};
     const c=event.courseName||courseKey;
     const css=`<style>
@@ -16100,12 +16161,19 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     .sort((a,b)=>String(a.name).localeCompare(String(b.name))), [seasonModel]);
   const [courseKey, setCourseKey] = React.useState("");
   const [selectedPlayers, setSelectedPlayers] = React.useState([]);
-  const [planMode, setPlanMode] = React.useState("winning"); // winning | stableford | gross | live
+  const [planMode, setPlanMode] = React.useState(() => {
+    try {
+      const requested=String(window.__WP_START_MODE||"").trim();
+      if(requested==="live"){ window.__WP_START_MODE=""; return "live"; }
+    } catch {}
+    return "winning";
+  }); // winning | stableford | gross | live
   const [customPoints, setCustomPoints] = React.useState(40);
   const [customGross, setCustomGross] = React.useState(85);
   const [liveScores, setLiveScores] = React.useState(()=>Array(18).fill(""));
 
   const [tempHandicaps, setTempHandicaps] = React.useState({});
+  const [tempHandicapModes, setTempHandicapModes] = React.useState({}); // player -> "whs" | "fixed"
   const handicapMap = React.useMemo(() => WP_currentYearHandicapMap(seasonRoundsAllYears, currentYear), [seasonRoundsAllYears, currentYear]);
 
   React.useEffect(() => {
@@ -16125,8 +16193,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   },[planMode,selectedPlayers,players]);
   const liveLayout = React.useMemo(()=>{
     if(!livePlayer || !event) return null;
-    return WP_layoutForPlayer(seasonModel,event,livePlayer,courseKey,handicapMap,tempHandicaps?.[String(livePlayer?.name||"")]);
-  },[livePlayer,event,seasonModel,courseKey,handicapMap,tempHandicaps]);
+    return WP_layoutForPlayer(seasonModel,event,livePlayer,courseKey,handicapMap,tempHandicaps?.[String(livePlayer?.name||"")],tempHandicapModes?.[String(livePlayer?.name||"")]||"whs");
+  },[livePlayer,event,seasonModel,courseKey,handicapMap,tempHandicaps,tempHandicapModes]);
   const livePreview = React.useMemo(()=>{
     if(!liveLayout) return {played:0,pts:0,gross:0};
     let played=0,pts=0,gross=0;
@@ -16168,7 +16236,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         if(selectedPlayers.length!==1){ alert("Choose exactly one player for Live Replan."); return; }
         const r=WP_generateLiveReplanHTML({
           model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
-          target:Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],actualGross:liveScores
+          target:Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",actualGross:liveScores
         });
         if(!r?.ok){ alert(r?.error||"Could not build live replan."); return; }
         window.__dslSeasonReportParams={
@@ -16181,7 +16249,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         return;
       }
 
-      const r = WP_generateWinningPlanHTML({ model: seasonModel, courseKey, playerNames: selectedPlayers, handicapMap, mode: planMode, customTarget: target, tempHandicaps });
+      const r = WP_generateWinningPlanHTML({ model: seasonModel, courseKey, playerNames: selectedPlayers, handicapMap, mode: planMode, customTarget: target, tempHandicaps, tempHandicapModes });
       if (!r?.ok) { alert(r?.error || "Could not build winning plan."); return; }
       window.__dslSeasonReportParams = {
         model: seasonModel,
@@ -16213,7 +16281,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
               <div className="text-[10px] font-black tracking-[.2em] uppercase text-emerald-200">Den Golf · Pre-Round Intelligence</div>
               <div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[10px] font-black text-white">ALL YEARS COURSE HISTORY</span><span className="rounded-full border border-blue-200/30 bg-blue-300/10 px-3 py-1 text-[10px] font-black text-blue-100">FIXED DEN HANDICAPS · TEMP WHS OPTIONAL</span></div>
               <h1 className="mt-2 text-3xl md:text-5xl font-black tracking-[-.04em] leading-none">Build the route to a win.</h1>
-              <p className="mt-3 max-w-3xl text-sm md:text-base text-white/75 leading-relaxed">Choose the course and target, or switch to Live Replan once the round starts. Den Society handicaps are used as fixed playing handicaps; enter a temporary HI only when you want a WHS Course Handicap. The optimiser builds the route from each golfer's history and can recalculate it after every completed hole.</p>
+              <p className="mt-3 max-w-3xl text-sm md:text-base text-white/75 leading-relaxed">Choose the course and target, or switch to Live Replan once the round starts. Den Society handicaps are fixed by default; a temporary handicap can either be converted as a WHS Index or used directly as a fixed playing handicap. The optimiser builds the route from each golfer's history and can recalculate it after every completed hole.</p>
             </div>
             <div className="grid grid-cols-3 gap-2 min-w-[300px]">
               <div className="rounded-2xl border border-white/15 bg-white/10 p-3 backdrop-blur"><div className="text-[9px] font-black uppercase tracking-widest text-white/55">Handicap pace</div><div className="mt-1 text-2xl font-black">36</div></div>
@@ -16258,9 +16326,32 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
               <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
                 <div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white text-sm font-black">3</div><div><div className="text-[10px] font-black tracking-widest uppercase text-slate-400">Golfers</div><div className="font-black text-slate-900">Who needs a plan?</div></div></div>
                 <div className="mt-4 max-h-52 overflow-auto rounded-2xl border border-slate-200 bg-white p-2">
-                  {players.map(p=>{ const name=String(p.name); const checked=selectedPlayers.includes(name); const hx=handicapMap.get(WP_norm(name)); const hi=Number(hx?.newHI); return <div key={name} className={`rounded-xl px-3 py-2.5 ${checked?"bg-emerald-50":"hover:bg-slate-50"}`}><label className={`flex cursor-pointer items-center gap-3 text-sm font-bold ${checked?"text-emerald-900":"text-slate-700"}`}><input type="checkbox" checked={checked} onChange={()=>togglePlayer(name)} className="h-4 w-4"/><span className="flex-1">{name}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ${Number.isFinite(hi)?"bg-blue-50 text-blue-700":"bg-slate-100 text-slate-400"}`}>{Number.isFinite(hi)?`HI ${hi.toFixed(1)}`:"HI —"}</span>{checked?<span className="text-emerald-600">✓</span>:null}</label>{checked?<div className="mt-2 ml-7 rounded-xl border border-slate-200 bg-white/80 p-2.5"><div className="flex flex-wrap items-center gap-2"><span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Temporary HI</span><input type="number" min="0" max="54" step="0.1" placeholder="optional" value={tempHandicaps[name]??""} onChange={e=>setTempHandicaps(prev=>({...prev,[name]:e.target.value}))} className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-black text-slate-900"/><span className="text-[10px] font-bold text-slate-500">leave blank = use fixed Den handicap</span></div><div className="mt-1.5 text-[10px] leading-relaxed text-slate-500">Enter a temporary HI only for non-Den / simulated golf. It will be converted to the selected tee's WHS Course Handicap before strokes are allocated by SI.</div></div>:null}</div>; })}
+                  {players.map(p=>{ const name=String(p.name); const checked=selectedPlayers.includes(name); const hx=handicapMap.get(WP_norm(name)); const hi=Number(hx?.newHI); return <div key={name} className={`rounded-xl px-3 py-2.5 ${checked?"bg-emerald-50":"hover:bg-slate-50"}`}><label className={`flex cursor-pointer items-center gap-3 text-sm font-bold ${checked?"text-emerald-900":"text-slate-700"}`}><input type="checkbox" checked={checked} onChange={()=>togglePlayer(name)} className="h-4 w-4"/><span className="flex-1">{name}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ${Number.isFinite(hi)?"bg-blue-50 text-blue-700":"bg-slate-100 text-slate-400"}`}>{Number.isFinite(hi)?`HI ${hi.toFixed(1)}`:"HI —"}</span>{checked?<span className="text-emerald-600">✓</span>:null}</label>{checked?<div className="mt-2 ml-7 rounded-xl border border-slate-200 bg-white/80 p-2.5">
+  <div className="flex flex-wrap items-center gap-2">
+    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Temporary handicap</span>
+    <input type="number" min="0" max="54" step="0.1" placeholder="optional" value={tempHandicaps[name]??""} onChange={e=>setTempHandicaps(prev=>({...prev,[name]:e.target.value}))} className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-black text-slate-900"/>
+    <span className="text-[10px] font-bold text-slate-500">leave blank = fixed Den handicap</span>
+  </div>
+  {String(tempHandicaps[name]??"").trim()!==""?<div className="mt-2 grid grid-cols-2 gap-2">
+    <button type="button" onClick={()=>setTempHandicapModes(prev=>({...prev,[name]:"whs"}))} className={`rounded-xl border px-3 py-2 text-left ${String(tempHandicapModes[name]||"whs")==="whs"?"border-blue-300 bg-blue-50":"border-slate-200 bg-white"}`}>
+      <div className="text-[9px] font-black uppercase tracking-wider text-blue-700">WHS Index</div>
+      <div className="mt-1 text-[10px] font-bold text-slate-600">Convert to Course Handicap using the selected tee.</div>
+    </button>
+    <button type="button" onClick={()=>setTempHandicapModes(prev=>({...prev,[name]:"fixed"}))} className={`rounded-xl border px-3 py-2 text-left ${String(tempHandicapModes[name]||"whs")==="fixed"?"border-violet-300 bg-violet-50":"border-slate-200 bg-white"}`}>
+      <div className="text-[9px] font-black uppercase tracking-wider text-violet-700">Fixed Playing Handicap</div>
+      <div className="mt-1 text-[10px] font-bold text-slate-600">Use exactly this many shots. No Slope/Rating conversion.</div>
+    </button>
+  </div>:null}
+  <div className="mt-1.5 text-[10px] leading-relaxed text-slate-500">
+    {String(tempHandicaps[name]??"").trim()===""?"No override: the latest Den Society handicap is used directly.":String(tempHandicapModes[name]||"whs")==="fixed"?"Fixed mode: the entered number is the playing handicap and shots are allocated directly by SI.":"WHS mode: the entered number is treated as a Handicap Index and converted to Course Handicap before SI allocation."}
+  </div>
+</div>:null}</div>; })}
                 </div>
-                <div className="mt-3 flex items-center justify-between gap-3"><div className="text-xs font-bold text-slate-500">{selectedPlayers.length} selected</div><button type="button" className="text-xs font-black text-slate-700 underline" onClick={()=>setSelectedPlayers(selectedPlayers.length===players.length?[]:players.map(p=>String(p.name)))}>{selectedPlayers.length===players.length?"Clear all":"Select all"}</button></div><div className="mt-2 grid grid-cols-1 gap-2"><div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-bold text-emerald-800"><b>Den Society:</b> latest {currentYear} Den handicap is used directly as the fixed playing handicap. No Course Handicap conversion.</div><div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-800"><b>Temporary HI entered:</b> that number overrides the Den handicap and is converted to a WHS Course Handicap for the selected tee.</div></div>
+                <div className="mt-3 flex items-center justify-between gap-3"><div className="text-xs font-bold text-slate-500">{selectedPlayers.length} selected</div><button type="button" className="text-xs font-black text-slate-700 underline" onClick={()=>setSelectedPlayers(selectedPlayers.length===players.length?[]:players.map(p=>String(p.name)))}>{selectedPlayers.length===players.length?"Clear all":"Select all"}</button></div><div className="mt-2 grid grid-cols-1 gap-2">
+  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-bold text-emerald-800"><b>Den Society:</b> latest {currentYear} Den handicap is used directly as the fixed playing handicap.</div>
+  <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-800"><b>Temporary WHS:</b> enter a Handicap Index and let the system calculate Course Handicap for the selected tee.</div>
+  <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[11px] font-bold text-violet-800"><b>Temporary fixed:</b> enter a handicap supplied for another society/event and use that exact number as the playing handicap — no WHS conversion.</div>
+</div>
               </div>
             </div>
           </section>
