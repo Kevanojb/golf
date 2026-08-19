@@ -16039,13 +16039,19 @@ function WP_applyLiveHoleStrategy(h){
 
 function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
   const tempHI=options?.tempHI;
-  const target=Math.max(18,Math.min(72,Math.round(Number(options?.target)||40)));
+  const tempMode=options?.tempMode||"whs";
+  const liveMode=String(options?.liveMode||'stableford')==='gross'?'gross':'stableford';
+  const isGross=liveMode==='gross';
+  const target=isGross
+    ? Math.max(45,Math.min(200,Math.round(Number(options?.target)||85)))
+    : Math.max(18,Math.min(72,Math.round(Number(options?.target)||40)));
+
   const actualGross=Array.from({length:18},(_,i)=>{
     const n=Number(options?.actualGross?.[i]);
     return Number.isFinite(n)&&n>0 ? Math.round(n) : NaN;
   });
 
-  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,options?.tempMode);
+  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,tempMode);
   if(!layout) return null;
   const sig=WP_playerHistorySignals(p,courseKey);
   const holes=[];
@@ -16059,9 +16065,9 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
   }
   if(holes.length<9) return null;
 
-  // Original route is the benchmark we compare today's live position against.
+  // Original route = benchmark before any live scores were entered.
   const original=WP_makePlayerPlan(model,event,p,courseKey,handicapMap,{
-    mode:'stableford',target,tempHI,tempMode:options?.tempMode
+    mode:isGross?'gross':'stableford',target,tempHI,tempMode
   });
 
   let actualPts=0, actualGrossTotal=0, holesPlayed=0;
@@ -16085,51 +16091,119 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
 
   const remaining=holes.filter(h=>!h.played);
   const holesLeft=remaining.length;
-  const pointsStillNeeded=Math.max(0,target-actualPts);
-  const maxRemaining=holesLeft*5;
-
-  // If ahead of target pace, don't generate absurd 0/1-point instructions.
-  // Keep a sensible 2-points-per-hole protection route. If behind, solve the
-  // exact number still required, up to what is mathematically possible.
-  let remainingGoal=pointsStillNeeded;
-  if(holesLeft>0){
-    remainingGoal=Math.max(remainingGoal,Math.min(holesLeft*2,maxRemaining));
-    remainingGoal=Math.min(remainingGoal,maxRemaining);
-  }
 
   let solved={choices:[]};
-  if(holesLeft){
-    solved=WP_dpExact(remaining,remainingGoal,WP_liveCandidates);
-    if(!solved) return null;
+  let remainingGoal=0;
+  let targetPossible=true;
+  let requiredRate=0;
+
+  if(isGross){
+    // Gross live route: completed strokes are fixed. Solve ONLY the remaining
+    // holes so the total gross equals the selected target where feasible.
+    remainingGoal=Math.round(target-actualGrossTotal);
+    const minRemaining=remaining.reduce((s,h)=>s+Math.max(1,h.par-2),0);
+    const maxRemaining=remaining.reduce((s,h)=>s+Math.max(h.par+6,Math.ceil(Number(h.expectedGross)||h.par+4)),0);
+    targetPossible=holesLeft===0 ? actualGrossTotal<=target : (remainingGoal>=minRemaining && remainingGoal<=maxRemaining);
+    requiredRate=holesLeft ? remainingGoal/holesLeft : 0;
+
+    if(holesLeft){
+      const solveTarget=Math.max(minRemaining,Math.min(maxRemaining,remainingGoal));
+      remainingGoal=solveTarget;
+      solved=WP_dpExact(remaining,solveTarget,h=>{
+        const lo=Math.max(1,h.par-2);
+        const hi=Math.max(lo+3,Math.ceil(Number(h.expectedGross)||h.par+3)+4,h.par+6);
+        const arr=[];
+        for(let g=lo;g<=hi;g++){
+          const expected=Number.isFinite(Number(h.expectedGross))?Number(h.expectedGross):h.par+Number(h.strokes||0);
+          const dev=g-expected;
+          let cost=dev*dev*1.25;
+          if(g<h.par-1) cost+=2.5*(h.par-1-g);
+          if(g>h.par+3) cost+=.7*(g-(h.par+3));
+          const risk=WP_holeRisk(h,g,'gross');
+          cost += -Math.log(Math.max(.04,risk.successProb))*0.65;
+          cost += risk.blowupProb*.35;
+          arr.push({value:g,cost,gross:g});
+        }
+        return arr;
+      });
+      if(!solved) return null;
+    }
+
+    remaining.forEach((h,i)=>{
+      const g=Number(solved?.choices?.[i]?.gross ?? Math.round(Number(h.expectedGross)||h.par));
+      h.targetGross=g;
+      h.targetPts=Math.max(0,Math.min(6,2+h.par+h.strokes-g));
+      const diff=g-h.par;
+      if(diff<=0){
+        h.strategy='ATTACK';
+        h.planCue=(diff<0?'STRETCH_GAIN':'PRIMARY_ATTACK');
+      }else if(diff===1){
+        h.strategy='PROTECT';
+        h.planCue='BOGEY_ON_PLAN';
+      }else{
+        h.strategy='ACCEPT';
+        h.planCue='DAMAGE_CONTROL';
+      }
+      h.reason=h.exactGrossN
+        ? `Replanned from your ${h.exactGrossN} previous gross score${h.exactGrossN===1?'':'s'} here`
+        : `Replanned from your Par ${h.par} / SI ${Number.isFinite(h.si)?h.si:'—'} profile`;
+    });
+  }else{
+    // Stableford live route.
+    const pointsStillNeeded=Math.max(0,target-actualPts);
+    const maxRemaining=holesLeft*5;
+    remainingGoal=pointsStillNeeded;
+    if(holesLeft){
+      remainingGoal=Math.max(remainingGoal,Math.min(holesLeft*2,maxRemaining));
+      remainingGoal=Math.min(remainingGoal,maxRemaining);
+    }
+    targetPossible=(actualPts+maxRemaining)>=target;
+    requiredRate=holesLeft ? pointsStillNeeded/holesLeft : 0;
+
+    if(holesLeft){
+      solved=WP_dpExact(remaining,remainingGoal,WP_liveCandidates);
+      if(!solved) return null;
+    }
+
+    remaining.forEach((h,i)=>{
+      const pts=Number(solved?.choices?.[i]?.pts ?? 2);
+      h.targetPts=pts;
+      h.targetGross=h.par+h.strokes+2-pts;
+      WP_applyLiveHoleStrategy(h);
+      h.reason=h.exactPtsN
+        ? `Replanned from your ${h.exactPtsN} previous score${h.exactPtsN===1?'':'s'} here`
+        : `Replanned from your Par ${h.par} / SI ${Number.isFinite(h.si)?h.si:'—'} profile`;
+    });
   }
 
-  remaining.forEach((h,i)=>{
-    const pts=Number(solved?.choices?.[i]?.pts ?? 2);
-    h.targetPts=pts;
-    h.targetGross=h.par+h.strokes+2-pts;
-    WP_applyLiveHoleStrategy(h);
-    h.reason=h.exactPtsN
-      ? `Replanned from your ${h.exactPtsN} previous score${h.exactPtsN===1?'':'s'} here`
-      : `Replanned from your Par ${h.par} / SI ${Number.isFinite(h.si)?h.si:'—'} profile`;
-  });
+  const playedOriginal=(original?.holes||[]).filter(h=>Number.isFinite(actualGross[h.hole-1]));
+  const plannedThroughPts=playedOriginal.reduce((s,h)=>s+Number(h.targetPts||0),0);
+  const plannedThroughGross=playedOriginal.reduce((s,h)=>s+Number(h.targetGross||0),0);
 
-  const plannedThrough=(original?.holes||[])
-    .filter(h=>Number.isFinite(actualGross[h.hole-1]))
-    .reduce((s,h)=>s+Number(h.targetPts||0),0);
-  const deltaVsOriginal=actualPts-plannedThrough;
+  // Positive delta always means "ahead of plan".
+  const deltaVsOriginal=isGross
+    ? (plannedThroughGross-actualGrossTotal)
+    : (actualPts-plannedThroughPts);
 
-  const projectedRemaining=remaining.reduce((s,h)=>s+Number(h.targetPts||0),0);
-  const projectedTotal=actualPts+projectedRemaining;
+  const projectedRemainingPts=remaining.reduce((s,h)=>s+Number(h.targetPts||0),0);
+  const projectedTotal=actualPts+projectedRemainingPts;
   const projectedGross=actualGrossTotal+remaining.reduce((s,h)=>s+Number(h.targetGross||0),0);
 
   const originalFutureAttacks=new Set((original?.holes||[])
-    .filter(h=>!Number.isFinite(actualGross[h.hole-1]) && Number(h.targetPts)>=3)
+    .filter(h=>!Number.isFinite(actualGross[h.hole-1]) && (isGross ? Number(h.targetGross)<=Number(h.par) : Number(h.targetPts)>=3))
     .map(h=>h.hole));
-  const revisedFutureAttacks=new Set(remaining.filter(h=>Number(h.targetPts)>=3).map(h=>h.hole));
+  const revisedFutureAttacks=new Set(remaining
+    .filter(h=>isGross ? Number(h.targetGross)<=Number(h.par) : Number(h.targetPts)>=3)
+    .map(h=>h.hole));
   const releasedGains=[...originalFutureAttacks].filter(x=>!revisedFutureAttacks.has(x));
   const newGains=[...revisedFutureAttacks].filter(x=>!originalFutureAttacks.has(x));
 
   const attackRank=(h)=>{
+    if(isGross){
+      const success=WP_holeRisk(h,h.targetGross,'gross').successProb;
+      const avg=Number.isFinite(Number(h.expectedGross))?Number(h.expectedGross):h.par+2;
+      return success*100-(Number(h.targetGross)-avg)*5;
+    }
     const hit=Number.isFinite(Number(h.gain3HitRate))?Number(h.gain3HitRate):-1;
     const gainGross=Number(h.par)+Number(h.strokes)-1;
     const reqVsPar=gainGross-Number(h.par);
@@ -16137,39 +16211,52 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
     const avg=Number.isFinite(Number(h.personalExpectedPts))?Number(h.personalExpectedPts):0;
     return hit*100+grossEase*8+avg*3;
   };
-  const attacks=remaining.filter(h=>Number(h.targetPts)>=3||h.planCue==='OPPORTUNITY').sort((a,b)=>attackRank(b)-attackRank(a));
+
+  const attacks=remaining.filter(h=>isGross ? Number(h.targetGross)<=Number(h.par) : (Number(h.targetPts)>=3||h.planCue==='OPPORTUNITY')).sort((a,b)=>attackRank(b)-attackRank(a));
   const primaryAttacks=remaining.filter(h=>h.planCue==='PRIMARY_ATTACK').sort((a,b)=>attackRank(b)-attackRank(a));
   const stretchGains=remaining.filter(h=>h.planCue==='STRETCH_GAIN').sort((a,b)=>attackRank(b)-attackRank(a));
-  const dangers=remaining.slice().sort((a,b)=>Number(a.personalExpectedPts)-Number(b.personalExpectedPts)).slice(0,3);
+  const dangers=remaining.slice().sort((a,b)=>{
+    if(isGross) return (Number(b.expectedGross)-Number(b.par))-(Number(a.expectedGross)-Number(a.par));
+    return Number(a.personalExpectedPts)-Number(b.personalExpectedPts);
+  }).slice(0,3);
 
-  const targetPossible=(actualPts+maxRemaining)>=target;
-  const requiredRate=holesLeft ? pointsStillNeeded/holesLeft : 0;
-  const status=!holesLeft
-    ? (actualPts>=target?'TARGET ACHIEVED':'ROUND COMPLETE')
-    : !targetPossible
-      ? 'TARGET NOW OUT OF REACH'
-      : deltaVsOriginal>=2
-        ? 'AHEAD OF PLAN'
-        : deltaVsOriginal<=-2
-          ? 'BEHIND PLAN'
-          : 'ON PLAN';
+  let status='ON PLAN';
+  if(!holesLeft){
+    status=isGross
+      ? (actualGrossTotal<=target?'TARGET ACHIEVED':'ROUND COMPLETE')
+      : (actualPts>=target?'TARGET ACHIEVED':'ROUND COMPLETE');
+  }else if(!targetPossible){
+    status=isGross?'TARGET NOW UNREALISTIC':'TARGET NOW OUT OF REACH';
+  }else if(deltaVsOriginal>=2){
+    status='AHEAD OF PLAN';
+  }else if(deltaVsOriginal<=-2){
+    status='BEHIND PLAN';
+  }
 
-  const front=holes.filter(h=>h.hole<=9).reduce((s,h)=>s+Number(h.targetPts||0),0);
-  const total=holes.reduce((s,h)=>s+Number(h.targetPts||0),0);
+  const front=isGross
+    ? holes.filter(h=>h.hole<=9).reduce((s,h)=>s+Number(h.targetGross||0),0)
+    : holes.filter(h=>h.hole<=9).reduce((s,h)=>s+Number(h.targetPts||0),0);
+  const total=isGross ? projectedGross : projectedTotal;
 
   const plan=WP_enrichPlanVisuals({
-    player:p,layout,holes,mode:'live',
+    player:p,layout,holes,mode:isGross?'gross':'live',
     total,pointsTotal:projectedTotal,totalGross:projectedGross,
     attacks,primaryAttacks,stretchGains,dangers,
     front,back:total-front,targetRequested:target
   });
 
   Object.assign(plan,{
-    liveTarget:target,actualPts,actualGrossTotal,holesPlayed,holesLeft,
-    pointsStillNeeded,remainingGoal,requiredRate,plannedThrough,deltaVsOriginal,
+    liveMode,isGrossLive:isGross,liveTarget:target,
+    actualPts,actualGrossTotal,holesPlayed,holesLeft,
+    pointsStillNeeded:Math.max(0,target-actualPts),
+    strokesRemainingTarget:isGross?Math.max(0,target-actualGrossTotal):NaN,
+    remainingGoal,requiredRate,
+    plannedThrough:isGross?plannedThroughGross:plannedThroughPts,
+    plannedThroughPts,plannedThroughGross,deltaVsOriginal,
     projectedTotal,projectedGross,targetPossible,status,releasedGains,newGains,
     originalPlan:original
   });
+
   plan.originalTargetProbability=Number(original?.targetProbability);
   plan.originalTargetProbabilityText=original?.targetProbabilityText||'—';
   plan.probabilityChange=(Number.isFinite(plan.targetProbability)&&Number.isFinite(plan.originalTargetProbability))
@@ -16177,7 +16264,7 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
   return plan;
 }
 
-function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,tempMode="whs",actualGross=[]}){
+function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,tempMode="whs",liveMode="stableford",actualGross=[]}){
   try{
     const event=WP_findLatestEventAtCourse(model,courseKey);
     if(!event) return {ok:false,error:'No previous Stableford event was found for that course.'};
@@ -16187,11 +16274,12 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
     const scores=(actualGross||[]).map(Number);
     if(!scores.some(x=>Number.isFinite(x)&&x>0)) return {ok:false,error:'Enter at least one completed-hole gross score.'};
 
-    const plan=WP_makeLiveReplan(model,event,p,courseKey,handicapMap,{target,tempHI,tempMode,actualGross});
+    const plan=WP_makeLiveReplan(model,event,p,courseKey,handicapMap,{target,tempHI,tempMode,liveMode,actualGross});
     if(!plan) return {ok:false,error:'Could not build the live replan.'};
 
     const c=event.courseName||courseKey;
     const l=plan.layout;
+    const isGrossLive=plan.liveMode==='gross';
     const delta=Number(plan.deltaVsOriginal)||0;
     const deltaLabel=delta>0?`+${delta}`:`${delta}`;
     const deltaTone=delta>0?'good':delta<0?'bad':'mid';
@@ -16237,14 +16325,14 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
 
     const html=`${css}<div class="LR"><div class="LRhdr"><div class="LReye">DEN GOLF · LIVE REPLAN</div><div class="LRtitle">${WP_escape(p.name)}</div><div class="LRsub">${WP_escape(c)} · target ${plan.liveTarget} pts · ${l.temporaryHI?(l.handicapMethod==="TEMP_FIXED"?`Temporary fixed handicap ${Number(l.hi).toFixed(1)} · PH ${l.ch}`:`Temporary HI ${Number(l.hi).toFixed(1)} → CH ${l.ch}`):`Den handicap ${Number(l.denHandicap).toFixed(1)}`}</div></div>
       <div class="LRdash">
-        <div class="LRstat hero"><div class="LRk">Round target</div><div class="LRv">${plan.liveTarget}</div></div>
-        <div class="LRstat"><div class="LRk">Points banked</div><div class="LRv">${plan.actualPts}</div></div>
+        <div class="LRstat hero"><div class="LRk">Round target</div><div class="LRv">${plan.liveTarget}${isGrossLive?'':' pts'}</div></div>
+        <div class="LRstat"><div class="LRk">${isGrossLive?'Strokes used':'Points banked'}</div><div class="LRv">${isGrossLive?plan.actualGrossTotal:plan.actualPts}</div></div>
         <div class="LRstat ${deltaTone}"><div class="LRk">Vs original plan</div><div class="LRv">${deltaLabel}</div></div>
-        <div class="LRstat"><div class="LRk">Still needed</div><div class="LRv">${plan.pointsStillNeeded}</div></div>
+        <div class="LRstat"><div class="LRk">${isGrossLive?'Strokes left':'Still needed'}</div><div class="LRv">${isGrossLive?plan.strokesRemainingTarget:plan.pointsStillNeeded}</div></div>
         <div class="LRstat"><div class="LRk">Holes left</div><div class="LRv">${plan.holesLeft}</div></div>
         <div class="LRstat ${plan.probabilityTone||'mid'}"><div class="LRk">Chance of ${plan.liveTarget}</div><div class="LRv">${WP_escape(plan.targetProbabilityText||'—')}</div><div style="font-size:8px;color:#64748b">${WP_escape(plan.probabilityLabel||'')}</div></div>
       </div>
-      <div class="LRmsg"><b>${WP_escape(plan.status)} · projected ${plan.projectedTotal} pts</b><span>${WP_escape(changedText)}${plan.holesLeft?` · Need ${plan.requiredRate.toFixed(2)} pts/hole from here to hit ${plan.liveTarget}.`:''}${Number.isFinite(plan.probabilityChange)?` · Target chance ${plan.originalTargetProbabilityText} → ${plan.targetProbabilityText} (${plan.probabilityChange>=0?'+':''}${Math.round(plan.probabilityChange*100)} pts).`:''}</span></div>
+      <div class="LRmsg"><b>${WP_escape(plan.status)} · projected ${isGrossLive?plan.projectedGross+' gross':plan.projectedTotal+' pts'}</b><span>${WP_escape(changedText)}${plan.holesLeft?` · Need ${plan.requiredRate.toFixed(2)} ${isGrossLive?'strokes/hole':'pts/hole'} from here to hit ${plan.liveTarget}.`:''}${Number.isFinite(plan.probabilityChange)?` · Target chance ${plan.originalTargetProbabilityText} → ${plan.targetProbabilityText} (${plan.probabilityChange>=0?'+':''}${Math.round(plan.probabilityChange*100)} pts).`:''}</span></div>
       <div class="LRsec"><h3>Revised route at a glance</h3>${routeStrip}</div>
       <div class="LRsec"><h3>Scores already banked</h3>${played}</div>
       <div class="LRsec"><h3>From the next hole</h3><div class="LRholes">${future}</div></div>
@@ -16367,7 +16455,7 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
 // Pre-Round planner: if data is not loaded, scan ALL stored games and return to this view.
 
 function WP_OnCourseMode({
-  model, event, courseKey, player, handicapMap, target,
+  model, event, courseKey, player, handicapMap, target, liveMode,
   tempHI, tempMode, liveScores, setLiveScores, onExit, onViewFull
 }){
   const [cursorHole,setCursorHole]=React.useState(()=>{
@@ -16378,9 +16466,9 @@ function WP_OnCourseMode({
   const liveResult=React.useMemo(()=>{
     if(!model||!event||!player) return null;
     return WP_makeLiveReplan(model,event,player,courseKey,handicapMap,{
-      target:Number(target),tempHI,tempMode,actualGross:liveScores
+      target:Number(target),tempHI,tempMode,liveMode,actualGross:liveScores
     });
-  },[model,event,player,courseKey,handicapMap,target,tempHI,tempMode,liveScores]);
+  },[model,event,player,courseKey,handicapMap,target,tempHI,tempMode,liveMode,liveScores]);
 
   React.useEffect(()=>{
     const firstEmpty=(liveScores||[]).findIndex(v=>!Number.isFinite(Number(v))||Number(v)<=0);
@@ -16438,6 +16526,14 @@ function WP_OnCourseMode({
   const advice=(h)=>{
     if(!h) return '';
     const cue=String(h.planCue||'PROTECT');
+    if(liveMode==='gross'){
+      const diff=Number(h.targetGross)-Number(h.par);
+      const expected=Number(h.expectedGross);
+      if(diff<0) return `Stretch scoring hole: the revised gross target needs ${h.targetGross}. Take it only if the opportunity is genuinely there.`;
+      if(diff===0) return `Par is the live target here${Number.isFinite(expected)?` · your modelled expectation is ${expected.toFixed(1)}`:''}.`;
+      if(diff===1) return `Bogey is built into the gross route. Make ${h.targetGross} and move on — don't turn it into a bigger number chasing par.`;
+      return `${h.targetGross} is deliberately built into the gross route. Limit the damage and protect the overall total.`;
+    }
     const n=Number(h.gain3HitN)||0;
     const c=Number(h.gain3HitCount)||0;
     const pct=n?Math.round(c/n*100):NaN;
@@ -16458,7 +16554,7 @@ function WP_OnCourseMode({
       <div className="oc-next-top"><span>{label} · H{h.hole}</span><span>PAR {h.par} · SI {Number.isFinite(h.si)?h.si:'—'}</span></div>
       <div className="oc-next-main">
         <div><div className="oc-mini-k">MAKE</div><div className="oc-mini-gross">{h.played?h.actualGross:h.targetGross}</div></div>
-        <div className="oc-mini-points">{h.played?h.actualPts:h.targetPts} PTS</div>
+        <div className="oc-mini-points">{liveMode==='gross' ? `${h.played?h.actualGross:h.targetGross} GROSS` : `${h.played?h.actualPts:h.targetPts} PTS`}</div>
       </div>
       <div className="oc-mini-tag">{cueLabel(h)}</div>
       <div className="oc-mini-advice">{advice(h)}</div>
@@ -16508,7 +16604,7 @@ function WP_OnCourseMode({
           </div>
           <div className="oc-scorebar">
             <div className="oc-stat"><div className="oc-stat-k">Target</div><div className="oc-stat-v">{liveResult.liveTarget}</div></div>
-            <div className="oc-stat"><div className="oc-stat-k">Banked</div><div className="oc-stat-v">{liveResult.actualPts}</div></div>
+            <div className="oc-stat"><div className="oc-stat-k">{liveMode==='gross'?'Used':'Banked'}</div><div className="oc-stat-v">{liveMode==='gross'?liveResult.actualGrossTotal:liveResult.actualPts}</div></div>
             <div className="oc-stat"><div className="oc-stat-k">Vs plan</div><div className="oc-stat-v">{delta>0?`+${delta}`:delta}</div></div>
             <div className="oc-stat"><div className="oc-stat-k">Left</div><div className="oc-stat-v">{liveResult.holesLeft}</div></div>
             <div className="oc-stat"><div className="oc-stat-k">Chance</div><div className="oc-stat-v">{prob}</div></div>
@@ -16518,7 +16614,11 @@ function WP_OnCourseMode({
         <div className="oc-body">
           <div className="oc-status">
             <b>{status}</b>
-            <div>{liveResult.holesLeft?`Need ${liveResult.requiredRate.toFixed(2)} pts/hole from here to reach ${liveResult.liveTarget}.`:'Round complete.'}</div>
+            <div>{liveResult.holesLeft
+              ? (liveMode==='gross'
+                  ? `Need to average ${liveResult.requiredRate.toFixed(2)} gross strokes/hole from here to shoot ${liveResult.liveTarget}.`
+                  : `Need ${liveResult.requiredRate.toFixed(2)} pts/hole from here to reach ${liveResult.liveTarget}.`)
+              : 'Round complete.'}</div>
           </div>
 
           {current?<div className={`oc-current ${cueClass(current)}`}>
@@ -16530,7 +16630,9 @@ function WP_OnCourseMode({
               <div className="oc-main-score">
                 <div className="oc-make">{current.played?'SCORED':'MAKE'}</div>
                 <div className="oc-gross">{current.played?current.actualGross:current.targetGross}</div>
-                <div className="oc-pts">{current.played?current.actualPts:current.targetPts} POINT{(current.played?current.actualPts:current.targetPts)===1?'':'S'}</div>
+                <div className="oc-pts">{liveMode==='gross'
+                  ? `TARGET TOTAL ${liveResult.liveTarget} GROSS`
+                  : `${current.played?current.actualPts:current.targetPts} POINT${(current.played?current.actualPts:current.targetPts)===1?'':'S'}`}</div>
               </div>
               <div className="oc-tag">{cueLabel(current)}</div>
               <div className="oc-advice">{advice(current)}</div>
@@ -16591,6 +16693,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   const [customGross, setCustomGross] = React.useState(85);
   const [liveScores, setLiveScores] = React.useState(()=>Array(18).fill(""));
   const [onCourseMode, setOnCourseMode] = React.useState(false);
+  const [liveScoringMode, setLiveScoringMode] = React.useState("stableford"); // stableford | gross
 
   const [tempHandicaps, setTempHandicaps] = React.useState({});
   const [tempHandicapModes, setTempHandicapModes] = React.useState({}); // player -> "whs" | "fixed"
@@ -16604,7 +16707,13 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   const event = React.useMemo(() => WP_findLatestEventAtCourse(seasonModel, courseKey), [seasonModel, courseKey]);
   const selectedCourse = courses.find(c => c.key === courseKey) || null;
   const winnerPts = Number(event?.winningPoints);
-  const target = planMode === "winning" ? Number(event?.targetPoints) : (planMode === "gross" ? Number(customGross) : Number(customPoints));
+  const target = planMode === "winning"
+    ? Number(event?.targetPoints)
+    : (planMode === "gross"
+        ? Number(customGross)
+        : (planMode === "live"
+            ? (liveScoringMode==="gross"?Number(customGross):Number(customPoints))
+            : Number(customPoints)));
   const extraNeeded = planMode !== "gross" && Number.isFinite(target) ? Math.max(0, target - 36) : NaN;
 
   const livePlayer = React.useMemo(()=>{
@@ -16658,7 +16767,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       courseKey={courseKey}
       player={livePlayer}
       handicapMap={handicapMap}
-      target={Number(customPoints)}
+      target={liveScoringMode==="gross"?Number(customGross):Number(customPoints)}
+      liveMode={liveScoringMode}
       tempHI={tempHandicaps?.[selectedPlayers[0]]}
       tempMode={tempHandicapModes?.[selectedPlayers[0]]||"whs"}
       liveScores={liveScores}
@@ -16667,8 +16777,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       onViewFull={()=>{
         const r=WP_generateLiveReplanHTML({
           model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
-          target:Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],
-          tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",actualGross:liveScores
+          target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],
+          tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",liveMode:liveScoringMode,actualGross:liveScores
         });
         if(r?.ok){
           window.__dslSeasonReportParams={
@@ -16692,14 +16802,14 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         if(selectedPlayers.length!==1){ alert("Choose exactly one player for Live Replan."); return; }
         const r=WP_generateLiveReplanHTML({
           model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
-          target:Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",actualGross:liveScores
+          target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",liveMode:liveScoringMode,actualGross:liveScores
         });
         if(!r?.ok){ alert(r?.error||"Could not build live replan."); return; }
         window.__dslSeasonReportParams={
           model:seasonModel,
           playerName:`Live-Replan-${r.event.courseName||"course"}-${selectedPlayers[0]}`,
-          yearLabel:"All Years",seasonLimit:"all",scoringMode:"stableford",
-          lensMode:"liveReplan",comparatorMode:"target"
+          yearLabel:"All Years",seasonLimit:"all",scoringMode:liveScoringMode==="gross"?"gross":"stableford",
+          lensMode:liveScoringMode==="gross"?"liveGrossReplan":"liveReplan",comparatorMode:"target"
         };
         PR_showInlineSeasonReport(r.htmlFragment);
         return;
@@ -16841,11 +16951,19 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
                 <div>
                   <div className="text-[10px] font-black uppercase tracking-[.16em] text-violet-700">Live Replan</div>
                   <div className="mt-1 text-xl font-black text-slate-900">Enter the gross score after each hole.</div>
-                  <div className="mt-1 text-xs text-slate-600">The system locks in what has already happened and reallocates only the remaining holes. A good hole removes pressure later; a bad hole moves the required gains to the most realistic alternatives.</div>
+                  <div className="mt-1 text-xs text-slate-600">Choose whether you are protecting a Stableford points target or a total gross-score target. Completed holes stay fixed and only the remaining route is rebuilt.</div>
+                  <div className="mt-3 inline-grid grid-cols-2 rounded-2xl border border-violet-200 bg-white p-1">
+                    <button type="button" onClick={()=>setLiveScoringMode("stableford")} className={`rounded-xl px-3 py-2 text-xs font-black ${liveScoringMode==="stableford"?"bg-violet-600 text-white":"text-slate-600"}`}>🎯 Stableford</button>
+                    <button type="button" onClick={()=>setLiveScoringMode("gross")} className={`rounded-xl px-3 py-2 text-xs font-black ${liveScoringMode==="gross"?"bg-violet-600 text-white":"text-slate-600"}`}>⛳ Gross Score</button>
+                  </div>
                 </div>
                 <div className="rounded-2xl border border-violet-200 bg-white p-3 min-w-[160px]">
-                  <label className="text-[9px] font-black uppercase tracking-widest text-violet-700">Round target</label>
-                  <div className="mt-1 flex items-center gap-2"><input type="number" min="18" max="72" step="1" value={customPoints} onChange={e=>setCustomPoints(e.target.value)} className="w-20 rounded-xl border border-violet-300 px-2 py-2 text-xl font-black text-slate-900"/><span className="text-sm font-black text-violet-700">pts</span></div>
+                  <label className="text-[9px] font-black uppercase tracking-widest text-violet-700">{liveScoringMode==="gross"?"Target gross score":"Stableford target"}</label>
+                  <div className="mt-1 flex items-center gap-2">
+                    {liveScoringMode==="gross"
+                      ? <><input type="number" min="45" max="200" step="1" value={customGross} onChange={e=>setCustomGross(e.target.value)} className="w-20 rounded-xl border border-violet-300 px-2 py-2 text-xl font-black text-slate-900"/><span className="text-sm font-black text-violet-700">gross</span></>
+                      : <><input type="number" min="18" max="72" step="1" value={customPoints} onChange={e=>setCustomPoints(e.target.value)} className="w-20 rounded-xl border border-violet-300 px-2 py-2 text-xl font-black text-slate-900"/><span className="text-sm font-black text-violet-700">pts</span></>}
+                  </div>
                 </div>
               </div>
 
@@ -16854,8 +16972,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
               {selectedPlayers.length===1 && liveLayout?<>
                 <div className="mt-4 grid grid-cols-3 gap-2">
                   <div className="rounded-2xl border border-slate-200 bg-white p-3"><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Holes entered</div><div className="mt-1 text-2xl font-black text-slate-900">{livePreview.played}</div></div>
-                  <div className="rounded-2xl border border-slate-200 bg-white p-3"><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Points banked</div><div className="mt-1 text-2xl font-black text-emerald-700">{livePreview.pts}</div></div>
-                  <div className="rounded-2xl border border-slate-200 bg-white p-3"><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Still needed</div><div className="mt-1 text-2xl font-black text-violet-700">{Math.max(0,Number(customPoints||0)-livePreview.pts)}</div></div>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3"><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">{liveScoringMode==="gross"?"Strokes used":"Points banked"}</div><div className="mt-1 text-2xl font-black text-emerald-700">{liveScoringMode==="gross"?livePreview.gross:livePreview.pts}</div></div>
+                  <div className="rounded-2xl border border-slate-200 bg-white p-3"><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">{liveScoringMode==="gross"?"Strokes left":"Still needed"}</div><div className="mt-1 text-2xl font-black text-violet-700">{liveScoringMode==="gross"?Math.max(0,Number(customGross||0)-livePreview.gross):Math.max(0,Number(customPoints||0)-livePreview.pts)}</div></div>
                 </div>
 
                 <div className="mt-4 grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-9 gap-2">
@@ -16886,8 +17004,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
             <div className="grid grid-cols-1 md:grid-cols-[1.25fr_.75fr]">
               <div className="p-5 md:p-7">
                 <div className="text-[10px] font-black uppercase tracking-[.18em] text-slate-400">{planMode==='winning'?'The winning equation':planMode==='stableford'?'Your points target':planMode==='live'?'Live round target':'Your gross target'}</div>
-                {planMode==='gross'?<div className="mt-2"><span className="text-6xl font-black tracking-[-.05em] text-slate-900">{Number.isFinite(target)?Math.round(target):'—'}</span><span className="ml-3 text-xl font-black text-blue-600">GROSS</span></div>:planMode==='live'?<div className="mt-2 flex items-baseline gap-3 flex-wrap"><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-violet-700">{livePreview.pts}</span><span className="text-xl font-black text-slate-400">BANKED</span><span className="text-3xl font-black text-slate-300">→</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">{Number.isFinite(target)?Math.round(target):'—'}</span><span className="text-xl font-black text-violet-700">TARGET</span></div>:<div className="mt-2 flex items-baseline gap-3 flex-wrap"><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">36</span><span className="text-3xl font-black text-slate-300">+</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-emerald-600">{Number.isFinite(extraNeeded)?extraNeeded.toFixed(0):"—"}</span><span className="text-3xl font-black text-slate-300">=</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">{Number.isFinite(target)?Math.round(target):'—'}</span></div>}
-                <div className="mt-2 text-sm text-slate-600">{planMode==='winning'?'The engine finds the lowest-risk holes to beat the credible winning benchmark.':planMode==='stableford'?'The engine builds an exact points total, putting the extra points on the holes your previous rounds, Stroke Index and Par profile say are most likely.':planMode==='live'?'Completed holes are locked. The engine recalculates the safest remaining route to the target and moves pressure away from holes you no longer need to attack.':'The engine builds an exact gross total, placing pars, bogeys and higher scores on the holes where your own history says they are most likely.'}</div>
+                {planMode==='gross'?<div className="mt-2"><span className="text-6xl font-black tracking-[-.05em] text-slate-900">{Number.isFinite(target)?Math.round(target):'—'}</span><span className="ml-3 text-xl font-black text-blue-600">GROSS</span></div>:planMode==='live'?<div className="mt-2 flex items-baseline gap-3 flex-wrap"><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-violet-700">{liveScoringMode==="gross"?livePreview.gross:livePreview.pts}</span><span className="text-xl font-black text-slate-400">{liveScoringMode==="gross"?"USED":"BANKED"}</span><span className="text-3xl font-black text-slate-300">→</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">{Number.isFinite(target)?Math.round(target):'—'}</span><span className="text-xl font-black text-violet-700">{liveScoringMode==="gross"?"GROSS TARGET":"TARGET"}</span></div>:<div className="mt-2 flex items-baseline gap-3 flex-wrap"><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">36</span><span className="text-3xl font-black text-slate-300">+</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-emerald-600">{Number.isFinite(extraNeeded)?extraNeeded.toFixed(0):"—"}</span><span className="text-3xl font-black text-slate-300">=</span><span className="text-5xl md:text-6xl font-black tracking-[-.05em] text-slate-900">{Number.isFinite(target)?Math.round(target):'—'}</span></div>}
+                <div className="mt-2 text-sm text-slate-600">{planMode==='winning'?'The engine finds the lowest-risk holes to beat the credible winning benchmark.':planMode==='stableford'?'The engine builds an exact points total, putting the extra points on the holes your previous rounds, Stroke Index and Par profile say are most likely.':planMode==='live'?(liveScoringMode==="gross"?'Completed gross scores are locked. The engine redistributes the remaining strokes across the holes where your history says they are most realistic.':'Completed holes are locked. The engine recalculates the safest remaining route to the target and moves pressure away from holes you no longer need to attack.') :'The engine builds an exact gross total, placing pars, bogeys and higher scores on the holes where your own history says they are most likely.'}</div>
               </div>
               <div className="border-t md:border-t-0 md:border-l border-slate-200 bg-slate-50 p-5 md:p-7">
                 <div className="text-[10px] font-black uppercase tracking-widest text-slate-400">How the plan thinks</div>
@@ -16898,7 +17016,9 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
           <button type="button" disabled={!event || !selectedPlayers.length || !Number.isFinite(target) || (planMode==='live' && (selectedPlayers.length!==1 || livePreview.played<1))} onClick={generatePlan} className="w-full rounded-3xl px-6 py-5 text-lg md:text-xl font-black text-white shadow-xl disabled:cursor-not-allowed disabled:opacity-40" style={{background:planMode==='live'?"linear-gradient(90deg,#4c1d95 0%,#6d28d9 48%,#08775f 100%)":"linear-gradient(90deg,#071d35 0%,#0b3e61 45%,#08775f 100%)"}}>
             {event ? (planMode==='live'
-              ? `🔄 Recalculate Remaining ${18-livePreview.played} Holes · ${livePreview.pts} pts banked · Target ${Number.isFinite(target)?Math.round(target):'—'}`
+              ? (liveScoringMode==="gross"
+                  ? `🔄 Recalculate Remaining ${18-livePreview.played} Holes · ${livePreview.gross} strokes used · Target ${Number.isFinite(target)?Math.round(target):'—'} gross`
+                  : `🔄 Recalculate Remaining ${18-livePreview.played} Holes · ${livePreview.pts} pts banked · Target ${Number.isFinite(target)?Math.round(target):'—'}`)
               : `Build ${selectedPlayers.length || ""} ${planMode==='winning'?'Winning':planMode==='stableford'?'Stableford':'Gross'} Route${selectedPlayers.length===1?"":"s"} · Target ${Number.isFinite(target)?Math.round(target):'—'} ${planMode==='gross'?'gross':'pts'}`
             ) : "Choose a course with a previous result"}
           </button>
