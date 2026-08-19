@@ -16387,11 +16387,20 @@ function WP_OnCourseMode({
     if(firstEmpty>=0) setCursorHole(firstEmpty+1);
   },[liveScores]);
 
-  if(!liveResult) return null;
+  if(!liveResult) return (
+    <div style={{position:"fixed",inset:0,zIndex:10000,background:"#f8fafc",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+      <div style={{maxWidth:420,width:"100%",border:"1px solid #e2e8f0",borderRadius:24,background:"#fff",padding:24,boxShadow:"0 18px 50px rgba(15,23,42,.12)"}}>
+        <div style={{fontSize:11,fontWeight:950,letterSpacing:".12em",textTransform:"uppercase",color:"#6d28d9"}}>Live Replan</div>
+        <div style={{fontSize:24,fontWeight:950,color:"#0f172a",marginTop:6}}>Could not build the on-course view</div>
+        <div style={{fontSize:13,lineHeight:1.45,color:"#64748b",marginTop:8}}>Return to Live Replan, confirm the course and player are selected, then try again.</div>
+        <button type="button" onClick={onExit} style={{marginTop:16,width:"100%",minHeight:50,border:0,borderRadius:16,background:"#0f172a",color:"#fff",fontWeight:950}}>RETURN TO LIVE REPLAN</button>
+      </div>
+    </div>
+  );
 
   const holes=liveResult.holes||[];
   const currentIndex=Math.max(0,Math.min(17,cursorHole-1));
-  const current=holes[currentIndex]||holes.find(h=>!h.played)||holes[holes.length-1];
+  const current=holes[currentIndex]||holes.find(h=>!h.played)||holes[holes.length-1]||null;
   const next1=holes[currentIndex+1]||null;
   const next2=holes[currentIndex+2]||null;
   const delta=Number(liveResult.deltaVsOriginal)||0;
@@ -16456,7 +16465,7 @@ function WP_OnCourseMode({
     </div>;
   };
 
-  const currentValue=liveScores[current.hole-1]??"";
+  const currentValue=current ? (liveScores[current.hole-1]??"") : "";
   const currentPlayed=Number.isFinite(Number(currentValue))&&Number(currentValue)>0;
 
   return (
@@ -16621,6 +16630,27 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     return {played,pts,gross};
   },[liveLayout,liveScores]);
 
+
+  const togglePlayer = (name) => {
+    setSelectedPlayers(prev => {
+      if(planMode==="live") return prev.includes(name) ? [] : [name];
+      return prev.includes(name) ? prev.filter(x => x !== name) : [...prev, name];
+    });
+  };
+
+  const choosePlanMode = (m) => {
+    setPlanMode(m);
+    if(m==="live" && selectedPlayers.length>1) setSelectedPlayers([selectedPlayers[0]]);
+  };
+
+  React.useEffect(()=>{
+    setLiveScores(Array(18).fill(""));
+  },[courseKey]);
+
+
+  // IMPORTANT: keep this conditional render AFTER all hooks above.
+  // Returning before the courseKey useEffect changes the hook count when
+  // entering On-Course Mode and causes React to blank the page.
   if(onCourseMode && planMode==="live" && selectedPlayers.length===1 && livePlayer && event){
     return <WP_OnCourseMode
       model={seasonModel}
@@ -16651,22 +16681,6 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     />;
   }
 
-
-  const togglePlayer = (name) => {
-    setSelectedPlayers(prev => {
-      if(planMode==="live") return prev.includes(name) ? [] : [name];
-      return prev.includes(name) ? prev.filter(x => x !== name) : [...prev, name];
-    });
-  };
-
-  const choosePlanMode = (m) => {
-    setPlanMode(m);
-    if(m==="live" && selectedPlayers.length>1) setSelectedPlayers([selectedPlayers[0]]);
-  };
-
-  React.useEffect(()=>{
-    setLiveScores(Array(18).fill(""));
-  },[courseKey]);
 
   const setLiveScore=(i,v)=>{
     setLiveScores(prev=>{ const next=prev.slice(); next[i]=v; return next; });
