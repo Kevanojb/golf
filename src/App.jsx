@@ -3401,7 +3401,7 @@ function Home({
                 <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:12}}>
                   <span style={{fontSize:10,fontWeight:900,color:"#5b21b6",background:"#ede9fe",border:"1px solid #ddd6fe",borderRadius:999,padding:"5px 8px"}}>POINTS BANKED</span>
                   <span style={{fontSize:10,fontWeight:900,color:"#047857",background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:999,padding:"5px 8px"}}>NEW ATTACK HOLES</span>
-                  <span style={{fontSize:10,fontWeight:900,color:"#0f172a",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:999,padding:"5px 8px"}}>AHEAD / BEHIND PLAN</span>
+                  <span style={{fontSize:10,fontWeight:900,color:"#0f172a",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:999,padding:"5px 8px"}}>AHEAD / BEHIND PLAN</span><span style={{fontSize:10,fontWeight:900,color:"#5b21b6",background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:999,padding:"5px 8px"}}>FULL-SCREEN ON-COURSE</span>
                 </div>
               </div>
               <div className="hm-card-action">
@@ -16365,6 +16365,205 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
 }
 
 // Pre-Round planner: if data is not loaded, scan ALL stored games and return to this view.
+
+function WP_OnCourseMode({
+  model, event, courseKey, player, handicapMap, target,
+  tempHI, tempMode, liveScores, setLiveScores, onExit, onViewFull
+}){
+  const [cursorHole,setCursorHole]=React.useState(()=>{
+    const firstEmpty=(liveScores||[]).findIndex(v=>!Number.isFinite(Number(v))||Number(v)<=0);
+    return firstEmpty>=0?firstEmpty+1:18;
+  });
+
+  const liveResult=React.useMemo(()=>{
+    if(!model||!event||!player) return null;
+    return WP_makeLiveReplan(model,event,player,courseKey,handicapMap,{
+      target:Number(target),tempHI,tempMode,actualGross:liveScores
+    });
+  },[model,event,player,courseKey,handicapMap,target,tempHI,tempMode,liveScores]);
+
+  React.useEffect(()=>{
+    const firstEmpty=(liveScores||[]).findIndex(v=>!Number.isFinite(Number(v))||Number(v)<=0);
+    if(firstEmpty>=0) setCursorHole(firstEmpty+1);
+  },[liveScores]);
+
+  if(!liveResult) return null;
+
+  const holes=liveResult.holes||[];
+  const currentIndex=Math.max(0,Math.min(17,cursorHole-1));
+  const current=holes[currentIndex]||holes.find(h=>!h.played)||holes[holes.length-1];
+  const next1=holes[currentIndex+1]||null;
+  const next2=holes[currentIndex+2]||null;
+  const delta=Number(liveResult.deltaVsOriginal)||0;
+  const prob=liveResult.targetProbabilityText||'—';
+  const status=liveResult.status||'ON PLAN';
+
+  const setScore=(holeNo,val)=>{
+    setLiveScores(prev=>{
+      const next=prev.slice();
+      next[holeNo-1]=val;
+      return next;
+    });
+  };
+
+  const cueLabel=(h)=>{
+    const cue=String(h?.planCue||'PROTECT');
+    if(cue==='PRIMARY_ATTACK') return 'PRIMARY ATTACK';
+    if(cue==='STRETCH_GAIN') return 'STRETCH GAIN';
+    if(cue==='OPPORTUNITY') return 'OPPORTUNITY';
+    if(cue==='SMART_BOGEY') return 'BANK THE BOGEY';
+    if(cue==='BOGEY_ON_PLAN') return 'BOGEY ON PLAN';
+    if(cue==='DAMAGE_CONTROL') return 'DAMAGE CONTROL';
+    if(cue==='PLAYED') return 'COMPLETED';
+    return 'PROTECT';
+  };
+  const cueClass=(h)=>{
+    const cue=String(h?.planCue||'');
+    if(cue==='PRIMARY_ATTACK') return 'oc-primary';
+    if(cue==='STRETCH_GAIN') return 'oc-stretch';
+    if(cue==='OPPORTUNITY') return 'oc-opportunity';
+    if(cue==='SMART_BOGEY'||cue==='BOGEY_ON_PLAN'||cue==='DAMAGE_CONTROL') return 'oc-danger';
+    if(cue==='PLAYED') return 'oc-played';
+    return 'oc-protect';
+  };
+  const advice=(h)=>{
+    if(!h) return '';
+    const cue=String(h.planCue||'PROTECT');
+    const n=Number(h.gain3HitN)||0;
+    const c=Number(h.gain3HitCount)||0;
+    const pct=n?Math.round(c/n*100):NaN;
+    const exact=Number(h.holePtsAvg);
+    if(cue==='PRIMARY_ATTACK') return `This is one of your best places to find the extra point${Number.isFinite(pct)?` — 3+ points in ${c}/${n} rounds (${pct}%)`:''}.`;
+    if(cue==='STRETCH_GAIN') return `The target needs a gain somewhere and this is one of the best remaining options${Number.isFinite(pct)?` — 3+ points ${pct}% historically`:''}. Don't force it.`;
+    if(cue==='OPPORTUNITY') return `Baseline keeps you on plan. One better gross score is a bonus point if it comes naturally.`;
+    if(cue==='SMART_BOGEY') return `Two points is a good result here${Number.isFinite(exact)?` — you average ${exact.toFixed(1)} pts`:''}. Don't chase par.`;
+    if(cue==='BOGEY_ON_PLAN') return `Bogey keeps the route intact. Only take par if it comes without extra risk.`;
+    if(cue==='DAMAGE_CONTROL') return `Limit the damage and move on. The plan does not need heroics here.`;
+    if(cue==='PLAYED') return `Completed: ${h.actualGross} gross · ${h.actualPts} pt${h.actualPts===1?'':'s'}.`;
+    return `Protect the planned score and keep the round moving.`;
+  };
+
+  const miniCard=(h,label)=>{
+    if(!h) return null;
+    return <div className={`oc-next-card ${cueClass(h)}`}>
+      <div className="oc-next-top"><span>{label} · H{h.hole}</span><span>PAR {h.par} · SI {Number.isFinite(h.si)?h.si:'—'}</span></div>
+      <div className="oc-next-main">
+        <div><div className="oc-mini-k">MAKE</div><div className="oc-mini-gross">{h.played?h.actualGross:h.targetGross}</div></div>
+        <div className="oc-mini-points">{h.played?h.actualPts:h.targetPts} PTS</div>
+      </div>
+      <div className="oc-mini-tag">{cueLabel(h)}</div>
+      <div className="oc-mini-advice">{advice(h)}</div>
+    </div>;
+  };
+
+  const currentValue=liveScores[current.hole-1]??"";
+  const currentPlayed=Number.isFinite(Number(currentValue))&&Number(currentValue)>0;
+
+  return (
+    <div className="oc-shell">
+      <style>{`
+        .oc-shell{position:fixed;inset:0;z-index:10000;background:#f8fafc;color:#0f172a;overflow:auto;-webkit-overflow-scrolling:touch}
+        .oc-wrap{min-height:100%;display:flex;flex-direction:column}
+        .oc-topbar{position:sticky;top:0;z-index:5;background:rgba(7,29,53,.96);backdrop-filter:blur(14px);color:#fff;padding:calc(10px + env(safe-area-inset-top)) 12px 10px}
+        .oc-toprow{display:flex;align-items:center;justify-content:space-between;gap:8px}
+        .oc-brand{font-size:10px;font-weight:950;letter-spacing:.14em;text-transform:uppercase;color:#a7f3d0}
+        .oc-actions{display:flex;gap:7px}.oc-btn{border:1px solid rgba(255,255,255,.22);background:rgba(255,255,255,.10);color:#fff;border-radius:999px;padding:8px 10px;font-size:10px;font-weight:950}
+        .oc-scorebar{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-top:9px}
+        .oc-stat{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:11px;padding:7px 6px;text-align:center}.oc-stat-k{font-size:7px;font-weight:900;letter-spacing:.07em;text-transform:uppercase;opacity:.68}.oc-stat-v{font-size:18px;font-weight:950;line-height:1.05;margin-top:2px}
+        .oc-body{padding:12px 12px calc(18px + env(safe-area-inset-bottom));max-width:760px;width:100%;margin:0 auto}
+        .oc-status{border-radius:14px;padding:10px 12px;background:#eef2ff;border:1px solid #c7d2fe;margin-bottom:10px}.oc-status b{font-size:13px}.oc-status div{font-size:9px;color:#64748b;margin-top:2px}
+        .oc-current{border-radius:24px;border:2px solid #cbd5e1;background:#fff;padding:16px;box-shadow:0 14px 34px rgba(15,23,42,.10);min-height:48vh;display:flex;flex-direction:column;justify-content:space-between}
+        .oc-current.oc-primary{background:linear-gradient(160deg,#ecfdf5,#ffffff);border-color:#6ee7b7}.oc-current.oc-stretch{background:linear-gradient(160deg,#fffbeb,#fff);border-color:#fbbf24}.oc-current.oc-opportunity{background:linear-gradient(160deg,#eff6ff,#fff);border-color:#93c5fd}.oc-current.oc-danger{background:linear-gradient(160deg,#fff7ed,#fff);border-color:#fdba74}.oc-current.oc-played{background:#eef2ff;border-color:#c7d2fe}
+        .oc-holehead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.oc-hole-no{font-size:12px;font-weight:950;letter-spacing:.12em;text-transform:uppercase;color:#64748b}.oc-par{font-size:10px;font-weight:900;color:#64748b}
+        .oc-main-score{text-align:center;margin:12px 0}.oc-make{font-size:10px;font-weight:950;letter-spacing:.18em;text-transform:uppercase;color:#64748b}.oc-gross{font-size:96px;line-height:.9;font-weight:950;letter-spacing:-.07em}.oc-pts{display:inline-flex;margin-top:10px;border-radius:999px;background:#0f172a;color:#fff;padding:7px 13px;font-size:16px;font-weight:950}
+        .oc-tag{text-align:center;font-size:13px;font-weight:950;letter-spacing:.06em}.oc-advice{text-align:center;font-size:13px;line-height:1.35;color:#475569;margin:8px auto 0;max-width:520px}
+        .oc-entry{margin-top:14px;border-top:1px solid #e2e8f0;padding-top:12px}.oc-entry-label{text-align:center;font-size:9px;font-weight:950;letter-spacing:.12em;text-transform:uppercase;color:#64748b}.oc-entry-row{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:8px}.oc-score-input{width:92px;border:2px solid #94a3b8;border-radius:16px;background:#fff;text-align:center;padding:10px 8px;font-size:30px;font-weight:950}.oc-save{border:0;border-radius:16px;background:linear-gradient(90deg,#6d28d9,#08775f);color:#fff;padding:13px 16px;font-size:12px;font-weight:950;min-height:52px}
+        .oc-nav{display:flex;justify-content:center;gap:8px;margin-top:10px}.oc-nav button{border:1px solid #cbd5e1;background:#fff;border-radius:999px;padding:8px 12px;font-size:10px;font-weight:900;color:#334155}
+        .oc-next-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px}.oc-next-card{border:1px solid #dbe5ee;border-radius:17px;background:#fff;padding:11px}.oc-next-card.oc-primary{background:#ecfdf5;border-color:#a7f3d0}.oc-next-card.oc-stretch{background:#fffbeb;border-color:#fde68a}.oc-next-card.oc-opportunity{background:#eff6ff;border-color:#bfdbfe}.oc-next-card.oc-danger{background:#fff7ed;border-color:#fed7aa}
+        .oc-next-top{display:flex;justify-content:space-between;gap:6px;font-size:8px;font-weight:950;color:#64748b}.oc-next-main{display:flex;justify-content:space-between;align-items:end;margin-top:5px}.oc-mini-k{font-size:7px;font-weight:900;color:#64748b}.oc-mini-gross{font-size:34px;font-weight:950;line-height:1}.oc-mini-points{font-size:13px;font-weight:950}.oc-mini-tag{font-size:9px;font-weight:950;margin-top:6px}.oc-mini-advice{font-size:9px;color:#64748b;line-height:1.3;margin-top:4px}
+        .oc-change{margin-top:10px;border-radius:14px;border:1px solid #dbe5ee;background:#fff;padding:10px}.oc-change-title{font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.1em;color:#64748b}.oc-change-text{font-size:11px;font-weight:850;color:#334155;margin-top:3px}
+        @media(max-width:430px){.oc-stat-v{font-size:16px}.oc-gross{font-size:88px}.oc-current{min-height:50vh}.oc-advice{font-size:12px}}
+      `}</style>
+
+      <div className="oc-wrap">
+        <div className="oc-topbar">
+          <div className="oc-toprow">
+            <div>
+              <div className="oc-brand">DEN GOLF · ON-COURSE MODE</div>
+              <div style={{fontSize:13,fontWeight:950,marginTop:2}}>{player?.name||'Player'} · {event?.courseName||courseKey}</div>
+            </div>
+            <div className="oc-actions">
+              <button className="oc-btn" onClick={onViewFull}>VIEW 18</button>
+              <button className="oc-btn" onClick={onExit}>REDUCE</button>
+            </div>
+          </div>
+          <div className="oc-scorebar">
+            <div className="oc-stat"><div className="oc-stat-k">Target</div><div className="oc-stat-v">{liveResult.liveTarget}</div></div>
+            <div className="oc-stat"><div className="oc-stat-k">Banked</div><div className="oc-stat-v">{liveResult.actualPts}</div></div>
+            <div className="oc-stat"><div className="oc-stat-k">Vs plan</div><div className="oc-stat-v">{delta>0?`+${delta}`:delta}</div></div>
+            <div className="oc-stat"><div className="oc-stat-k">Left</div><div className="oc-stat-v">{liveResult.holesLeft}</div></div>
+            <div className="oc-stat"><div className="oc-stat-k">Chance</div><div className="oc-stat-v">{prob}</div></div>
+          </div>
+        </div>
+
+        <div className="oc-body">
+          <div className="oc-status">
+            <b>{status}</b>
+            <div>{liveResult.holesLeft?`Need ${liveResult.requiredRate.toFixed(2)} pts/hole from here to reach ${liveResult.liveTarget}.`:'Round complete.'}</div>
+          </div>
+
+          {current?<div className={`oc-current ${cueClass(current)}`}>
+            <div>
+              <div className="oc-holehead">
+                <div className="oc-hole-no">HOLE {current.hole} · CURRENT</div>
+                <div className="oc-par">PAR {current.par} · SI {Number.isFinite(current.si)?current.si:'—'} · {current.strokes} SHOT{current.strokes===1?'':'S'}</div>
+              </div>
+              <div className="oc-main-score">
+                <div className="oc-make">{current.played?'SCORED':'MAKE'}</div>
+                <div className="oc-gross">{current.played?current.actualGross:current.targetGross}</div>
+                <div className="oc-pts">{current.played?current.actualPts:current.targetPts} POINT{(current.played?current.actualPts:current.targetPts)===1?'':'S'}</div>
+              </div>
+              <div className="oc-tag">{cueLabel(current)}</div>
+              <div className="oc-advice">{advice(current)}</div>
+            </div>
+
+            <div>
+              <div className="oc-entry">
+                <div className="oc-entry-label">{currentPlayed?'Edit gross score':'Enter gross score when hole is complete'}</div>
+                <div className="oc-entry-row">
+                  <input className="oc-score-input" inputMode="numeric" type="number" min="1" max="15"
+                    value={currentValue} placeholder="—" onChange={e=>setScore(current.hole,e.target.value)} />
+                  <button className="oc-save" onClick={()=>{
+                    const n=Number(liveScores[current.hole-1]);
+                    if(Number.isFinite(n)&&n>0) setCursorHole(Math.min(18,current.hole+1));
+                  }}>SAVE & REPLAN</button>
+                </div>
+              </div>
+              <div className="oc-nav">
+                <button onClick={()=>setCursorHole(h=>Math.max(1,h-1))}>← PREVIOUS</button>
+                <button onClick={()=>setCursorHole(h=>Math.min(18,h+1))}>NEXT →</button>
+              </div>
+            </div>
+          </div>:null}
+
+          <div className="oc-next-grid">
+            {miniCard(next1,'NEXT')}
+            {miniCard(next2,'THEN')}
+          </div>
+
+          {(liveResult.releasedGains?.length||liveResult.newGains?.length)?<div className="oc-change">
+            <div className="oc-change-title">What changed?</div>
+            <div className="oc-change-text">
+              {liveResult.releasedGains?.length?`Pressure removed from ${liveResult.releasedGains.map(x=>'H'+x).join(' · ')}. `:''}
+              {liveResult.newGains?.length?`New best recovery gain${liveResult.newGains.length>1?'s':''}: ${liveResult.newGains.map(x=>'H'+x).join(' · ')}.`:''}
+            </div>
+          </div>:null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, setView, runSeasonAnalysis }) {
   const courses = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
   const players = React.useMemo(() => (Array.isArray(seasonModel?.players) ? seasonModel.players : [])
@@ -16382,6 +16581,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   const [customPoints, setCustomPoints] = React.useState(40);
   const [customGross, setCustomGross] = React.useState(85);
   const [liveScores, setLiveScores] = React.useState(()=>Array(18).fill(""));
+  const [onCourseMode, setOnCourseMode] = React.useState(false);
 
   const [tempHandicaps, setTempHandicaps] = React.useState({});
   const [tempHandicapModes, setTempHandicapModes] = React.useState({}); // player -> "whs" | "fixed"
@@ -16420,6 +16620,37 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     }
     return {played,pts,gross};
   },[liveLayout,liveScores]);
+
+  if(onCourseMode && planMode==="live" && selectedPlayers.length===1 && livePlayer && event){
+    return <WP_OnCourseMode
+      model={seasonModel}
+      event={event}
+      courseKey={courseKey}
+      player={livePlayer}
+      handicapMap={handicapMap}
+      target={Number(customPoints)}
+      tempHI={tempHandicaps?.[selectedPlayers[0]]}
+      tempMode={tempHandicapModes?.[selectedPlayers[0]]||"whs"}
+      liveScores={liveScores}
+      setLiveScores={setLiveScores}
+      onExit={()=>setOnCourseMode(false)}
+      onViewFull={()=>{
+        const r=WP_generateLiveReplanHTML({
+          model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
+          target:Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],
+          tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",actualGross:liveScores
+        });
+        if(r?.ok){
+          window.__dslSeasonReportParams={
+            model:seasonModel,playerName:`Live-Replan-${r.event.courseName||"course"}-${selectedPlayers[0]}`,
+            yearLabel:"All Years",seasonLimit:"all",scoringMode:"stableford",lensMode:"liveReplan",comparatorMode:"target"
+          };
+          PR_showInlineSeasonReport(r.htmlFragment);
+        }
+      }}
+    />;
+  }
+
 
   const togglePlayer = (name) => {
     setSelectedPlayers(prev => {
@@ -16628,6 +16859,10 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
                   })}
                 </div>
                 <div className="mt-3 flex items-center justify-between gap-3"><div className="text-[10px] text-slate-500">You can re-run this after every hole. Previously entered scores stay fixed in the recalculation.</div><button type="button" onClick={()=>setLiveScores(Array(18).fill(""))} className="text-xs font-black text-violet-700 underline">Clear scores</button></div>
+                <button type="button" onClick={()=>setOnCourseMode(true)} className="mt-4 w-full rounded-2xl px-5 py-4 text-base font-black text-white shadow-lg" style={{background:"linear-gradient(90deg,#6d28d9 0%,#4c1d95 48%,#08775f 100%)"}}>
+                  ⛳ ENTER ON-COURSE MODE
+                </button>
+                <div className="mt-2 text-center text-[10px] font-bold text-slate-500">Full-screen view · current hole + next two · save score and replan instantly</div>
               </>:null}
             </div>:null}
 
