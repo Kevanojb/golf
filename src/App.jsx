@@ -2893,14 +2893,29 @@ function Header({ leagueHeaderTitle, eventName, statusMsg, courseName, view, set
 function BottomStatusBar({ statusMsg, courseName }) {
   const connected = String(statusMsg || "").toLowerCase().includes("connected");
   return (
-    <div className="status-mini" aria-label="Connection status">
+    <>
+      <style>{`
+        /* iPhone/mobile: the connection badge is informational only and must
+           never sit over an action button. Hide it below the sm breakpoint. */
+        @media (max-width: 639px) {
+          .status-mini {
+            display: none !important;
+          }
+        }
+        /* On larger screens it can remain visible, but it must never intercept taps. */
+        .status-mini {
+          pointer-events: none !important;
+        }
+      `}</style>
+      <div className="status-mini" aria-label="Connection status" aria-hidden="true">
       <span className={"dot " + (connected ? "bg-emerald-500" : "bg-rose-500")} aria-hidden="true" />
       <span className="lbl">Supabase</span>
       <span className="mono">{statusMsg || "—"}</span>
       <span className="mx-2 text-neutral-300">•</span>
       <span className="lbl">Course</span>
       <span className={courseName ? "text-neutral-700" : "text-neutral-400"}>{courseName || "—"}</span>
-    </div>
+      </div>
+    </>
   );
 }
 
@@ -16489,11 +16504,22 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       </section>
 
       {!hasModel ? (
-        <section className="content-card p-5 md:p-7">
+        <section className="content-card p-5 pb-8 md:p-7">
           <div className="text-xs font-black uppercase tracking-widest text-neutral-400">Season data required</div>
           <div className="mt-1 text-2xl font-black text-neutral-900">Load all golf history, then plan any course.</div>
           <div className="mt-2 text-sm text-neutral-600">The planner scans every stored year for courses, previous winners and hole-by-hole history, then returns you straight here. Current-year handicap data is used separately for each player.</div>
-          <button className="btn-primary mt-4" onClick={()=>runSeasonAnalysis && runSeasonAnalysis({ afterView: "pre_round" })}>Load All Golf History</button>
+          <button
+            type="button"
+            className="btn-primary mt-4 w-full sm:w-auto min-h-[50px] px-5 py-3 relative z-10 touch-manipulation"
+            style={{ WebkitTapHighlightColor:"transparent", touchAction:"manipulation" }}
+            onClick={(e)=>{
+              e.preventDefault();
+              e.stopPropagation();
+              if (runSeasonAnalysis) runSeasonAnalysis({ afterView: "pre_round" });
+            }}
+          >
+            Load All Golf History
+          </button>
         </section>
       ) : (
         <>
