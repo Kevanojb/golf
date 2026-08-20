@@ -16037,11 +16037,42 @@ function WP_applyLiveHoleStrategy(h){
   }
 }
 
+
+function WP_liveHoleOrder(startHole=1){
+  const s=Math.max(1,Math.min(18,Math.round(Number(startHole)||1)));
+  return Array.from({length:18},(_,i)=>((s-1+i)%18)+1);
+}
+function WP_liveRoundIndex(courseHole,startHole=1){
+  const order=WP_liveHoleOrder(startHole);
+  const idx=order.indexOf(Number(courseHole));
+  return idx>=0?idx+1:NaN;
+}
+function WP_liveNextCourseHole(courseHole,startHole=1,step=1){
+  const order=WP_liveHoleOrder(startHole);
+  const idx=order.indexOf(Number(courseHole));
+  if(idx<0) return order[0];
+  const nextIdx=idx+Number(step||1);
+  if(nextIdx<0 || nextIdx>=order.length) return null;
+  return order[nextIdx];
+}
+function WP_livePlayedSequence(actualGross,startHole=1){
+  const order=WP_liveHoleOrder(startHole);
+  const played=[];
+  for(const holeNo of order){
+    const g=Number(actualGross?.[holeNo-1]);
+    if(Number.isFinite(g)&&g>0) played.push(holeNo);
+    else break;
+  }
+  return played;
+}
+
 function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
   const tempHI=options?.tempHI;
   const tempMode=options?.tempMode||"whs";
   const liveMode=String(options?.liveMode||'stableford')==='gross'?'gross':'stableford';
   const isGross=liveMode==='gross';
+  const startHole=Math.max(1,Math.min(18,Math.round(Number(options?.startHole)||1)));
+  const playOrder=WP_liveHoleOrder(startHole);
   const target=isGross
     ? Math.max(45,Math.min(200,Math.round(Number(options?.target)||85)))
     : Math.max(18,Math.min(72,Math.round(Number(options?.target)||40)));
@@ -16071,9 +16102,13 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
   });
 
   let actualPts=0, actualGrossTotal=0, holesPlayed=0;
+  const playedSequence=WP_livePlayedSequence(actualGross,startHole);
+  const playedSet=new Set(playedSequence);
+
   holes.forEach(h=>{
     const g=actualGross[h.hole-1];
-    if(Number.isFinite(g)){
+    h.roundHole=WP_liveRoundIndex(h.hole,startHole);
+    if(playedSet.has(h.hole) && Number.isFinite(g)){
       const pts=Math.max(0,Math.min(6,2+h.par+h.strokes-g));
       h.played=true;
       h.actualGross=g;
@@ -16086,10 +16121,15 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
       actualPts+=pts;
       actualGrossTotal+=g;
       holesPlayed++;
+    }else{
+      h.played=false;
     }
   });
 
-  const remaining=holes.filter(h=>!h.played);
+  const remaining=playOrder
+    .filter(holeNo=>!playedSet.has(holeNo))
+    .map(holeNo=>holes.find(h=>h.hole===holeNo))
+    .filter(Boolean);
   const holesLeft=remaining.length;
 
   let solved={choices:[]};
@@ -16176,7 +16216,7 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
     });
   }
 
-  const playedOriginal=(original?.holes||[]).filter(h=>Number.isFinite(actualGross[h.hole-1]));
+  const playedOriginal=(original?.holes||[]).filter(h=>playedSet.has(h.hole));
   const plannedThroughPts=playedOriginal.reduce((s,h)=>s+Number(h.targetPts||0),0);
   const plannedThroughGross=playedOriginal.reduce((s,h)=>s+Number(h.targetGross||0),0);
 
@@ -16190,7 +16230,7 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
   const projectedGross=actualGrossTotal+remaining.reduce((s,h)=>s+Number(h.targetGross||0),0);
 
   const originalFutureAttacks=new Set((original?.holes||[])
-    .filter(h=>!Number.isFinite(actualGross[h.hole-1]) && (isGross ? Number(h.targetGross)<=Number(h.par) : Number(h.targetPts)>=3))
+    .filter(h=>!playedSet.has(h.hole) && (isGross ? Number(h.targetGross)<=Number(h.par) : Number(h.targetPts)>=3))
     .map(h=>h.hole));
   const revisedFutureAttacks=new Set(remaining
     .filter(h=>isGross ? Number(h.targetGross)<=Number(h.par) : Number(h.targetPts)>=3)
@@ -16245,8 +16285,12 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
     front,back:total-front,targetRequested:target
   });
 
+  const nextCourseHole=remaining.length?remaining[0].hole:null;
+  const nextRoundHole=nextCourseHole?WP_liveRoundIndex(nextCourseHole,startHole):null;
+
   Object.assign(plan,{
-    liveMode,isGrossLive:isGross,liveTarget:target,
+    liveMode,isGrossLive:isGross,liveTarget:target,startHole,playOrder,playedSequence,
+    nextCourseHole,nextRoundHole,
     actualPts,actualGrossTotal,holesPlayed,holesLeft,
     pointsStillNeeded:Math.max(0,target-actualPts),
     strokesRemainingTarget:isGross?Math.max(0,target-actualGrossTotal):NaN,
@@ -16264,7 +16308,7 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
   return plan;
 }
 
-function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,tempMode="whs",liveMode="stableford",actualGross=[]}){
+function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,tempMode="whs",liveMode="stableford",startHole=1,actualGross=[]}){
   try{
     const event=WP_findLatestEventAtCourse(model,courseKey);
     if(!event) return {ok:false,error:'No previous Stableford event was found for that course.'};
@@ -16274,7 +16318,7 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
     const scores=(actualGross||[]).map(Number);
     if(!scores.some(x=>Number.isFinite(x)&&x>0)) return {ok:false,error:'Enter at least one completed-hole gross score.'};
 
-    const plan=WP_makeLiveReplan(model,event,p,courseKey,handicapMap,{target,tempHI,tempMode,liveMode,actualGross});
+    const plan=WP_makeLiveReplan(model,event,p,courseKey,handicapMap,{target,tempHI,tempMode,liveMode,startHole,actualGross});
     if(!plan) return {ok:false,error:'Could not build the live replan.'};
 
     const c=event.courseName||courseKey;
@@ -16300,7 +16344,8 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
       .PRpdfExportRoot .LRdash{grid-template-columns:repeat(5,minmax(0,1fr))!important}.PRpdfExportRoot .LRstrip{grid-template-columns:repeat(9,minmax(0,1fr))!important}.PRpdfExportRoot .LRholes{grid-template-columns:repeat(3,minmax(0,1fr))!important}
     </style>`;
 
-    const routeStrip=`<div class="LRstrip">${plan.holes.map(h=>{
+    const routeHoles=(plan.playOrder||plan.holes.map(h=>h.hole)).map(n=>plan.holes.find(h=>h.hole===n)).filter(Boolean);
+    const routeStrip=`<div class="LRstrip">${routeHoles.map(h=>{
       const cls=h.played?'played':h.planCue==='PRIMARY_ATTACK'?'attack':h.planCue==='STRETCH_GAIN'?'stretch':'protect';
       const g=h.played?h.actualGross:h.targetGross;
       const pts=h.played?h.actualPts:h.targetPts;
@@ -16455,25 +16500,32 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
 // Pre-Round planner: if data is not loaded, scan ALL stored games and return to this view.
 
 function WP_OnCourseMode({
-  model, event, courseKey, player, handicapMap, target, liveMode,
+  model, event, courseKey, player, handicapMap, target, liveMode, startHole,
   tempHI, tempMode, liveScores, setLiveScores, onExit, onViewFull
 }){
   const [cursorHole,setCursorHole]=React.useState(()=>{
-    const firstEmpty=(liveScores||[]).findIndex(v=>!Number.isFinite(Number(v))||Number(v)<=0);
-    return firstEmpty>=0?firstEmpty+1:18;
+    const order=WP_liveHoleOrder(startHole);
+    for(const holeNo of order){
+      const v=Number(liveScores?.[holeNo-1]);
+      if(!Number.isFinite(v)||v<=0) return holeNo;
+    }
+    return order[order.length-1];
   });
 
   const liveResult=React.useMemo(()=>{
     if(!model||!event||!player) return null;
     return WP_makeLiveReplan(model,event,player,courseKey,handicapMap,{
-      target:Number(target),tempHI,tempMode,liveMode,actualGross:liveScores
+      target:Number(target),tempHI,tempMode,liveMode,startHole,actualGross:liveScores
     });
   },[model,event,player,courseKey,handicapMap,target,tempHI,tempMode,liveMode,liveScores]);
 
   React.useEffect(()=>{
-    const firstEmpty=(liveScores||[]).findIndex(v=>!Number.isFinite(Number(v))||Number(v)<=0);
-    if(firstEmpty>=0) setCursorHole(firstEmpty+1);
-  },[liveScores]);
+    const order=WP_liveHoleOrder(startHole);
+    for(const holeNo of order){
+      const v=Number(liveScores?.[holeNo-1]);
+      if(!Number.isFinite(v)||v<=0){ setCursorHole(holeNo); return; }
+    }
+  },[liveScores,startHole]);
 
   if(!liveResult) return (
     <div style={{position:"fixed",inset:0,zIndex:10000,background:"#f8fafc",display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
@@ -16487,10 +16539,14 @@ function WP_OnCourseMode({
   );
 
   const holes=liveResult.holes||[];
-  const currentIndex=Math.max(0,Math.min(17,cursorHole-1));
-  const current=holes[currentIndex]||holes.find(h=>!h.played)||holes[holes.length-1]||null;
-  const next1=holes[currentIndex+1]||null;
-  const next2=holes[currentIndex+2]||null;
+  const order=liveResult.playOrder||WP_liveHoleOrder(startHole);
+  const currentOrderIndex=Math.max(0,order.indexOf(Number(cursorHole)));
+  const currentHoleNo=order[currentOrderIndex]||order[0];
+  const current=holes.find(h=>h.hole===currentHoleNo)||holes.find(h=>!h.played)||holes[0]||null;
+  const next1No=order[currentOrderIndex+1];
+  const next2No=order[currentOrderIndex+2];
+  const next1=Number.isFinite(next1No)?holes.find(h=>h.hole===next1No)||null:null;
+  const next2=Number.isFinite(next2No)?holes.find(h=>h.hole===next2No)||null:null;
   const delta=Number(liveResult.deltaVsOriginal)||0;
   const prob=liveResult.targetProbabilityText||'—';
   const status=liveResult.status||'ON PLAN';
@@ -16594,7 +16650,7 @@ function WP_OnCourseMode({
         <div className="oc-topbar">
           <div className="oc-toprow">
             <div>
-              <div className="oc-brand">DEN GOLF · ON-COURSE MODE</div>
+              <div className="oc-brand">DEN GOLF · ON-COURSE MODE{Number(startHole)!==1?` · SHOTGUN H${startHole}`:''}</div>
               <div style={{fontSize:13,fontWeight:950,marginTop:2}}>{player?.name||'Player'} · {event?.courseName||courseKey}</div>
             </div>
             <div className="oc-actions">
@@ -16624,7 +16680,7 @@ function WP_OnCourseMode({
           {current?<div className={`oc-current ${cueClass(current)}`}>
             <div>
               <div className="oc-holehead">
-                <div className="oc-hole-no">HOLE {current.hole} · CURRENT</div>
+                <div className="oc-hole-no">ROUND HOLE {WP_liveRoundIndex(current.hole,startHole)} OF 18 · COURSE H{current.hole}</div>
                 <div className="oc-par">PAR {current.par} · SI {Number.isFinite(current.si)?current.si:'—'} · {current.strokes} SHOT{current.strokes===1?'':'S'}</div>
               </div>
               <div className="oc-main-score">
@@ -16646,13 +16702,16 @@ function WP_OnCourseMode({
                     value={currentValue} placeholder="—" onChange={e=>setScore(current.hole,e.target.value)} />
                   <button className="oc-save" onClick={()=>{
                     const n=Number(liveScores[current.hole-1]);
-                    if(Number.isFinite(n)&&n>0) setCursorHole(Math.min(18,current.hole+1));
+                    if(Number.isFinite(n)&&n>0){
+                      const nxt=WP_liveNextCourseHole(current.hole,startHole,1);
+                      if(nxt) setCursorHole(nxt);
+                    }
                   }}>SAVE & REPLAN</button>
                 </div>
               </div>
               <div className="oc-nav">
-                <button onClick={()=>setCursorHole(h=>Math.max(1,h-1))}>← PREVIOUS</button>
-                <button onClick={()=>setCursorHole(h=>Math.min(18,h+1))}>NEXT →</button>
+                <button onClick={()=>{const p=WP_liveNextCourseHole(cursorHole,startHole,-1);if(p)setCursorHole(p);}}>← PREVIOUS</button>
+                <button onClick={()=>{const n=WP_liveNextCourseHole(cursorHole,startHole,1);if(n)setCursorHole(n);}}>NEXT →</button>
               </div>
             </div>
           </div>:null}
@@ -16694,6 +16753,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   const [liveScores, setLiveScores] = React.useState(()=>Array(18).fill(""));
   const [onCourseMode, setOnCourseMode] = React.useState(false);
   const [liveScoringMode, setLiveScoringMode] = React.useState("stableford"); // stableford | gross
+  const [liveStartHole, setLiveStartHole] = React.useState(1); // shotgun start hole 1..18
 
   const [tempHandicaps, setTempHandicaps] = React.useState({});
   const [tempHandicapModes, setTempHandicapModes] = React.useState({}); // player -> "whs" | "fixed"
@@ -16769,6 +16829,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       handicapMap={handicapMap}
       target={liveScoringMode==="gross"?Number(customGross):Number(customPoints)}
       liveMode={liveScoringMode}
+      startHole={liveStartHole}
       tempHI={tempHandicaps?.[selectedPlayers[0]]}
       tempMode={tempHandicapModes?.[selectedPlayers[0]]||"whs"}
       liveScores={liveScores}
@@ -16778,7 +16839,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         const r=WP_generateLiveReplanHTML({
           model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
           target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],
-          tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",liveMode:liveScoringMode,actualGross:liveScores
+          tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores
         });
         if(r?.ok){
           window.__dslSeasonReportParams={
@@ -16802,7 +16863,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         if(selectedPlayers.length!==1){ alert("Choose exactly one player for Live Replan."); return; }
         const r=WP_generateLiveReplanHTML({
           model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
-          target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",liveMode:liveScoringMode,actualGross:liveScores
+          target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores
         });
         if(!r?.ok){ alert(r?.error||"Could not build live replan."); return; }
         window.__dslSeasonReportParams={
@@ -16956,6 +17017,13 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
                     <button type="button" onClick={()=>setLiveScoringMode("stableford")} className={`rounded-xl px-3 py-2 text-xs font-black ${liveScoringMode==="stableford"?"bg-violet-600 text-white":"text-slate-600"}`}>🎯 Stableford</button>
                     <button type="button" onClick={()=>setLiveScoringMode("gross")} className={`rounded-xl px-3 py-2 text-xs font-black ${liveScoringMode==="gross"?"bg-violet-600 text-white":"text-slate-600"}`}>⛳ Gross Score</button>
                   </div>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-violet-700">Start hole</span>
+                    <select value={liveStartHole} onChange={e=>{setLiveStartHole(Number(e.target.value));setLiveScores(Array(18).fill(""));}} className="rounded-xl border border-violet-300 bg-white px-3 py-2 text-sm font-black text-slate-900">
+                      {Array.from({length:18},(_,i)=><option key={i+1} value={i+1}>Hole {i+1}</option>)}
+                    </select>
+                    <span className="text-[10px] font-bold text-slate-500">{Number(liveStartHole)===1?'Normal start':`Shotgun: H${liveStartHole} is your first hole`}</span>
+                  </div>
                 </div>
                 <div className="rounded-2xl border border-violet-200 bg-white p-3 min-w-[160px]">
                   <label className="text-[9px] font-black uppercase tracking-widest text-violet-700">{liveScoringMode==="gross"?"Target gross score":"Stableford target"}</label>
@@ -16977,14 +17045,15 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
                 </div>
 
                 <div className="mt-4 grid grid-cols-3 sm:grid-cols-6 lg:grid-cols-9 gap-2">
-                  {Array.from({length:18},(_,i)=>{
+                  {WP_liveHoleOrder(liveStartHole).map((holeNo,roundIdx)=>{
+                    const i=holeNo-1;
                     const par=Number(liveLayout.pars?.[i]);
                     const si=Number(liveLayout.si?.[i]);
                     const g=Number(liveScores[i]);
                     const shots=WP_strokesReceived(liveLayout.ch,si);
                     const pts=Number.isFinite(g)&&g>0&&Number.isFinite(par)?Math.max(0,Math.min(6,2+par+shots-g)):NaN;
-                    return <div key={i} className={`rounded-2xl border p-2 ${Number.isFinite(pts)?'border-violet-200 bg-violet-50':'border-slate-200 bg-white'}`}>
-                      <div className="flex items-center justify-between gap-1"><span className="text-[9px] font-black text-slate-500">H{i+1}</span><span className="text-[8px] font-bold text-slate-400">P{Number.isFinite(par)?par:'—'}</span></div>
+                    return <div key={holeNo} className={`rounded-2xl border p-2 ${Number.isFinite(pts)?'border-violet-200 bg-violet-50':'border-slate-200 bg-white'}`}>
+                      <div className="flex items-center justify-between gap-1"><span className="text-[9px] font-black text-slate-500">#{roundIdx+1} · H{holeNo}</span><span className="text-[8px] font-bold text-slate-400">P{Number.isFinite(par)?par:'—'}</span></div>
                       <input inputMode="numeric" type="number" min="1" max="15" step="1" placeholder="—" value={liveScores[i]} onChange={e=>setLiveScore(i,e.target.value)} className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-1 py-1.5 text-center text-lg font-black text-slate-900"/>
                       <div className={`mt-1 text-center text-[9px] font-black ${Number.isFinite(pts)?'text-violet-700':'text-slate-300'}`}>{Number.isFinite(pts)?`${pts} pts`:'gross'}</div>
                     </div>;
@@ -16994,7 +17063,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
                 <button type="button" onClick={()=>setOnCourseMode(true)} className="mt-4 w-full rounded-2xl px-5 py-4 text-base font-black text-white shadow-lg" style={{background:"linear-gradient(90deg,#6d28d9 0%,#4c1d95 48%,#08775f 100%)"}}>
                   ⛳ ENTER ON-COURSE MODE
                 </button>
-                <div className="mt-2 text-center text-[10px] font-bold text-slate-500">Full-screen view · current hole + next two · save score and replan instantly</div>
+                <div className="mt-2 text-center text-[10px] font-bold text-slate-500">Full-screen view · current hole + next two · shotgun starts supported · save score and replan instantly</div>
               </>:null}
             </div>:null}
 
