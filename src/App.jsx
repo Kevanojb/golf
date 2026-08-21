@@ -3232,261 +3232,215 @@ function Home({
           background-blend-mode: normal, normal, normal, normal, normal;
         }
       `}</style>
-<div className="hm-stage">
-        <div className="hm-grid">
 
-          {/* HERO */}
-          <div className="hm-hero">
-            <div className="hm-glow" />
-            <div className="hm-hero-inner">
-              <div>
-                <h2>Explore Your Games</h2>
-                <p className="hm-sub">Dive into your rounds. Find patterns. Spot surprises.</p>
+      <style>{`
+        /* =========================================================
+           APP-84 HOME — mobile-first action hierarchy
+           Gold = plan, Purple = live, Green = improve, Blue = explore
+           ========================================================= */
+        .hm84-shell{max-width:980px;margin:0 auto;padding:4px}
+        .hm84-intro{padding:12px 4px 14px}
+        .hm84-eyebrow{font-size:10px;font-weight:950;letter-spacing:.14em;text-transform:uppercase;color:#64748b}
+        .hm84-title{font-size:30px;line-height:1.02;font-weight:950;letter-spacing:-.045em;color:#0f172a;margin-top:4px}
+        .hm84-sub{font-size:13px;line-height:1.45;color:#64748b;margin-top:6px;max-width:720px}
 
-                <div style={{ color: "rgba(255,255,255,0.84)", fontWeight: 800, marginTop: 8 }}>
-                  Inside you’ll find:
-                </div>
+        .hm84-primary{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+        .hm84-action{
+          position:relative;overflow:hidden;text-align:left;border-radius:24px;padding:18px;
+          min-height:194px;border:1px solid #e2e8f0;cursor:pointer;
+          box-shadow:0 14px 34px rgba(15,23,42,.08);
+          transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease;
+          -webkit-tap-highlight-color:transparent;
+        }
+        .hm84-action:hover{transform:translateY(-2px);box-shadow:0 20px 44px rgba(15,23,42,.12)}
+        .hm84-action:active{transform:scale(.992)}
+        .hm84-action.plan{background:linear-gradient(145deg,#fffbeb 0%,#fff 62%,#fef3c7 100%);border-color:#f5cf68}
+        .hm84-action.live{background:linear-gradient(145deg,#f5f3ff 0%,#fff 60%,#ede9fe 100%);border-color:#c4b5fd}
+        .hm84-action.review{background:linear-gradient(145deg,#ecfdf5 0%,#fff 62%,#d1fae5 100%);border-color:#86efac}
+        .hm84-action.explore{background:linear-gradient(145deg,#eff6ff 0%,#fff 62%,#dbeafe 100%);border-color:#93c5fd}
 
+        .hm84-action-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+        .hm84-icon{width:46px;height:46px;border-radius:15px;display:grid;place-items:center;font-size:24px;background:rgba(255,255,255,.78);border:1px solid rgba(15,23,42,.08);box-shadow:0 6px 18px rgba(15,23,42,.06)}
+        .hm84-arrow{width:36px;height:36px;border-radius:999px;display:grid;place-items:center;font-size:18px;font-weight:950;background:rgba(255,255,255,.8);border:1px solid rgba(15,23,42,.08)}
+        .hm84-k{font-size:9px;font-weight:950;letter-spacing:.12em;text-transform:uppercase;margin-top:13px}
+        .plan .hm84-k{color:#a16207}.live .hm84-k{color:#6d28d9}.review .hm84-k{color:#047857}.explore .hm84-k{color:#1d4ed8}
+        .hm84-h{font-size:22px;line-height:1.05;font-weight:950;letter-spacing:-.035em;color:#0f172a;margin-top:3px}
+        .hm84-d{font-size:11px;line-height:1.42;color:#475569;margin-top:6px;max-width:420px}
+        .hm84-chips{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
+        .hm84-chip{font-size:8px;font-weight:950;letter-spacing:.035em;text-transform:uppercase;border-radius:999px;padding:5px 7px;background:rgba(255,255,255,.75);border:1px solid rgba(15,23,42,.09);color:#475569}
 
-                <div className="hm-cta-row">
-                  <button className="hm-cta" onClick={() => setView("past")}>
-                    <span className="hm-arrow">→</span>
-                    <span>Enter Game Explorer</span>
-                  </button>
-                  <div className="hm-stats">{statsText}</div>
-                  
-                </div>
+        .hm84-section-title{display:flex;align-items:end;justify-content:space-between;gap:12px;margin:18px 3px 8px}
+        .hm84-section-title h3{font-size:15px;font-weight:950;color:#0f172a;margin:0}
+        .hm84-section-title span{font-size:9px;color:#94a3b8;font-weight:800}
 
+        .hm84-review-panel{border:1px solid #bbf7d0;background:linear-gradient(145deg,#f0fdf4,#fff);border-radius:24px;padding:15px}
+        .hm84-review-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+        .hm84-review-head h3{font-size:20px;font-weight:950;letter-spacing:-.025em;color:#0f172a;margin:0}
+        .hm84-review-head p{font-size:11px;color:#64748b;line-height:1.4;margin:4px 0 0}
+        .hm84-report-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:12px}
+        .hm84-report-btn{border-radius:17px;padding:13px;border:1px solid #d1fae5;background:#fff;text-align:left;cursor:pointer;min-height:94px}
+        .hm84-report-btn.true{border-color:#6ee7b7;background:linear-gradient(145deg,#ecfdf5,#fff)}
+        .hm84-report-k{font-size:8px;font-weight:950;letter-spacing:.09em;text-transform:uppercase;color:#64748b}
+        .hm84-report-v{font-size:15px;font-weight:950;color:#0f172a;margin-top:3px}
+        .hm84-report-s{font-size:9px;color:#64748b;line-height:1.35;margin-top:4px}
+        .hm84-report-btn.true .hm84-report-k{color:#047857}
 
-                
-                <div className="hm-inline-menu" aria-label="Menu options (visual)">
-                  <div className="hm-inline-menu-grid">
-                    <div className="hm-inline-item"><span className="hm-ico">⛳</span><span>Game</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">📈</span><span>Graphs</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🧾</span><span>Player Scorecard</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🗺️</span><span>Course Stats</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">⭐</span><span>Ratings</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">😂</span><span>Banter</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🎯</span><span>Styles</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">📖</span><span>Story</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">📺</span><span>Replay</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🤼</span><span>Teams</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🎰</span><span>Casino</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🏆</span><span>Trophies</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🤝</span><span>Partners</span></div>
-                    <div className="hm-inline-item"><span className="hm-ico">🥊</span><span>Rivalry</span></div>
-                  </div>
-                </div>
-              </div>
+        .hm84-explore{border:1px solid #bfdbfe;background:linear-gradient(145deg,#eff6ff,#fff);border-radius:24px;padding:15px;cursor:pointer;text-align:left;width:100%}
+        .hm84-explore-top{display:flex;align-items:center;justify-content:space-between;gap:12px}
+        .hm84-explore-title{font-size:19px;font-weight:950;color:#0f172a}
+        .hm84-explore-sub{font-size:10px;color:#64748b;margin-top:3px}
+        .hm84-explore-tools{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+        .hm84-tool{font-size:9px;font-weight:850;background:#fff;border:1px solid #dbeafe;border-radius:999px;padding:5px 8px;color:#334155}
 
-              <div className="hm-hero-right">
-                <div className="hm-mini-stack" aria-hidden="true">
-                  <div className="hm-sheet s1" />
-                  <div className="hm-sheet s2" />
-                  <div className="hm-sheet s3" />
-                </div>
-              </div>
-            </div>
-          </div>
+        .hm84-secondary{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}
+        .hm84-small{border:1px solid #e2e8f0;border-radius:18px;background:#fff;padding:13px;text-align:left;cursor:pointer;display:flex;justify-content:space-between;gap:10px;align-items:center}
+        .hm84-small h4{font-size:14px;font-weight:950;color:#0f172a;margin:0}
+        .hm84-small p{font-size:9px;color:#64748b;line-height:1.35;margin:3px 0 0}
+        .hm84-small-arrow{font-size:18px;color:#64748b}
 
-          {/* REVIEW & IMPROVE */}
-          <button className="hm-card heroish" onClick={() => setView("player_progress")} style={{ textAlign: "left", cursor: "pointer" }}>
-            <div className="hm-card-inner">
-              <div style={{ minWidth: 0 }}>
-                <h3>Review &amp; Improve</h3>
-                <div className="hm-desc">Turn insight into better scores.</div>
-                <ul>
-                  <li><span className="hm-ico2">🧾</span><span>See what actually costs you points</span></li>
-                  <li><span className="hm-ico2">💪</span><span>Find your biggest strengths vs the field</span></li>
-                  <li><span className="hm-ico2">🧭</span><span>Build simple game plans that work</span></li>
-                </ul>
-              </div>
+        .hm84-admin{margin-top:10px;border:1px solid #e2e8f0;border-radius:15px;background:#f8fafc;padding:11px 13px;width:100%;display:flex;align-items:center;justify-content:space-between;gap:12px;text-align:left;cursor:pointer}
+        .hm84-admin-title{font-size:11px;font-weight:950;color:#475569}
+        .hm84-admin-sub{font-size:8px;color:#94a3b8;margin-top:2px}
+        .hm84-foot{text-align:center;font-size:8px;color:#94a3b8;padding:12px 6px 5px}
 
-              <div className="hm-card-action">
-                <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("player_progress"); }}>
-                  <span>→ Review Performance</span>
-                </button>
-                <div className="hm-pill">⋯</div>
-              </div>
-            </div>
-          </button>
+        @media(max-width:720px){
+          .hm84-shell{padding:0}
+          .hm84-intro{padding:8px 2px 12px}
+          .hm84-title{font-size:26px}
+          .hm84-primary{grid-template-columns:1fr;gap:9px}
+          .hm84-action{min-height:0;padding:16px;border-radius:21px}
+          .hm84-h{font-size:20px}
+          .hm84-report-grid{grid-template-columns:1fr}
+          .hm84-secondary{grid-template-columns:1fr 1fr}
+        }
+        @media(max-width:430px){
+          .hm84-secondary{grid-template-columns:1fr}
+          .hm84-action{min-height:172px}
+          .hm84-icon{width:43px;height:43px}
+        }
+      `}</style>
 
-
-          <style>{`
-            @media (max-width: 760px) {
-              .wp-home-mode-grid { grid-template-columns: 1fr !important; }
-            }
-          `}</style>
-
-          {/* PRE-ROUND INTELLIGENCE */}
-          <button
-            className="hm-card heroish"
-            onClick={() => setView("pre_round")}
-            style={{
-              textAlign:"left",
-              cursor:"pointer",
-              color:"#0f172a",
-              border:"1px solid rgba(5,150,105,.35)",
-              background:"linear-gradient(135deg,#ecfdf5 0%,#ffffff 48%,#eff6ff 100%)",
-              boxShadow:"0 16px 38px rgba(15,23,42,.10)"
-            }}
-          >
-            <div className="hm-card-inner" style={{alignItems:"stretch"}}>
-              <div style={{ minWidth:0, flex:1 }}>
-                <div style={{display:"inline-flex",alignItems:"center",gap:7,padding:"5px 9px",borderRadius:999,background:"rgba(5,150,105,.10)",color:"#047857",fontSize:10,fontWeight:900,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8}}>⛳ Pre-Round Intelligence</div>
-                <h3 style={{color:"#0f172a",marginBottom:4}}>Winning Game Plan</h3>
-                <div className="hm-desc" style={{color:"#475569",maxWidth:760}}>
-                  Build the smartest 18-hole route for the score you actually want to achieve — using your handicap, the course and your own playing history.
-                </div>
-
-                <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:8,marginTop:14}} className="wp-home-mode-grid">
-                  <div style={{border:"1px solid #bbf7d0",background:"#f0fdf4",borderRadius:14,padding:"10px 11px"}}>
-                    <div style={{fontSize:18,lineHeight:1}}>🏆</div>
-                    <div style={{fontSize:12,fontWeight:900,color:"#14532d",marginTop:5}}>WIN THE COMPETITION</div>
-                    <div style={{fontSize:10,color:"#475569",marginTop:3,lineHeight:1.35}}>Estimate the score likely to win, then build your safest route to beat it.</div>
-                  </div>
-                  <div style={{border:"1px solid #bfdbfe",background:"#eff6ff",borderRadius:14,padding:"10px 11px"}}>
-                    <div style={{fontSize:18,lineHeight:1}}>🎯</div>
-                    <div style={{fontSize:12,fontWeight:900,color:"#1e3a8a",marginTop:5}}>TARGET STABLEFORD POINTS</div>
-                    <div style={{fontSize:10,color:"#475569",marginTop:3,lineHeight:1.35}}>Choose the points you want and get the most realistic hole-by-hole route to that total.</div>
-                  </div>
-                  <div style={{border:"1px solid #fde68a",background:"#fffbeb",borderRadius:14,padding:"10px 11px"}}>
-                    <div style={{fontSize:18,lineHeight:1}}>⛳</div>
-                    <div style={{fontSize:12,fontWeight:900,color:"#78350f",marginTop:5}}>TARGET A GROSS SCORE</div>
-                    <div style={{fontSize:10,color:"#475569",marginTop:3,lineHeight:1.35}}>Choose the gross score you want to shoot and let the system map out the most likely way to get there.</div>
-                  </div>
-                  <div style={{border:"1px solid #ddd6fe",background:"#f5f3ff",borderRadius:14,padding:"10px 11px"}}>
-                    <div style={{fontSize:18,lineHeight:1}}>🔄</div>
-                    <div style={{fontSize:12,fontWeight:900,color:"#5b21b6",marginTop:5}}>LIVE REPLAN</div>
-                    <div style={{fontSize:10,color:"#475569",marginTop:3,lineHeight:1.35}}>Enter scores during the round and automatically rebuild the safest remaining route.</div>
-                  </div>
-                </div>
-
-                <div style={{marginTop:10,fontSize:10,color:"#64748b",fontWeight:700}}>
-                  Uses all-years course history, your latest handicap or a temporary handicap, plus exact-hole, SI, Par and yardage performance.
-                </div>
-              </div>
-              <div className="hm-card-action" style={{alignSelf:"center"}}>
-                <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("pre_round"); }} style={{background:"linear-gradient(180deg,#10b981,#047857)",color:"white",minWidth:170}}>
-                  <span>→ Build My Game Plan</span>
-                </button>
-                <div className="hm-pill">4 MODES</div>
-              </div>
-            </div>
-          </button>
-
-          {/* LIVE REPLAN — MAIN MENU ENTRY */}
-          <button
-            className="hm-card heroish"
-            onClick={() => {
-              try { window.__WP_START_MODE = "live"; } catch {}
-              setView("pre_round");
-            }}
-            style={{
-              textAlign:"left",
-              cursor:"pointer",
-              color:"#0f172a",
-              border:"1px solid rgba(109,40,217,.30)",
-              background:"linear-gradient(135deg,#f5f3ff 0%,#ffffff 46%,#ecfdf5 100%)",
-              boxShadow:"0 14px 34px rgba(76,29,149,.10)"
-            }}
-          >
-            <div className="hm-card-inner">
-              <div style={{ minWidth:0, flex:1 }}>
-                <div style={{display:"inline-flex",alignItems:"center",gap:7,padding:"5px 9px",borderRadius:999,background:"rgba(109,40,217,.10)",color:"#6d28d9",fontSize:10,fontWeight:900,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8}}>🔄 On-Course Intelligence</div>
-                <h3 style={{color:"#0f172a",marginBottom:4}}>Live Replan</h3>
-                <div className="hm-desc" style={{color:"#475569",maxWidth:760}}>
-                  Enter your gross score as you play. The system locks in completed holes and instantly rebuilds the safest route to your target.
-                </div>
-                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:12}}>
-                  <span style={{fontSize:10,fontWeight:900,color:"#5b21b6",background:"#ede9fe",border:"1px solid #ddd6fe",borderRadius:999,padding:"5px 8px"}}>POINTS BANKED</span>
-                  <span style={{fontSize:10,fontWeight:900,color:"#047857",background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:999,padding:"5px 8px"}}>NEW ATTACK HOLES</span>
-                  <span style={{fontSize:10,fontWeight:900,color:"#0f172a",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:999,padding:"5px 8px"}}>AHEAD / BEHIND PLAN</span><span style={{fontSize:10,fontWeight:900,color:"#5b21b6",background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:999,padding:"5px 8px"}}>FULL-SCREEN ON-COURSE</span>
-                </div>
-              </div>
-              <div className="hm-card-action">
-                <button
-                  className="hm-linkbtn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    try { window.__WP_START_MODE = "live"; } catch {}
-                    setView("pre_round");
-                  }}
-                  style={{background:"linear-gradient(180deg,#7c3aed,#5b21b6)",color:"white",minWidth:170}}
-                >
-                  <span>→ Start Live Replan</span>
-                </button>
-                <div className="hm-pill">LIVE</div>
-              </div>
-            </div>
-          </button>
-
-          {/* TWO-UP ROW */}
-          <div className="hm-row2">
-            <button className="hm-card heroish" onClick={() => setView("standings")} style={{ textAlign: "left", cursor: "pointer" }}>
-              <div className="hm-card-inner">
-                <div style={{ minWidth: 0 }}>
-                  <h3>League Standings</h3>
-                  <div className="hm-desc">How the season is shaping up.</div>
-                  <ul>
-                    <li><span className="hm-ico2">📋</span><span>Current rankings</span></li>
-                    <li><span className="hm-ico2">📉</span><span>Points gaps &amp; momentum</span></li>
-                    <li><span className="hm-ico2">📈</span><span>Who’s climbing, who’s slipping</span></li>
-                  </ul>
-                </div>
-                <div className="hm-card-action">
-                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("standings"); }}>
-                    <span>→ View League</span>
-                  </button>
-                  <div className="hm-pill">⋯</div>
-                </div>
-              </div>
-            </button>
-
-            <button className="hm-card heroish" onClick={() => setView("eclectic")} style={{ textAlign: "left", cursor: "pointer" }}>
-              <div className="hm-card-inner">
-                <div style={{ minWidth: 0 }}>
-                  <h3>Eclectic</h3>
-                  <div className="hm-desc">Your best golf, stitched together.</div>
-                  <ul>
-                    <li><span className="hm-ico2">🏁</span><span>Best score on every hole</span></li>
-                    <li><span className="hm-ico2">🧩</span><span>What your “perfect round” looks like</span></li>
-                    <li><span className="hm-ico2">🛠️</span><span>Where improvement still lives</span></li>
-                  </ul>
-                </div>
-                <div className="hm-card-action">
-                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("eclectic"); }}>
-                    <span>→ View Eclectic</span>
-                  </button>
-                  <div className="hm-pill">⋯</div>
-                </div>
-              </div>
-            </button>
-          </div>
-
-          {/* ADMIN BAR */}
-          <button className="hm-admin" onClick={() => setView("admin")} style={{ textAlign: "left", cursor: "pointer" }}>
-            <div className="hm-admin-inner">
-              <div>
-                <div className="hm-admin-title">
-                  <span className="hm-gear">⚙️</span>
-                  <span>Admin</span>
-                </div>
-                <div className="hm-admin-sub">
-                  Settings, imports, season setup, players
-                  {totalPlayersCount != null ? ` \u00b7 Players: ${visiblePlayersCount}/${totalPlayersCount}` : ""}
-                  {signedIn ? ` \u00b7 Signed in as ${adminLabel}` : ""}
-                </div>
-              </div>
-              <div className="hm-pill" style={{ background: "rgba(255,255,255,0.10)", borderColor: "rgba(255,255,255,0.18)" }}>↗</div>
-            </div>
-          </button>
-
-          <div className="hm-foot">
-            Most players discover something new every time they explore their games. 💡
-          </div>
-
+      <div className="hm84-shell">
+        <div className="hm84-intro">
+          <div className="hm84-eyebrow">Den Society Golf Intelligence</div>
+          <div className="hm84-title">What do you want to do?</div>
+          <div className="hm84-sub">Plan the next round, play live, understand your performance or explore your golf history.</div>
         </div>
+
+        {/* PRIMARY ACTIONS */}
+        <div className="hm84-primary">
+          <button className="hm84-action plan" onClick={()=>setView("pre_round")}>
+            <div className="hm84-action-top"><div className="hm84-icon">🏆</div><div className="hm84-arrow">→</div></div>
+            <div className="hm84-k">Before you play</div>
+            <div className="hm84-h">Plan My Next Round</div>
+            <div className="hm84-d">AI builds the most realistic 18-hole route from your course, target, handicap and playing history.</div>
+            <div className="hm84-chips">
+              <span className="hm84-chip">Win</span><span className="hm84-chip">Stableford target</span><span className="hm84-chip">Gross target</span>
+            </div>
+          </button>
+
+          <button className="hm84-action live" onClick={()=>{
+            try{window.__WP_START_MODE="live";}catch{}
+            setView("pre_round");
+          }}>
+            <div className="hm84-action-top"><div className="hm84-icon">🟣</div><div className="hm84-arrow">→</div></div>
+            <div className="hm84-k">Playing today?</div>
+            <div className="hm84-h">Start Live Round</div>
+            <div className="hm84-d">Enter scores as you play. See the current hole plus the next two and automatically replan the safest route.</div>
+            <div className="hm84-chips">
+              <span className="hm84-chip">Next 3 holes</span><span className="hm84-chip">Auto replan</span><span className="hm84-chip">Shotgun starts</span><span className="hm84-chip">Autosave</span>
+            </div>
+          </button>
+        </div>
+
+        {/* PERFORMANCE */}
+        <div className="hm84-section-title">
+          <h3>📊 Understand my game</h3>
+          <span>Two different views of performance</span>
+        </div>
+        <div className="hm84-review-panel">
+          <div className="hm84-review-head">
+            <div>
+              <h3>Review Performance</h3>
+              <p>See how you performed competitively — or strip handicap out completely and measure your actual golf.</p>
+            </div>
+          </div>
+          <div className="hm84-report-grid">
+            <button className="hm84-report-btn" onClick={()=>{
+              try{
+                if(!localStorage.getItem("dsl_lens")) localStorage.setItem("dsl_lens","pointsField");
+                window.dispatchEvent(new Event("dsl_lens_change"));
+              }catch{}
+              setView("player_progress");
+            }}>
+              <div className="hm84-report-k">Competition view</div>
+              <div className="hm84-report-v">Performance Mirror →</div>
+              <div className="hm84-report-s">Handicap, field and competition-relative performance with the full intelligence report.</div>
+            </button>
+
+            <button className="hm84-report-btn true" onClick={()=>{
+              try{
+                localStorage.setItem("dsl_lens","trueGross");
+                window.dispatchEvent(new Event("dsl_lens_change"));
+              }catch{}
+              setView("player_progress");
+            }}>
+              <div className="hm84-report-k">Handicap ignored</div>
+              <div className="hm84-report-v">True Performance →</div>
+              <div className="hm84-report-s">Actual gross scoring and course-adjusted form. See whether the golfer is genuinely improving.</div>
+            </button>
+          </div>
+        </div>
+
+        {/* EXPLORE */}
+        <div className="hm84-section-title">
+          <h3>🔎 Explore my golf</h3>
+          <span>{statsText}</span>
+        </div>
+        <button className="hm84-explore" onClick={()=>setView("past")}>
+          <div className="hm84-explore-top">
+            <div>
+              <div className="hm84-explore-title">Open Game Explorer</div>
+              <div className="hm84-explore-sub">Browse old rounds without cluttering the home screen.</div>
+            </div>
+            <div className="hm84-arrow">→</div>
+          </div>
+          <div className="hm84-explore-tools">
+            <span className="hm84-tool">⛳ Games</span>
+            <span className="hm84-tool">🧾 Scorecards</span>
+            <span className="hm84-tool">📈 Graphs</span>
+            <span className="hm84-tool">🗺️ Courses</span>
+            <span className="hm84-tool">⭐ Ratings</span>
+            <span className="hm84-tool">😂 Banter</span>
+          </div>
+        </button>
+
+        {/* SECONDARY */}
+        <div className="hm84-secondary">
+          <button className="hm84-small" onClick={()=>setView("standings")}>
+            <div><h4>🏆 League</h4><p>Standings, form, points gaps and who's moving.</p></div>
+            <div className="hm84-small-arrow">→</div>
+          </button>
+          <button className="hm84-small" onClick={()=>setView("eclectic")}>
+            <div><h4>⚡ Eclectic</h4><p>Your best score on every hole stitched into one round.</p></div>
+            <div className="hm84-small-arrow">→</div>
+          </button>
+        </div>
+
+        {/* ADMIN */}
+        <button className="hm84-admin" onClick={()=>setView("admin")}>
+          <div>
+            <div className="hm84-admin-title">⚙️ Admin</div>
+            <div className="hm84-admin-sub">
+              Settings, imports, season setup, players
+              {totalPlayersCount != null ? ` · Players: ${visiblePlayersCount}/${totalPlayersCount}` : ""}
+              {signedIn ? ` · Signed in as ${adminLabel}` : ""}
+            </div>
+          </div>
+          <div>↗</div>
+        </button>
+
+        <div className="hm84-foot">Your golf · your numbers · your next move.</div>
       </div>
     </section>
   );
