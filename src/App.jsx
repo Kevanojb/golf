@@ -18213,6 +18213,7 @@ function WP_OnCourseMode({
   const delta=Number(liveResult.deltaVsOriginal)||0;
   const prob=liveResult.targetProbabilityText||'—';
   const status=liveResult.status||'ON PLAN';
+  const mobileCaddie=WP_liveScoringCaddie(liveResult);
 
   const setScore=(holeNo,val)=>{
     setLiveScores(prev=>{
@@ -18224,14 +18225,12 @@ function WP_OnCourseMode({
 
   const cueLabel=(h)=>{
     const cue=String(h?.planCue||'PROTECT');
-    if(cue==='PRIMARY_ATTACK') return 'PRIMARY ATTACK';
-    if(cue==='STRETCH_GAIN') return 'STRETCH GAIN';
-    if(cue==='OPPORTUNITY') return 'OPPORTUNITY';
-    if(cue==='SMART_BOGEY') return 'BANK THE BOGEY';
-    if(cue==='BOGEY_ON_PLAN') return 'BOGEY ON PLAN';
-    if(cue==='DAMAGE_CONTROL') return 'DAMAGE CONTROL';
+    if(cue==='PRIMARY_ATTACK') return 'OPPORTUNITY';
+    if(cue==='STRETCH_GAIN') return 'RECOVERY CHANCE';
+    if(cue==='OPPORTUNITY') return 'BONUS UPSIDE';
+    if(cue==='SMART_BOGEY'||cue==='BOGEY_ON_PLAN'||cue==='DAMAGE_CONTROL') return 'DAMAGE CONTROL';
     if(cue==='PLAYED') return 'COMPLETED';
-    return 'PROTECT';
+    return 'NORMAL';
   };
   const cueClass=(h)=>{
     const cue=String(h?.planCue||'');
@@ -18247,24 +18246,22 @@ function WP_OnCourseMode({
     const cue=String(h.planCue||'PROTECT');
     if(liveMode==='gross'){
       const diff=Number(h.targetGross)-Number(h.par);
-      const expected=Number(h.expectedGross);
-      if(diff<0) return `Stretch scoring hole: the revised gross target needs ${h.targetGross}. Take it only if the opportunity is genuinely there.`;
-      if(diff===0) return `Par is the live target here${Number.isFinite(expected)?` · your modelled expectation is ${expected.toFixed(1)}`:''}.`;
-      if(diff===1) return `Bogey is built into the gross route. Make ${h.targetGross} and move on — don't turn it into a bigger number chasing par.`;
-      return `${h.targetGross} is deliberately built into the gross route. Limit the damage and protect the overall total.`;
+      if(diff<0) return `A gain is available here, but the round does not need a heroic shot. Make ${h.targetGross} only if the hole presents it naturally.`;
+      if(diff===0) return `Par is the live route score. Commit to par first; anything better is bonus.`;
+      if(diff===1) return `Bogey is built into the route. Accept ${h.targetGross} rather than turning a safe hole into a double chasing par.`;
+      return `${h.targetGross} is deliberately allowed here. Keep the big number off the card and move on.`;
     }
     const n=Number(h.gain3HitN)||0;
     const c=Number(h.gain3HitCount)||0;
     const pct=n?Math.round(c/n*100):NaN;
     const exact=Number(h.holePtsAvg);
-    if(cue==='PRIMARY_ATTACK') return `This is one of your best places to find the extra point${Number.isFinite(pct)?` — 3+ points in ${c}/${n} rounds (${pct}%)`:''}.`;
-    if(cue==='STRETCH_GAIN') return `The target needs a gain somewhere and this is one of the best remaining options${Number.isFinite(pct)?` — 3+ points ${pct}% historically`:''}. Don't force it.`;
-    if(cue==='OPPORTUNITY') return `Baseline keeps you on plan. One better gross score is a bonus point if it comes naturally.`;
-    if(cue==='SMART_BOGEY') return `Two points is a good result here${Number.isFinite(exact)?` — you average ${exact.toFixed(1)} pts`:''}. Don't chase par.`;
-    if(cue==='BOGEY_ON_PLAN') return `Bogey keeps the route intact. Only take par if it comes without extra risk.`;
-    if(cue==='DAMAGE_CONTROL') return `Limit the damage and move on. The plan does not need heroics here.`;
+    if(cue==='PRIMARY_ATTACK') return `Scoring opportunity${Number.isFinite(pct)?` · 3+ points ${pct}% historically`:''}. Make the route score first; extra is bonus.`;
+    if(cue==='STRETCH_GAIN') return `Recovery chance${Number.isFinite(pct)?` · 3+ points ${pct}% historically`:''}. Commit to the target but don't manufacture the score.`;
+    if(cue==='OPPORTUNITY') return `The baseline score keeps the round on plan. Take the bonus only if it comes naturally.`;
+    if(cue==='SMART_BOGEY'||cue==='BOGEY_ON_PLAN') return `This is a damage-control hole${Number.isFinite(exact)?` · ${exact.toFixed(1)} pts average`:''}. Accept the route score and keep moving.`;
+    if(cue==='DAMAGE_CONTROL') return `Limit the damage. The target is protected by avoiding the big number, not by chasing a miracle recovery.`;
     if(cue==='PLAYED') return `Completed: ${h.actualGross} gross · ${h.actualPts} pt${h.actualPts===1?'':'s'}.`;
-    return `Protect the planned score and keep the round moving.`;
+    return `Normal hole. Make the planned score and do not let the previous hole change the decision.`;
   };
 
   const miniCard=(h,label)=>{
@@ -18346,6 +18343,7 @@ function WP_OnCourseMode({
         .oc-stat{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:11px;padding:7px 6px;text-align:center}.oc-stat-k{font-size:7px;font-weight:900;letter-spacing:.07em;text-transform:uppercase;opacity:.68}.oc-stat-v{font-size:18px;font-weight:950;line-height:1.05;margin-top:2px}
         .oc-body{padding:12px 12px calc(18px + env(safe-area-inset-bottom));max-width:760px;width:100%;margin:0 auto}
         .oc-status{border-radius:14px;padding:10px 12px;background:#eef2ff;border:1px solid #c7d2fe;margin-bottom:10px}.oc-status b{font-size:13px}.oc-status div{font-size:9px;color:#64748b;margin-top:2px}
+        .oc-caddie{border-radius:20px;padding:14px 15px;margin-bottom:10px;border:2px solid #cbd5e1;background:#fff;box-shadow:0 10px 26px rgba(15,23,42,.08)}.oc-caddie.good{background:linear-gradient(160deg,#ecfdf5,#fff);border-color:#86efac}.oc-caddie.warn{background:linear-gradient(160deg,#fffbeb,#fff);border-color:#fbbf24}.oc-caddie.normal{background:linear-gradient(160deg,#eff6ff,#fff);border-color:#93c5fd}.oc-caddie-mode{font-size:9px;font-weight:950;letter-spacing:.14em;text-transform:uppercase;color:#08775f}.oc-caddie-head{font-size:21px;font-weight:950;line-height:1.05;margin-top:4px}.oc-caddie-inst{font-size:13px;font-weight:850;line-height:1.35;margin-top:7px;color:#1e293b}.oc-caddie-why{font-size:10px;color:#64748b;line-height:1.35;margin-top:5px}.oc-caddie-recovery{margin-top:9px;padding-top:8px;border-top:1px solid #dbe5ee;font-size:10px;color:#475569}.oc-caddie-recovery b{color:#0f172a}
         .oc-current{border-radius:24px;border:2px solid #cbd5e1;background:#fff;padding:16px;box-shadow:0 14px 34px rgba(15,23,42,.10);min-height:48vh;display:flex;flex-direction:column;justify-content:space-between}
         .oc-current.oc-primary{background:linear-gradient(160deg,#ecfdf5,#ffffff);border-color:#6ee7b7}.oc-current.oc-stretch{background:linear-gradient(160deg,#fffbeb,#fff);border-color:#fbbf24}.oc-current.oc-opportunity{background:linear-gradient(160deg,#eff6ff,#fff);border-color:#93c5fd}.oc-current.oc-danger{background:linear-gradient(160deg,#fff7ed,#fff);border-color:#fdba74}.oc-current.oc-played{background:#eef2ff;border-color:#c7d2fe}
         .oc-holehead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}.oc-hole-no{font-size:12px;font-weight:950;letter-spacing:.12em;text-transform:uppercase;color:#64748b}.oc-par{font-size:10px;font-weight:900;color:#64748b}
@@ -18356,20 +18354,20 @@ function WP_OnCourseMode({
         .oc-next-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px}.oc-next-card{border:1px solid #dbe5ee;border-radius:17px;background:#fff;padding:11px}.oc-next-card.oc-primary{background:#ecfdf5;border-color:#a7f3d0}.oc-next-card.oc-stretch{background:#fffbeb;border-color:#fde68a}.oc-next-card.oc-opportunity{background:#eff6ff;border-color:#bfdbfe}.oc-next-card.oc-danger{background:#fff7ed;border-color:#fed7aa}
         .oc-next-top{display:flex;justify-content:space-between;gap:6px;font-size:8px;font-weight:950;color:#64748b}.oc-next-main{display:flex;justify-content:space-between;align-items:end;margin-top:5px}.oc-mini-k{font-size:7px;font-weight:900;color:#64748b}.oc-mini-gross{font-size:34px;font-weight:950;line-height:1}.oc-mini-points{font-size:13px;font-weight:950}.oc-mini-tag{font-size:9px;font-weight:950;margin-top:6px}.oc-mini-advice{font-size:9px;color:#64748b;line-height:1.3;margin-top:4px}
         .oc-change{margin-top:10px;border-radius:14px;border:1px solid #dbe5ee;background:#fff;padding:10px}.oc-change-title{font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.1em;color:#64748b}.oc-change-text{font-size:11px;font-weight:850;color:#334155;margin-top:3px}.oc-complete{border-radius:24px;border:1px solid #dbe5ee;background:#fff;padding:14px;box-shadow:0 14px 34px rgba(15,23,42,.08)}.oc-complete-head{text-align:center;padding:8px 4px 14px}.oc-complete-title{font-size:28px;font-weight:950;letter-spacing:-.035em;color:#0f172a}.oc-complete-sub{font-size:11px;color:#64748b;margin-top:4px}.oc-complete-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}.oc-score-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.oc-nine-card{border:1px solid #cbd5e1;border-radius:15px;background:#f8fafc;padding:10px}.oc-nine-card.total{background:linear-gradient(145deg,#0f172a,#1e293b);border-color:#0f172a;color:#fff}.oc-nine-title{font-size:8px;font-weight:950;letter-spacing:.09em;text-transform:uppercase;color:#64748b}.oc-nine-card.total .oc-nine-title{color:#cbd5e1}.oc-nine-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}.oc-nine-stat{min-width:0}.oc-nine-k{font-size:7px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8}.oc-nine-v{font-size:23px;font-weight:950;line-height:1;margin-top:2px;color:#0f172a}.oc-nine-card.total .oc-nine-v{color:#fff}.oc-nine-sub{font-size:7px;color:#94a3b8;margin-top:3px}.oc-total-gross{margin-top:9px;border-top:1px solid rgba(148,163,184,.35);padding-top:8px}.oc-total-gross .oc-nine-v{font-size:31px}.oc-count{border-radius:13px;padding:9px;text-align:center;border:1px solid #e2e8f0}.oc-count.good{background:#ecfdf5;border-color:#86efac}.oc-count.bad{background:#fff1f2;border-color:#fda4af}.oc-count.on{background:#f8fafc}.oc-count-v{font-size:22px;font-weight:950}.oc-count-k{font-size:8px;font-weight:950;text-transform:uppercase;letter-spacing:.08em;color:#64748b}.oc-result-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.oc-result{border-radius:14px;border:1px solid #e2e8f0;padding:9px;background:#f8fafc}.oc-result.better{background:#dcfce7;border-color:#4ade80;box-shadow:inset 0 0 0 1px rgba(22,163,74,.08)}.oc-result.worse{background:#fee2e2;border-color:#fb7185;box-shadow:inset 0 0 0 1px rgba(225,29,72,.08)}.oc-result.on{background:#f8fafc;border-color:#cbd5e1}.oc-result-h{display:flex;justify-content:space-between;gap:6px;align-items:center;font-size:9px;font-weight:950}.oc-result-main{display:flex;align-items:end;justify-content:space-between;gap:7px;margin-top:5px}.oc-result-actual{font-size:25px;font-weight:950;line-height:1}.oc-result-target{font-size:8px;color:#64748b;text-align:right}.oc-result-delta{font-size:9px;font-weight:950;margin-top:5px}.oc-result.better .oc-result-delta{color:#15803d}.oc-result.worse .oc-result-delta{color:#be123c}.oc-result.on .oc-result-delta{color:#64748b}.oc-legend{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:9px;font-weight:900;color:#64748b}.oc-dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}.oc-dot.good{background:#86efac}.oc-dot.bad{background:#fda4af}.oc-dot.on{background:#cbd5e1}
-        @media(max-width:430px){.oc-score-totals{grid-template-columns:1fr 1fr}.oc-nine-card.total{grid-column:1/-1}.oc-result-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-stat-v{font-size:16px}.oc-gross{font-size:88px}.oc-current{min-height:50vh}.oc-advice{font-size:12px}}
+        @media(max-width:430px){.oc-score-totals{grid-template-columns:1fr 1fr}.oc-nine-card.total{grid-column:1/-1}.oc-result-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-stat-v{font-size:16px}.oc-gross{font-size:82px}.oc-current{min-height:42vh}.oc-advice{font-size:12px}.oc-caddie-head{font-size:20px}.oc-next-grid{grid-template-columns:1fr}.oc-scorebar{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}.oc-stat{padding:6px 3px}}
       `}</style>
 
       <div className="oc-wrap">
         <div className="oc-topbar">
           <div className="oc-toprow">
             <div>
-              <div className="oc-brand">DEN GOLF · ON-COURSE MODE{Number(startHole)!==1?` · SHOTGUN H${startHole}`:''}</div>
+              <div className="oc-brand">DEN GOLF · LIVE SCORING CADDIE{Number(startHole)!==1?` · SHOTGUN H${startHole}`:''}</div>
               <div style={{fontSize:13,fontWeight:950,marginTop:2}}>{player?.name||'Player'} · {event?.courseName||courseKey}</div>
             </div>
             <div className="oc-actions">
               <div style={{alignSelf:"center",fontSize:9,fontWeight:900,color:"#a7f3d0",whiteSpace:"nowrap"}}>✓ SAVED</div>
               <button className="oc-btn" onClick={onViewFull}>VIEW 18</button>
-              <button className="oc-btn" onClick={onExit}>REDUCE</button>
+              <button className="oc-btn" onClick={onExit}>EXIT</button>
             </div>
           </div>
           <div className="oc-scorebar">
@@ -18377,7 +18375,7 @@ function WP_OnCourseMode({
             <div className="oc-stat"><div className="oc-stat-k">{liveMode==='gross'?'Used':'Banked'}</div><div className="oc-stat-v">{liveMode==='gross'?liveResult.actualGrossTotal:liveResult.actualPts}</div></div>
             <div className="oc-stat"><div className="oc-stat-k">Vs plan</div><div className="oc-stat-v">{delta>0?`+${delta}`:delta}</div></div>
             <div className="oc-stat"><div className="oc-stat-k">Left</div><div className="oc-stat-v">{liveResult.holesLeft}</div></div>
-            <div className="oc-stat"><div className="oc-stat-k">Chance</div><div className="oc-stat-v">{prob}</div></div>
+            <div className="oc-stat"><div className="oc-stat-k">Target+</div><div className="oc-stat-v">{prob}</div></div>
           </div>
         </div>
 
@@ -18390,6 +18388,14 @@ function WP_OnCourseMode({
                   : `Need ${liveResult.requiredRate.toFixed(2)} pts/hole from here to reach ${liveResult.liveTarget}.`)
               : 'Round complete.'}</div>
           </div>
+
+          {!roundComplete?<div className={`oc-caddie ${mobileCaddie.tone||'normal'}`}>
+            <div className="oc-caddie-mode">SCORING CADDIE · {mobileCaddie.mode}</div>
+            <div className="oc-caddie-head">{mobileCaddie.headline}</div>
+            <div className="oc-caddie-inst">{mobileCaddie.instruction}</div>
+            <div className="oc-caddie-why">{mobileCaddie.why}</div>
+            {mobileCaddie.recoveryHoles?.length?<div className="oc-caddie-recovery"><b>Better recovery holes later:</b> {mobileCaddie.recoveryText}</div>:null}
+          </div>:null}
 
           {roundComplete?<div className="oc-complete">
             <div className="oc-complete-head">
@@ -18492,7 +18498,7 @@ function WP_OnCourseMode({
                 <div className="oc-par">PAR {current.par} · SI {Number.isFinite(current.si)?current.si:'—'} · {current.strokes} SHOT{current.strokes===1?'':'S'}</div>
               </div>
               <div className="oc-main-score">
-                <div className="oc-make">{current.played?'SCORED':'MAKE'}</div>
+                <div className="oc-make">{current.played?'SCORED':'ROUTE SCORE'}</div>
                 <div className="oc-gross">{current.played?current.actualGross:current.targetGross}</div>
                 <div className="oc-pts">{liveMode==='gross'
                   ? `TARGET TOTAL ${liveResult.liveTarget} GROSS`
@@ -18514,7 +18520,7 @@ function WP_OnCourseMode({
                       const nxt=WP_liveNextCourseHole(current.hole,startHole,1);
                       if(nxt) setCursorHole(nxt);
                     }
-                  }}>SAVE & REPLAN</button>
+                  }}>SAVE HOLE & NEXT</button>
                 </div>
               </div>
               <div className="oc-nav">
