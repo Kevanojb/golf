@@ -3523,7 +3523,7 @@ function Home({
                 <div className="hm-mode-copy">
                   <div className="hm-mode-kicker">ON-COURSE MODE</div>
                   <div className="hm-mode-name">Start / Resume Live Caddie</div>
-                  <div className="hm-mode-desc">Quick iPhone setup, then big-button scoring. Reuse today's plan or choose only player, course, tee and target.</div>
+                  <div className="hm-mode-desc">Quick iPhone setup, then big-button scoring. Tap your golfer, choose course/tee/target, and start.</div>
                   <div className="hm-mode-tags">
                     <span>Quick setup</span><span>Large controls</span><span>Autosave</span>
                   </div>
@@ -18728,8 +18728,13 @@ function WP_MobileOnCourseSetup({
   const [step,setStep]=React.useState(0);
   const [latestPlan,setLatestPlan]=React.useState(()=>WP_loadLatestPreRoundPlanSnapshot());
   const [latestLive,setLatestLive]=React.useState(()=>WP_findLatestLiveRound());
+  const [playerSearch,setPlayerSearch]=React.useState("");
 
   const playerName=selectedPlayers.length===1?String(selectedPlayers[0]||""):"";
+  const filteredPlayers=(players||[]).filter(p=>{
+    const n=String(p?.name||"");
+    return !playerSearch.trim() || n.toLowerCase().includes(playerSearch.trim().toLowerCase());
+  });
   const course=courses.find(c=>String(c.key)===String(courseKey))||null;
   const target=liveScoringMode==='gross'?Number(customGross):Number(customPoints);
   const canStart=!!playerName&&!!courseKey&&!!selectedDbTee&&!!planningEvent&&Number.isFinite(target);
@@ -18758,6 +18763,12 @@ function WP_MobileOnCourseSetup({
 
   const newRound=()=>{
     setLiveScores(Array(18).fill(""));
+    if(!playerName){
+      try{
+        const last=String(window.localStorage?.getItem("den-mobile-last-player")||"");
+        if(last && (players||[]).some(p=>String(p?.name||"")===last)) setSelectedPlayers([last]);
+      }catch{}
+    }
     setStep(1);
   };
 
@@ -18778,7 +18789,14 @@ function WP_MobileOnCourseSetup({
       .mq-progress{display:flex;gap:5px;margin-bottom:14px}.mq-dot{height:5px;flex:1;border-radius:999px;background:#e2e8f0}.mq-dot.on{background:#10b981}
       .mq-k{font-size:9px;font-weight:950;letter-spacing:.13em;text-transform:uppercase;color:#64748b}.mq-title{font-size:29px;font-weight:950;line-height:1.02;letter-spacing:-.035em;margin-top:4px}.mq-sub{font-size:12px;color:#64748b;line-height:1.4;margin-top:6px}
       .mq-stack{display:flex;flex-direction:column;gap:10px;margin-top:15px}.mq-big{width:100%;min-height:68px;border-radius:19px;border:1px solid #cbd5e1;background:#fff;padding:13px 14px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:950;touch-action:manipulation}.mq-big.primary{border:2px solid #6ee7b7;background:linear-gradient(145deg,#ecfdf5,#fff)}.mq-big.resume{border:2px solid #c4b5fd;background:linear-gradient(145deg,#f5f3ff,#fff)}.mq-big-title{font-size:17px;font-weight:950}.mq-big-sub{font-size:10px;font-weight:700;color:#64748b;margin-top:3px;line-height:1.3}.mq-arrow{font-size:25px;color:#64748b}
-      .mq-label{font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.1em;color:#64748b;margin:14px 0 5px}.mq-select,.mq-number{width:100%;min-height:56px;border:2px solid #cbd5e1;border-radius:16px;background:#fff;padding:0 14px;font-size:17px;font-weight:950;color:#0f172a}.mq-two{display:grid;grid-template-columns:1fr 1fr;gap:9px}.mq-choice{min-height:58px;border-radius:16px;border:2px solid #dbe5ee;background:#fff;font-size:13px;font-weight:950}.mq-choice.on{border-color:#6ee7b7;background:#ecfdf5;color:#065f46}
+      .mq-label{font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.1em;color:#64748b;margin:14px 0 5px}.mq-select,.mq-number{width:100%;min-height:56px;border:2px solid #cbd5e1;border-radius:16px;background:#fff;padding:0 14px;font-size:17px;font-weight:950;color:#0f172a}
+      .mq-search{width:100%;min-height:52px;border:2px solid #cbd5e1;border-radius:16px;background:#fff;padding:0 14px;font-size:16px;font-weight:800;color:#0f172a;outline:none}.mq-search:focus{border-color:#6ee7b7;box-shadow:0 0 0 3px rgba(16,185,129,.10)}
+      .mq-player-list{display:flex;flex-direction:column;gap:8px;margin-top:10px;max-height:50vh;overflow:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px}
+      .mq-player{width:100%;min-height:58px;border:2px solid #dbe5ee;border-radius:17px;background:#fff;padding:11px 13px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:10px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
+      .mq-player.on{border-color:#34d399;background:linear-gradient(145deg,#ecfdf5,#fff);box-shadow:0 7px 18px rgba(5,150,105,.10)}
+      .mq-player-name{font-size:16px;font-weight:950;color:#0f172a}.mq-player-check{width:30px;height:30px;border-radius:999px;display:flex;align-items:center;justify-content:center;background:#f1f5f9;color:#94a3b8;font-size:15px;font-weight:950;flex:0 0 auto}.mq-player.on .mq-player-check{background:#10b981;color:#fff}
+      .mq-player-empty{border:1px dashed #cbd5e1;border-radius:16px;padding:16px;text-align:center;font-size:12px;color:#64748b}
+      .mq-two{display:grid;grid-template-columns:1fr 1fr;gap:9px}.mq-choice{min-height:58px;border-radius:16px;border:2px solid #dbe5ee;background:#fff;font-size:13px;font-weight:950}.mq-choice.on{border-color:#6ee7b7;background:#ecfdf5;color:#065f46}
       .mq-summary{display:flex;flex-direction:column;gap:8px;margin-top:14px}.mq-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #e2e8f0;background:#f8fafc;border-radius:14px;padding:10px 12px}.mq-row-k{font-size:9px;font-weight:900;color:#64748b;text-transform:uppercase}.mq-row-v{font-size:14px;font-weight:950;text-align:right}
       .mq-start{width:100%;min-height:64px;border:0;border-radius:20px;margin-top:14px;background:linear-gradient(90deg,#047857,#059669);color:#fff;font-size:18px;font-weight:950;box-shadow:0 12px 28px rgba(5,150,105,.24)}.mq-start:disabled{opacity:.35;box-shadow:none}.mq-next{width:100%;min-height:58px;border:0;border-radius:18px;margin-top:14px;background:#0f172a;color:#fff;font-size:16px;font-weight:950}.mq-note{text-align:center;font-size:9px;color:#64748b;margin-top:8px}
       .mq-edit{border:0;background:transparent;color:#047857;font-size:10px;font-weight:950;text-decoration:underline}
@@ -18812,12 +18830,35 @@ function WP_MobileOnCourseSetup({
         </>:null}
 
         {step===1?<>
-          <div className="mq-sub">Choose one golfer. Handicap details stay automatic unless you change them in Advanced.</div>
-          <div className="mq-label">Golfer</div>
-          <select className="mq-select" value={playerName} onChange={e=>setSelectedPlayers(e.target.value?[e.target.value]:[])}>
-            <option value="">Choose golfer…</option>
-            {players.map(p=><option key={p.name} value={p.name}>{p.name}</option>)}
-          </select>
+          <div className="mq-sub">Tap your name. No fiddly dropdown — one big button per golfer. Handicap details stay automatic unless you use Advanced.</div>
+          {(players||[]).length>8?<><div className="mq-label">Find golfer</div><input
+            className="mq-search"
+            type="search"
+            inputMode="search"
+            autoComplete="off"
+            placeholder="Type a name…"
+            value={playerSearch}
+            onChange={e=>setPlayerSearch(e.target.value)}
+          /></>:null}
+          <div className="mq-player-list">
+            {filteredPlayers.map(p=>{
+              const name=String(p?.name||"");
+              const selected=name===playerName;
+              return <button
+                key={name}
+                type="button"
+                className={`mq-player ${selected?'on':''}`}
+                onClick={()=>{
+                  setSelectedPlayers([name]);
+                  try{window.localStorage?.setItem("den-mobile-last-player",name);}catch{}
+                }}
+              >
+                <div className="mq-player-name">{name}</div>
+                <div className="mq-player-check">{selected?'✓':'›'}</div>
+              </button>;
+            })}
+            {!filteredPlayers.length?<div className="mq-player-empty">No golfers match that name.</div>:null}
+          </div>
           <button className="mq-next" disabled={!playerName} onClick={()=>setStep(2)}>NEXT · COURSE & TEE →</button>
         </>:null}
 
