@@ -18018,7 +18018,49 @@ function WP_holeWeather(w,bearing){
  return {...w,headwindMph:head,crosswindMph:cross,strokePenalty:penalty};
 }
 function WP_weatherLabel(w){if(!w)return"No weather";const a=[];if(Number.isFinite(w.windMph))a.push(`${Math.round(w.windMph)} mph wind`);if(Number.isFinite(w.gustMph)&&w.gustMph>w.windMph+3)a.push(`gust ${Math.round(w.gustMph)}`);if(Number(w.rainMm)>.1)a.push(`${Number(w.rainMm).toFixed(1)} mm rain`);if(Number.isFinite(w.tempC))a.push(`${Math.round(w.tempC)}°C`);return a.join(" · ");}
-async function WP_geocodeCourse(name){const r=await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(String(name||""))}&count=5&language=en&format=json`);if(!r.ok)throw new Error("Could not locate course.");const j=await r.json(),xs=Array.isArray(j.results)?j.results:[];if(!xs.length)throw new Error("Course location not found. Add latitude/longitude in Course Manager.");const x=xs.find(v=>String(v.country_code).toUpperCase()==="GB")||xs[0];return{latitude:Number(x.latitude),longitude:Number(x.longitude),label:[x.name,x.admin1,x.country].filter(Boolean).join(", ")};}
+function WP_geometryCourseLocation(rows){
+  const pts=[];
+  for(const g of (Array.isArray(rows)?rows:[])){
+    for(const [lat,lng] of [
+      [Number(g?.tee_lat),Number(g?.tee_lng)],
+      [Number(g?.green_lat),Number(g?.green_lng)]
+    ]){
+      if(Number.isFinite(lat)&&Number.isFinite(lng)&&Math.abs(lat)<=90&&Math.abs(lng)<=180) pts.push({lat,lng});
+    }
+    const jp=Array.isArray(g?.points)?g.points:[];
+    for(const p of jp){
+      const lat=Number(p?.lat),lng=Number(p?.lng);
+      if(Number.isFinite(lat)&&Number.isFinite(lng)&&Math.abs(lat)<=90&&Math.abs(lng)<=180) pts.push({lat,lng});
+    }
+  }
+  if(!pts.length)return null;
+  return {
+    latitude:pts.reduce((s,p)=>s+p.lat,0)/pts.length,
+    longitude:pts.reduce((s,p)=>s+p.lng,0)/pts.length,
+    pointsUsed:pts.length
+  };
+}
+async function WP_geocodeCourse(name){
+  const raw=String(name||"").trim();
+  const simplified=raw
+    .replace(/\bgolf\s*&\s*country\s*club\b/ig,"")
+    .replace(/\bgolf\s+and\s+country\s+club\b/ig,"")
+    .replace(/\bgolf\s+club\b/ig,"")
+    .replace(/\bgolf\s+course\b/ig,"")
+    .trim();
+  for(const q of Array.from(new Set([raw,simplified].filter(Boolean)))){
+    const r=await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=8&language=en&format=json`);
+    if(!r.ok)continue;
+    const j=await r.json(),xs=Array.isArray(j?.results)?j.results:[];
+    if(!xs.length)continue;
+    const x=xs.find(v=>String(v?.country_code||"").toUpperCase()==="GB")||xs[0];
+    const latitude=Number(x?.latitude),longitude=Number(x?.longitude);
+    if(Number.isFinite(latitude)&&Number.isFinite(longitude)){
+      return {latitude,longitude,label:[x.name,x.admin1,x.country].filter(Boolean).join(", "),source:"geocoder"};
+    }
+  }
+  throw new Error("Course location not found automatically. If you have a KML, import and save it in Admin → Manage Courses; the weather engine will use that GPS geometry directly.");
+}
 async function WP_fetchCourseWeather({latitude,longitude,date,teeTime}){const p=new URLSearchParams({latitude:String(latitude),longitude:String(longitude),hourly:"temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m",wind_speed_unit:"mph",timezone:"auto",start_date:date,end_date:date});const r=await fetch(`https://api.open-meteo.com/v1/forecast?${p}`);if(!r.ok)throw new Error("Forecast unavailable for that date.");const j=await r.json(),h=j.hourly||{},ts=h.time||[];if(!ts.length)throw new Error("No hourly forecast returned.");const target=new Date(`${date}T${teeTime||"10:00"}:00`).getTime();let k=0,d=Infinity;ts.forEach((t,i)=>{const x=Math.abs(new Date(t).getTime()-target);if(x<d){d=x;k=i;}});const v=x=>Number((x||[])[k]);return{forecastTime:ts[k],tempC:v(h.temperature_2m),rainMm:v(h.precipitation),windMph:v(h.wind_speed_10m),windDirection:v(h.wind_direction_10m),gustMph:v(h.wind_gusts_10m),timezone:j.timezone};}
 function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, setView, runSeasonAnalysis, manualPlayers=[] }) {
   const historicCourses = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
@@ -18236,7 +18278,47 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     ()=>dbTees.find(t=>String(t.id)===String(selectedTeeId))||null,
     [dbTees,selectedTeeId]
   );
-  const loadWeatherForPlan=React.useCallback(async()=>{if(!selectedCourse)return;setWeatherBusy(true);setWeatherError("");try{let lat=Number(selectedCourse.latitude),lon=Number(selectedCourse.longitude),label=selectedCourse.label;if(!Number.isFinite(lat)||!Number.isFinite(lon)){const g=await WP_geocodeCourse(selectedCourse.label);lat=g.latitude;lon=g.longitude;label=g.label;}const w=await WP_fetchCourseWeather({latitude:lat,longitude:lon,date:weatherDate,teeTime:weatherTeeTime});setWeatherLocation({latitude:lat,longitude:lon,label});setCourseWeather(w);setWeatherEnabled(true);}catch(e){setCourseWeather(null);setWeatherError(e?.message||"Could not load weather.");}finally{setWeatherBusy(false);}},[selectedCourse,weatherDate,weatherTeeTime]);
+  const loadWeatherForPlan=React.useCallback(async()=>{
+    if(!selectedCourse)return;
+    setWeatherBusy(true);setWeatherError("");
+    try{
+      let lat=Number(selectedCourse.latitude);
+      let lon=Number(selectedCourse.longitude);
+      let label=selectedCourse.label;
+      let source="course";
+
+      // Preferred fallback: stored KML is real course GPS data and is much
+      // more reliable than trying to geocode a golf-club name.
+      if(!Number.isFinite(lat)||!Number.isFinite(lon)){
+        const gl=WP_geometryCourseLocation(courseGeometry);
+        if(gl){
+          lat=gl.latitude;
+          lon=gl.longitude;
+          label=`${selectedCourse.label} · KML mapped location`;
+          source="kml";
+        }
+      }
+
+      // Only if neither Supabase course coordinates nor KML geometry exists
+      // do we attempt normal place-name geocoding.
+      if(!Number.isFinite(lat)||!Number.isFinite(lon)){
+        const g=await WP_geocodeCourse(selectedCourse.label);
+        lat=g.latitude;lon=g.longitude;label=g.label;source=g.source||"geocoder";
+      }
+
+      const w=await WP_fetchCourseWeather({
+        latitude:lat,longitude:lon,date:weatherDate,teeTime:weatherTeeTime
+      });
+      setWeatherLocation({latitude:lat,longitude:lon,label,source});
+      setCourseWeather(w);
+      setWeatherEnabled(true);
+    }catch(e){
+      setCourseWeather(null);
+      setWeatherError(e?.message||"Could not load weather.");
+    }finally{
+      setWeatherBusy(false);
+    }
+  },[selectedCourse,courseGeometry,weatherDate,weatherTeeTime]);
   React.useEffect(()=>{setCourseWeather(null);setWeatherError("");},[courseKey,selectedTeeId,weatherDate,weatherTeeTime]);
   const weatherSummary=React.useMemo(()=>weatherEnabled&&courseWeather?WP_holeWeather(courseWeather,NaN):null,[weatherEnabled,courseWeather]);
 
@@ -18581,8 +18663,17 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
                 <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 p-3">
                   <div className="flex justify-between gap-2"><div><div className="text-[9px] font-black uppercase tracking-widest text-sky-700">Weather-adjusted plan</div><div className="text-sm font-black">Conditions at tee time</div></div><label className="text-[10px] font-black text-sky-800"><input type="checkbox" checked={weatherEnabled} onChange={e=>setWeatherEnabled(e.target.checked)}/> ON</label></div>
                   <div className="mt-3 grid grid-cols-2 gap-2"><input type="date" value={weatherDate} onChange={e=>setWeatherDate(e.target.value)} className="rounded-xl border border-sky-200 bg-white px-2 py-2 text-xs font-bold"/><input type="time" value={weatherTeeTime} onChange={e=>setWeatherTeeTime(e.target.value)} className="rounded-xl border border-sky-200 bg-white px-2 py-2 text-xs font-bold"/></div>
+                  {courseGeometry.length?<div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1.5 text-[9px] font-black text-emerald-700">✓ KML GPS READY · {courseGeometry.length}/18 HOLES MAPPED</div>:null}
                   <button type="button" onClick={loadWeatherForPlan} disabled={weatherBusy||!selectedCourse} className="mt-2 w-full rounded-xl bg-sky-700 px-3 py-2 text-xs font-black text-white disabled:opacity-40">{weatherBusy?"Loading forecast…":"☁️ Load Course Weather"}</button>
-                  {weatherSummary?<div className="mt-2 rounded-xl border border-sky-200 bg-white p-2"><div className="text-xs font-black">{WP_weatherLabel(weatherSummary)}</div><div className="mt-1 text-[9px] text-slate-500">{weatherLocation?.label||selectedCourse?.label} · near {weatherTeeTime}. {courseGeometry.length?`${courseGeometry.length}/18 mapped holes · doglegs enabled.`:'No KML geometry yet · course-wide weather only.'} Baseline player history remains unchanged.</div></div>:null}
+                  {weatherSummary?<div className="mt-2 rounded-xl border border-sky-200 bg-white p-2">
+                    <div className="text-xs font-black">{WP_weatherLabel(weatherSummary)}</div>
+                    <div className="mt-1 text-[9px] text-slate-500">
+                      {weatherLocation?.label||selectedCourse?.label} · near {weatherTeeTime}.
+                      {weatherLocation?.source==="kml"?" GPS location taken directly from stored KML geometry.":weatherLocation?.source==="course"?" GPS location taken from the Supabase course record.":" Location found automatically."}
+                      {courseGeometry.length?` ${courseGeometry.length}/18 mapped holes · doglegs enabled.`:' No KML geometry yet · course-wide weather only.'}
+                      Baseline player history remains unchanged.
+                    </div>
+                  </div>:null}
                   {weatherError?<div className="mt-2 text-[10px] font-bold text-rose-600">{weatherError}</div>:null}
                 </div>
               </div>
