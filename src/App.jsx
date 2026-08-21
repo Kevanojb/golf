@@ -7058,7 +7058,7 @@ function PlayerProgressView({
   const [edgeTab, setEdgeTab] = React.useState("all"); // all | par | si | yd
   const [ppBarsMode, setPpBarsMode] = React.useState(() => {
     try { return localStorage.getItem("dsl_lens") || "pointsField"; } catch(e){ return "pointsField"; }
-  }); // pointsField | strokesField | strokesPar
+  }); // pointsField | strokesField | strokesPar | trueGross
 
   const [trendMetric, setTrendMetric] = React.useState(() => {
     try { return localStorage.getItem("dsl_trendMetric") || "overall"; } catch(e){ return "overall"; }
@@ -7066,19 +7066,20 @@ function PlayerProgressView({
   React.useEffect(() => {
     try { localStorage.setItem("dsl_trendMetric", String(trendMetric || "overall")); } catch(e){}
   }, [trendMetric]);
-  const progressCompare = (ppBarsMode === "strokesPar") ? "par" : "field"; // "field" | "par"
+  const progressCompare = (ppBarsMode === "strokesPar" || ppBarsMode === "trueGross") ? "par" : "field"; // "field" | "par"
   // Lens (single source of truth):
   // pointsField => Stableford Points vs Field
   // strokesField => Gross Strokes vs Field
-  // strokesPar   => Gross Strokes vs Par
+  // strokesPar   => Existing handicap-relative gross report
+  // trueGross    => TRUE PERFORMANCE: raw gross / gross-vs-par only; handicap ignored
   React.useEffect(() => {
     if (ppBarsMode === "pointsField") {
       if (scoringMode !== "stableford") setScoringMode("stableford");
     } else {
       if (scoringMode !== "gross") setScoringMode("gross");
     }
-    // Strokes vs Par is absolute; cohort comparisons don't apply
-    if (ppBarsMode === "strokesPar" && cohortMode !== "field") setCohortMode("field");
+    // Neither par-style report uses a field/band cohort as its core benchmark.
+    if ((ppBarsMode === "strokesPar" || ppBarsMode === "trueGross") && cohortMode !== "field") setCohortMode("field");
   }, [ppBarsMode]);
 
   // --- Lens dropdown (single control, still coloured) ---
@@ -7117,19 +7118,28 @@ function PlayerProgressView({
     },
     {
       key: "strokesPar",
-      label: "Score (Strokes) — vs Par",
+      label: "Score (Strokes) — vs Par (Handicap)",
       pp: "strokesPar",
       cohort: "field",
       rgb: "249,115,22",
-      hint: "Absolute score relative to par (no field/band comparison).",
+      hint: "Handicap-relative gross report: shows performance against the player's playing-to-handicap target.",
+    },
+    {
+      key: "trueGross",
+      label: "True Performance Report — Gross Only",
+      pp: "trueGross",
+      cohort: "field",
+      rgb: "5,150,105",
+      hint: "Handicap completely ignored. Uses actual gross scores, gross vs par and the player's own gross-scoring history.",
     },
   ]), []);
 
   const lensSelected = React.useMemo(() => {
     const found = LENS_OPTIONS.find(o => o.pp === ppBarsMode && o.cohort === cohortMode);
     if (found) return found;
-    // safety: strokesPar always uses field
+    // safety: par/true-performance lenses always use field internally
     if (ppBarsMode === "strokesPar") return LENS_OPTIONS.find(o => o.key === "strokesPar") || LENS_OPTIONS[0];
+    if (ppBarsMode === "trueGross") return LENS_OPTIONS.find(o => o.key === "trueGross") || LENS_OPTIONS[0];
     // fallback
     return LENS_OPTIONS[0];
   }, [LENS_OPTIONS, ppBarsMode, cohortMode]);
@@ -7148,7 +7158,7 @@ function PlayerProgressView({
     const sync = () => {
       try {
         const v = localStorage.getItem("dsl_lens") || "pointsField";
-        if (v === "pointsField" || v === "strokesField" || v === "strokesPar") {
+        if (v === "pointsField" || v === "strokesField" || v === "strokesPar" || v === "trueGross") {
           setPpBarsMode(prev => (prev === v ? prev : v));
         }
       } catch(e) {}
@@ -7509,12 +7519,12 @@ const parLeaders = React.useMemo(() => {
         scoringMode,
         lensMode: (localStorage.getItem("dsl_lens") || "pointsField"),
         // comparator state
-        comparatorMode: (ppBarsMode === "strokesPar" ? "par" : mode),
-        cohortLabel: (ppBarsMode === "strokesPar" ? "Par baseline" : String(cohort?.label || peerBandLabel)),
-        peerBand: (ppBarsMode === "strokesPar" ? "Par baseline" : peerBandLabel),
-        peerPlayersN: (ppBarsMode === "strokesPar" ? 0 : peers.length),
-        peerMin: (ppBarsMode === "strokesPar" ? NaN : (mn !== Infinity ? mn : NaN)),
-        peerMax: (ppBarsMode === "strokesPar" ? NaN : (mx !== -Infinity ? mx : NaN)),
+        comparatorMode: ((ppBarsMode === "strokesPar" || ppBarsMode === "trueGross") ? "par" : mode),
+        cohortLabel: (ppBarsMode === "trueGross" ? "True gross / par baseline" : (ppBarsMode === "strokesPar" ? "Handicap-adjusted par target" : String(cohort?.label || peerBandLabel))),
+        peerBand: (ppBarsMode === "trueGross" ? "True gross / par baseline" : (ppBarsMode === "strokesPar" ? "Handicap-adjusted par target" : peerBandLabel)),
+        peerPlayersN: ((ppBarsMode === "strokesPar" || ppBarsMode === "trueGross") ? 0 : peers.length),
+        peerMin: ((ppBarsMode === "strokesPar" || ppBarsMode === "trueGross") ? NaN : (mn !== Infinity ? mn : NaN)),
+        peerMax: ((ppBarsMode === "strokesPar" || ppBarsMode === "trueGross") ? NaN : (mx !== -Infinity ? mx : NaN)),
         // Peer context (shown in Score vs Par for course-difficulty calibration)
         peerContextBand: peerBandLabel,
         peerContextPlayersN: peers.length,
@@ -7522,7 +7532,7 @@ const parLeaders = React.useMemo(() => {
         peerContextMax: (mx !== -Infinity ? mx : NaN),
         // the exact aggregates the Overview uses for comparisons
         playerAgg: cur,
-        peerAgg: (ppBarsMode === "strokesPar" ? null : compField),
+        peerAgg: ((ppBarsMode === "strokesPar" || ppBarsMode === "trueGross") ? null : compField),
         peerContextAgg: compField,
       };
       try { window.dispatchEvent(new Event("dsl_overview_report_change")); } catch(_e) {}
@@ -9615,7 +9625,9 @@ const coachLine = (row) => {
                 ) : (ppBarsMode === "strokesField" && cohortMode === "band") ? (
                   <>Gross score compared to golfers in the same handicap band. <b>Lower is better.</b></>
                 ) : (
-                  <>Gross score relative to par (absolute). <b>Lower is better.</b></>
+                  <>${ppBarsMode==="trueGross"
+  ? <>True Performance: actual gross scoring only. <b>Handicap is completely ignored.</b> Lower is better.</>
+  : <>Gross score relative to the handicap-adjusted target. <b>Lower is better.</b></>}</>
                 )}
               </div>
 
@@ -11106,6 +11118,7 @@ function PR_regenSeasonReport(mode){
 
 
 function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit, scoringMode, lensMode, comparatorMode }){
+  const __truePerformance = String(lensMode||"") === "trueGross";
   var peerBand = "—"; // ensure defined for template safety
   var peerMin = NaN, peerMax = NaN, peerPlayersN = 0;
   var __usingVirtualSameHcapPeer = false;
@@ -11131,11 +11144,14 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
     && String(__snap.playerName||"") === String(playerName||"")
     && String(__snap.yearLabel||"") === String(yearLabel||"")
     && String(__snap.seasonLimit||"") === String(seasonLimit||"")
-    && String(__snap.scoringMode||"") === String(scoringMode||""));
+    && String(__snap.scoringMode||"") === String(scoringMode||"")
+    && String(__snap.lensMode||"") === String(lensMode||""));
 
-  const __effComparatorMode = __useSnap
-    ? ((String(__snap.comparatorMode||"band") === "par") ? "par" : (String(__snap.comparatorMode||"band") === "field" ? "field" : "band"))
-    : ((String(comparatorMode||"band") === "par") ? "par" : (String(comparatorMode||"band") === "field" ? "field" : "band"));
+  const __effComparatorMode = __truePerformance
+    ? "par"
+    : (__useSnap
+      ? ((String(__snap.comparatorMode||"band") === "par") ? "par" : (String(__snap.comparatorMode||"band") === "field" ? "field" : "band"))
+      : ((String(comparatorMode||"band") === "par") ? "par" : (String(comparatorMode||"band") === "field" ? "field" : "band")));
 
   // Peer aggregate baseline (field or band) — pulled from Overview when possible.
   let __peerAgg = null;
@@ -11170,7 +11186,7 @@ function PR_generateSeasonReportHTML({ model, playerName, yearLabel, seasonLimit
   }
 
   if (__effComparatorMode === "par") {
-    peerBand = "Par baseline";
+    peerBand = __truePerformance ? "True gross / par baseline" : "Par baseline";
     peerPlayersN = 0;
     peerMin = NaN; peerMax = NaN;
     __peerAgg = __makeParBaselineFromPlayer(cur);
@@ -12288,7 +12304,7 @@ const postRoundIntel = (() => {
     // produced zero comparable holes, and the report exited before the exact
     // handicap snapshot was even attempted.
     const hasNoPriorHistory = prior.length === 0;
-    const usesHandicapTarget = hasNoPriorHistory || isSoloRound;
+    const usesHandicapTarget = !__truePerformance && (hasNoPriorHistory || isSoloRound);
 
     // Handicap-target benchmarking uses the Handicap Index converted to the
     // Course Handicap for the actual tee played.
@@ -12695,8 +12711,8 @@ const postRoundIntel = (() => {
         for(let i=0;i<nGross;i++){
           const par=Number(ps[i]),si=Number(sis[i]),yard=Number(ys[i]),gross=Number(gs[i]);
           if(!Number.isFinite(par)||!Number.isFinite(gross)||gross<=0)continue;
-          const strokes=rec(si);
-          const target=par+strokes;
+          const strokes=__truePerformance ? 0 : rec(si);
+          const target=__truePerformance ? par : (par+strokes);
           grossHoles.push({
             hole:i+1,par,si,yard:Number.isFinite(yard)?yard:NaN,
             gross,points:Number.isFinite(Number(pts[i]))?Number(pts[i]):NaN,
@@ -12798,7 +12814,7 @@ const postRoundIntel = (() => {
         for(let i=0;i<n2;i++){
           const par=Number(ps2[i]), si=Number(si2[i]), gross=Number(gs2[i]), yard=Number(yd2[i]);
           if(!Number.isFinite(par)||!Number.isFinite(gross)||gross<=0)continue;
-          const strokes=rec2(si), target=par+strokes, delta=target-gross;
+          const strokes=__truePerformance ? 0 : rec2(si), target=__truePerformance ? par : (par+strokes), delta=target-gross;
           hs2.push({hole:i+1,par,si,yard:Number.isFinite(yard)?yard:NaN,gross,strokes,target,delta,cost:Math.max(0,-delta),gain:Math.max(0,delta)});
         }
         if(hs2.length){
@@ -12911,7 +12927,7 @@ const postRoundIntel = (() => {
             const par=Number(ps[i]),si=Number(sis[i]),y=Number(ys[i]),g=Number(gs[i]);
             if(!Number.isFinite(par)||!Number.isFinite(g)||g<=0)continue;
             const strokes=rec(si);
-            const target=par+strokes;
+            const target=__truePerformance ? par : (par+strokes);
             const d=target-g;
             const cost=Math.max(0,g-target);
 
@@ -13046,7 +13062,7 @@ const postRoundIntel = (() => {
           let startPattern=null;
           if(startPhase&&startPhase.rounds>=3){
             if(startPhase.avgPerRound<=-0.75||startPhase.badRoundRate>=0.6){
-              startPattern={status:"PROBLEM",headline:"You repeatedly start rounds below handicap target",detail:`Holes 1–3 average ${startPhase.avgPerRound.toFixed(1)} strokes per round versus target and are below target in ${Math.round(startPhase.badRoundRate*100)}% of rounds.`};
+              startPattern={status:"PROBLEM",headline:"You repeatedly start rounds below handicap target",detail:`Holes 1–3 average ${startPhase.avgPerRound.toFixed(1)} strokes per round versus ${__truePerformance ? "par" : "target"} and are below target in ${Math.round(startPhase.badRoundRate*100)}% of rounds.`};
             }else if(startPhase.avgPerRound>=0.75){
               startPattern={status:"STRENGTH",headline:"You generally start rounds strongly",detail:`Holes 1–3 average +${startPhase.avgPerRound.toFixed(1)} strokes per round versus target.`};
             }
@@ -13124,10 +13140,89 @@ const postRoundIntel = (() => {
     return {
       ok:true,priorRounds:prior.length,coverage,roundDelta,actualTotal,expectedTotal,
       verdict,costly,damageShare,weakness,strength,dna,dnaWhy,biggestLever,recoverable,totalRecoverable,restDelta,restHoles,
-      confidence,oneJob,oneJobWhy,isGrossMode,eventName,isSoloRound,hasNoPriorHistory,usesHandicapTarget,virtualCH,exactHandicap,exactCategories
+      confidence,oneJob,oneJobWhy,isGrossMode,eventName,isSoloRound,hasNoPriorHistory,usesHandicapTarget,truePerformance:__truePerformance,virtualCH,exactHandicap,exactCategories
     };
   } catch(e) {
     console.error("Post-round intelligence failed:",e);
+    return {ok:false};
+  }
+})();
+
+
+// ============================================================
+// TRUE PERFORMANCE — HANDICAP-INDEPENDENT GROSS FORM
+// No HI, CH, Den handicap, Slope or Rating is referenced here.
+// ============================================================
+const truePerformanceIntel = (() => {
+  if(!__truePerformance) return null;
+  try{
+    const rounds=((Array.isArray(__sourcePlayer?.roundSeries)&&__sourcePlayer.roundSeries.length)
+      ? __sourcePlayer.roundSeries
+      : (Array.isArray(__sourcePlayer?.series)?__sourcePlayer.series:[]))
+      .filter(Boolean)
+      .slice()
+      .sort((a,b)=>(Number(a?.dateMs)||Number(a?.idx)||0)-(Number(b?.dateMs)||Number(b?.idx)||0));
+
+    const filtered=__filterSeries(rounds);
+    const arrGross=r=>{
+      const x=r?.grossPerHole||r?.grossHoles||r?.holeGross||r?.scoresPerHole||r?.scores;
+      return Array.isArray(x)?x.slice(0,18).map(Number):[];
+    };
+    const arrParsTG=r=>{
+      const x=r?.parsArr||r?.parsPerHole||r?.parPerHole||r?.pars;
+      return Array.isArray(x)?x.slice(0,18).map(Number):[];
+    };
+    const totalGross=r=>{
+      const direct=[r?.gross,r?.grossTotal,r?.totalGross,r?.strokes].map(Number).find(Number.isFinite);
+      if(Number.isFinite(direct)) return direct;
+      const a=arrGross(r).filter(v=>Number.isFinite(v)&&v>0);
+      return a.length?a.reduce((s,v)=>s+v,0):NaN;
+    };
+    const totalPar=r=>{
+      const direct=[r?.parTotal,r?.coursePar].map(Number).find(Number.isFinite);
+      if(Number.isFinite(direct)) return direct;
+      const a=arrParsTG(r).filter(Number.isFinite);
+      return a.length?a.reduce((s,v)=>s+v,0):NaN;
+    };
+
+    const series=filtered.map((r,i)=>{
+      const gross=totalGross(r), par=totalPar(r);
+      return {round:i+1,gross,par,overPar:(Number.isFinite(gross)&&Number.isFinite(par))?gross-par:NaN,dateMs:Number(r?.dateMs)||NaN};
+    }).filter(x=>Number.isFinite(x.gross));
+
+    if(!series.length) return {ok:false};
+
+    const grossVals=series.map(x=>x.gross);
+    const latest=series[series.length-1];
+    const avg=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:NaN;
+    const sd=a=>{
+      if(a.length<2)return NaN;
+      const m=avg(a); return Math.sqrt(a.reduce((s,v)=>s+(v-m)*(v-m),0)/(a.length-1));
+    };
+    const last3=grossVals.slice(-3);
+    const last5=grossVals.slice(-5);
+    const recentN=Math.min(3,Math.floor(grossVals.length/2)||grossVals.length);
+    const recent=grossVals.slice(-recentN);
+    const previous=grossVals.length>recentN?grossVals.slice(-(recentN*2),-recentN):[];
+    const recentAvg=avg(recent), previousAvg=avg(previous);
+    const improvement=Number.isFinite(previousAvg)?previousAvg-recentAvg:NaN; // positive = lower gross now
+    let trend="Not enough rounds";
+    if(Number.isFinite(improvement)){
+      trend=improvement>=2?"Improving":improvement<=-2?"Worsening":"Broadly stable";
+    }else if(grossVals.length>=2){
+      const d=grossVals[0]-grossVals[grossVals.length-1];
+      trend=d>=2?"Improving":d<=-2?"Worsening":"Broadly stable";
+    }
+
+    return {
+      ok:true,series,latestGross:latest.gross,latestOverPar:latest.overPar,
+      avgGross:avg(grossVals),last3Avg:avg(last3),last5Avg:avg(last5),
+      bestGross:Math.min(...grossVals),worstGross:Math.max(...grossVals),
+      consistency:sd(grossVals),recentAvg,previousAvg,improvement,trend,
+      rounds:grossVals.length
+    };
+  }catch(e){
+    console.error("True Performance engine failed",e);
     return {ok:false};
   }
 })();
@@ -13480,7 +13575,7 @@ const scorecardIntel = (() => {
     .PRbadVerdictK{font-size:9px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8}
     .PRbadVerdictV{font-size:14px;font-weight:950;margin-top:3px}
     .PRbadVerdictS{font-size:10px;color:#cbd5e1;line-height:1.45;margin-top:4px}
-    .PRgamePlan{margin-top:14px;border-radius:20px;padding:15px;background:linear-gradient(135deg,#eff6ff,#f8fafc);border:1px solid #bfdbfe}
+    .PRtrueBanner{margin-top:12px;border-radius:20px;padding:15px 17px;background:linear-gradient(135deg,#064e3b,#047857 58%,#059669);color:#fff;break-inside:avoid;page-break-inside:avoid}.PRtrueK{font-size:9px;font-weight:950;letter-spacing:.14em;text-transform:uppercase;color:#a7f3d0}.PRtrueV{font-size:25px;font-weight:950;letter-spacing:-.03em;margin-top:3px}.PRtrueS{font-size:10px;line-height:1.45;color:#d1fae5;margin-top:4px}.PRtrueGrid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin-top:9px}.PRtrueCard{border:1px solid #a7f3d0;background:#ecfdf5;border-radius:13px;padding:9px;min-width:0}.PRtrueLabel{font-size:7.5px;font-weight:950;text-transform:uppercase;letter-spacing:.07em;color:#047857}.PRtrueValue{font-size:22px;font-weight:950;color:#064e3b;margin-top:2px}.PRtrueValue.small{font-size:13px;line-height:1.15}.PRtrueSub{font-size:7.5px;color:#64748b;line-height:1.25;margin-top:2px}.PRtrueTrend{margin-top:9px;border:1px solid #d1fae5;background:#f0fdf4;border-radius:14px;padding:10px;break-inside:avoid}.PRtrueScores{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}.PRtrueScore{display:flex;align-items:center;gap:4px;border:1px solid #a7f3d0;background:#fff;border-radius:999px;padding:4px 7px;font-size:8px;color:#64748b}.PRtrueScore b{font-size:11px;color:#064e3b}.PRpdfExportRoot .PRtrueGrid{grid-template-columns:repeat(5,minmax(0,1fr))!important}.PRpdfExportRoot .PRtrueBanner,.PRpdfExportRoot .PRtrueTrend,.PRpdfExportRoot .PRtrueCard{break-inside:avoid!important;page-break-inside:avoid!important}.PRgamePlan{margin-top:14px;border-radius:20px;padding:15px;background:linear-gradient(135deg,#eff6ff,#f8fafc);border:1px solid #bfdbfe}
     .PRplanGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
     .PRplanCard{background:#fff;border:1px solid #dbeafe;border-radius:14px;padding:11px}
     .PRplanK{font-size:9px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;color:#1d4ed8}
@@ -13715,7 +13810,29 @@ const scorecardIntel = (() => {
       <div class="PRheroLine">${PR_escapeHtml(String(yearLabel||"All"))} · ${PR_num(rounds,0)} rounds · ${PR_num(holes,0)} holes · ${String(scoringMode)==="gross"?"Gross scoring":"Stableford"}</div>
     </div>
 
-    <div class="PRpartHeader">
+    
+${__truePerformance ? `
+  <div class="PRtrueBanner">
+    <div class="PRtrueK">TRUE PERFORMANCE REPORT</div>
+    <div class="PRtrueV">HANDICAP IGNORED</div>
+    <div class="PRtrueS">Every figure in this report is based on actual gross scoring, gross relative to par, and the player's own gross-score history. Den handicap, WHS Handicap Index and Course Handicap do not affect this report.</div>
+  </div>
+  ${truePerformanceIntel?.ok ? `
+    <div class="PRtrueGrid">
+      <div class="PRtrueCard"><div class="PRtrueLabel">Latest gross</div><div class="PRtrueValue">${Math.round(truePerformanceIntel.latestGross)}</div><div class="PRtrueSub">${Number.isFinite(truePerformanceIntel.latestOverPar)?`${truePerformanceIntel.latestOverPar>=0?"+":""}${truePerformanceIntel.latestOverPar.toFixed(0)} vs par`:"Raw gross score"}</div></div>
+      <div class="PRtrueCard"><div class="PRtrueLabel">3-round average</div><div class="PRtrueValue">${Number.isFinite(truePerformanceIntel.last3Avg)?truePerformanceIntel.last3Avg.toFixed(1):"—"}</div><div class="PRtrueSub">actual gross</div></div>
+      <div class="PRtrueCard"><div class="PRtrueLabel">5-round average</div><div class="PRtrueValue">${Number.isFinite(truePerformanceIntel.last5Avg)?truePerformanceIntel.last5Avg.toFixed(1):"—"}</div><div class="PRtrueSub">actual gross</div></div>
+      <div class="PRtrueCard"><div class="PRtrueLabel">Best gross</div><div class="PRtrueValue">${Math.round(truePerformanceIntel.bestGross)}</div><div class="PRtrueSub">${truePerformanceIntel.rounds} round${truePerformanceIntel.rounds===1?"":"s"} selected</div></div>
+      <div class="PRtrueCard"><div class="PRtrueLabel">True form</div><div class="PRtrueValue small">${PR_escapeHtml(truePerformanceIntel.trend)}</div><div class="PRtrueSub">${Number.isFinite(truePerformanceIntel.improvement)?`${truePerformanceIntel.improvement>=0?"+":""}${truePerformanceIntel.improvement.toFixed(1)} shots vs previous comparable window`:"Gross trend only"}</div></div>
+    </div>
+    <div class="PRtrueTrend">
+      <div class="PRvizTitle" style="font-size:12px;">Actual gross-score trend</div>
+      <div class="PRvizSub">Lower is better. Handicap is not used.</div>
+      <div class="PRtrueScores">${truePerformanceIntel.series.map((r,i)=>`<div class="PRtrueScore"><span>R${i+1}</span><b>${Math.round(r.gross)}</b></div>`).join("")}</div>
+    </div>
+  `:""}
+`:""}
+<div class="PRpartHeader">
       <span class="PRpartTag">Part 1</span>
       <span class="PRpartTitle">Your Latest Round</span>
     </div>
@@ -13767,7 +13884,15 @@ const scorecardIntel = (() => {
                 title:"No clear scoring leak today",
                 detail:"No area of this round finished meaningfully below your playing-to-handicap target."
               };
-        const verdict=d>=2?"Beat handicap target":d>0?"Slightly better than handicap":d<=-3&&eh.damageShare>=.65?"Good golf, damaged by a few holes":d<0?"Below handicap target":"Played to handicap";
+        const verdict=d>=2
+          ? (__truePerformance ? "Strong true gross round" : "Beat handicap target")
+          : d>0
+            ? (__truePerformance ? "Slightly better than par / normal gross pattern" : "Slightly better than handicap")
+            : d<=-3&&eh.damageShare>=.65
+              ? "Good golf, damaged by a few holes"
+              : d<0
+                ? (__truePerformance ? "Above par / below normal gross pattern" : "Below handicap target")
+                : (__truePerformance ? "Matched par / normal gross pattern" : "Played to handicap");
         const costlyHoleCount=Math.min(3,eh.losses.length);
         const costlyHoleLabel=costlyHoleCount===1
           ? "the only costly hole"
@@ -13786,7 +13911,7 @@ const scorecardIntel = (() => {
         <div class="PRquickRead">
           <div class="PRquickHead">
             <div><div class="PRquickEye">Your golf in 30 seconds</div><div class="PRquickTitle">What matters most right now</div></div>
-            <div class="PRquickHint">Positive = better than handicap target</div>
+            <div class="PRquickHint">${__truePerformance ? "Positive = better than par / historical gross pattern" : "Positive = better than handicap target"}</div>
           </div>
           <div class="PRquickGrid">
             <div class="PRquickCard"><div class="PRquickK">Latest round</div><div class="PRquickV ${latestTone}">${PR_escapeHtml(latestSummary)}</div><div class="PRquickS">${ehIsPoints?`Stableford ${eh.actual} pts vs 36-point pace`:`Gross ${eh.actual} vs target ${eh.target}`}</div></div>
@@ -14034,7 +14159,7 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length >= 1) ? `
 
         return `<svg class="PRchartSvg" viewBox="0 0 ${W} ${H}">
           <line x1="${L}" y1="${z}" x2="${W-R}" y2="${z}" stroke="#64748b" stroke-width="1.5" stroke-dasharray="5 4"/>
-          <text x="${L}" y="${Math.max(11,z-6)}" font-size="8.5" fill="#64748b">HANDICAP TARGET</text>
+          <text x="${L}" y="${Math.max(11,z-6)}" font-size="8.5" fill="#64748b">${__truePerformance ? "PAR" : "HANDICAP TARGET"}</text>
           <polyline points="${pts}" fill="none" stroke="#0f2747" stroke-width="3.5" stroke-linejoin="round"/>
           ${vals.length>1?`<line x1="${x(0)}" y1="${y(trendStart)}" x2="${x(vals.length-1)}" y2="${y(trendEnd)}" stroke="${slope>=0?"#16a34a":"#dc2626"}" stroke-width="2.5" stroke-dasharray="7 5"/>`:""}
           ${rs.map((r,i)=>{
@@ -14662,7 +14787,7 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
         <div class="PRintelLabel">Where the round was lost</div>
         ${(postRoundIntel?.exactHandicap?.ok && postRoundIntel.exactHandicap.losses.length) ? `
           <div style="font-weight:900;margin-top:4px;">
-            The three costliest holes produced ${(postRoundIntel.exactHandicap.damageShare*100).toFixed(0)}% of all strokes lost to handicap target.
+            The three costliest holes produced ${(postRoundIntel.exactHandicap.damageShare*100).toFixed(0)}% of all strokes lost to ${__truePerformance ? "par" : "handicap target"}.
           </div>
           <div style="margin-top:5px;line-height:1.6;">
             ${postRoundIntel.exactHandicap.losses.slice(0,3).map(h=>`
