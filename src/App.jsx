@@ -16387,29 +16387,71 @@ function WP_playerHistorySignals(p,courseKey){
   const exactPts=Array.from({length:18},()=>[]), exactGross=Array.from({length:18},()=>[]);
   const parPts=new Map(), siPts=new Map(), parGrossRel=new Map(), siGrossRel=new Map(), yardPts=new Map();
   const recentPts=[];
+
+  // Recency-weighted evidence. Newest round matters most, but never replaces
+  // the long-term baseline. Exact-course recent evidence gets an extra boost.
+  const recentExactGrossW=Array.from({length:18},()=>[]);
+  const recentExactPtsW=Array.from({length:18},()=>[]);
+  const recentParGrossW=new Map(), recentSiGrossW=new Map(), recentParPtsW=new Map();
+  const recentRoundGrossW=[], recentCourseGrossW=[];
+
   const add=(m,k,v)=>{ if(!Number.isFinite(v)||k==null)return; if(!m.has(k))m.set(k,[]); m.get(k).push(v); };
+  const addW=(m,k,v,w)=>{ if(!Number.isFinite(v)||!Number.isFinite(w)||w<=0||k==null)return; if(!m.has(k))m.set(k,[]); m.get(k).push({v,w}); };
+  const avgW=a=>{
+    const xs=(a||[]).filter(x=>Number.isFinite(Number(x?.v))&&Number.isFinite(Number(x?.w))&&Number(x.w)>0);
+    const sw=xs.reduce((s,x)=>s+Number(x.w),0);
+    return sw?xs.reduce((s,x)=>s+Number(x.v)*Number(x.w),0)/sw:NaN;
+  };
   const yardBand=y=>!Number.isFinite(y)?null:(y<150?'<150':y<=200?'150-200':y<=300?'201-300':y<=350?'301-350':y<=420?'351-420':'421+');
   const rounds=WP_series(p);
+  const N=rounds.length;
+
   rounds.forEach((r,ri)=>{
     const pts=WP_holePts(r), gross=WP_gross(r), ps=WP_pars(r), sis=WP_si(r), ys=WP_yards(r);
+    const same=WP_courseMatchKey(WP_course(r))===WP_courseMatchKey(courseKey);
+    const age=Math.max(0,N-1-ri); // 0 = newest
+    const recencyW=age===0?1.00:age===1?.82:age===2?.68:age===3?.55:age===4?.45:age===5?.35:age<=8?.22:.10;
+    const exactBoost=same?1.40:1.00;
+    const w=recencyW*exactBoost;
+
+    let roundGross=0, roundGrossN=0;
     for(let i=0;i<18;i++){
       const pt=Number(pts[i]), g=Number(gross[i]), par=Number(ps[i]), si=Number(sis[i]), y=Number(ys[i]);
-      const same=WP_courseMatchKey(WP_course(r))===WP_courseMatchKey(courseKey);
       if(Number.isFinite(pt)){
-        if(same) exactPts[i].push(pt);
+        if(same){
+          exactPts[i].push(pt);
+          recentExactPtsW[i].push({v:pt,w});
+        }
         add(parPts,Number.isFinite(par)?par:null,pt);
         add(siPts,Number.isFinite(si)?si:null,pt);
         add(yardPts,yardBand(y),pt);
         if(ri>=Math.max(0,rounds.length-5)) recentPts.push(pt);
+        addW(recentParPtsW,Number.isFinite(par)?par:null,pt,w);
       }
       if(Number.isFinite(g)&&Number.isFinite(par)){
         const rel=g-par;
-        if(same) exactGross[i].push(rel);
+        roundGross+=g; roundGrossN++;
+        if(same){
+          exactGross[i].push(rel);
+          recentExactGrossW[i].push({v:rel,w});
+        }
         add(parGrossRel,par,rel);
         add(siGrossRel,Number.isFinite(si)?si:null,rel);
+        addW(recentParGrossW,par,rel,w);
+        addW(recentSiGrossW,Number.isFinite(si)?si:null,rel,w);
       }
     }
+    if(roundGrossN>=9){
+      const rw={v:roundGross*(18/roundGrossN),w:recencyW};
+      recentRoundGrossW.push(rw);
+      if(same) recentCourseGrossW.push({v:rw.v,w:recencyW*1.5});
+    }
   });
+
+  const latestRound=rounds.length?rounds[rounds.length-1]:null;
+  const latestGrossArr=latestRound?WP_gross(latestRound).map(Number).filter(Number.isFinite):[];
+  const latestGross=latestGrossArr.length>=9?latestGrossArr.reduce((s,v)=>s+v,0)*(18/latestGrossArr.length):NaN;
+
   return {
     exactPts,exactGross,
     parPts:new Map(Array.from(parPts.entries()).map(([k,v])=>[k,WP_avg(v)])),
@@ -16418,12 +16460,23 @@ function WP_playerHistorySignals(p,courseKey){
     parGrossRel:new Map(Array.from(parGrossRel.entries()).map(([k,v])=>[k,WP_avg(v)])),
     siGrossRel:new Map(Array.from(siGrossRel.entries()).map(([k,v])=>[k,WP_avg(v)])),
     recentPts:WP_avg(recentPts),
+    recentExactGross:new Array(18).fill(null).map((_,i)=>avgW(recentExactGrossW[i])),
+    recentExactPts:new Array(18).fill(null).map((_,i)=>avgW(recentExactPtsW[i])),
+    recentParGrossRel:new Map(Array.from(recentParGrossW.entries()).map(([k,v])=>[k,avgW(v)])),
+    recentSiGrossRel:new Map(Array.from(recentSiGrossW.entries()).map(([k,v])=>[k,avgW(v)])),
+    recentParPts:new Map(Array.from(recentParPtsW.entries()).map(([k,v])=>[k,avgW(v)])),
+    currentFormGross:avgW(recentRoundGrossW),
+    currentCourseFormGross:avgW(recentCourseGrossW),
+    latestGross,
+    roundsCount:N,
     yardBand
   };
 }
 function WP_expectedHoleProfile(sig,hole,par,si,yard,strokes){
   const hp=WP_avg(sig.exactPts[hole-1]);
   const sp=Number(sig.siPts.get(si)), pp=Number(sig.parPts.get(par)), yp=Number(sig.yardPts.get(sig.yardBand(yard))), rp=Number(sig.recentPts);
+
+  // Long-term Stableford baseline.
   const ptsParts=[];
   if(Number.isFinite(hp))ptsParts.push([hp,5]);
   if(Number.isFinite(sp))ptsParts.push([sp,2.2]);
@@ -16431,9 +16484,20 @@ function WP_expectedHoleProfile(sig,hole,par,si,yard,strokes){
   if(Number.isFinite(yp))ptsParts.push([yp,1]);
   if(Number.isFinite(rp))ptsParts.push([rp,.8]);
   const sw=ptsParts.reduce((s,x)=>s+x[1],0);
-  let expectedPts=sw?ptsParts.reduce((s,x)=>s+x[0]*x[1],0)/sw:2;
-  expectedPts=Math.max(.2,Math.min(4.2,expectedPts));
+  let longTermExpectedPts=sw?ptsParts.reduce((s,x)=>s+x[0]*x[1],0)/sw:2;
+  longTermExpectedPts=Math.max(.2,Math.min(4.2,longTermExpectedPts));
 
+  // Current-form Stableford overlay: recent exact course/hole is strongest.
+  const rxp=Number(sig.recentExactPts?.[hole-1]);
+  const rpp=Number(sig.recentParPts?.get(par));
+  const formPtsParts=[[longTermExpectedPts,5.5]];
+  if(Number.isFinite(rxp))formPtsParts.push([rxp,4.2]);
+  if(Number.isFinite(rpp))formPtsParts.push([rpp,1.8]);
+  const fpsw=formPtsParts.reduce((s,x)=>s+x[1],0);
+  let expectedPts=formPtsParts.reduce((s,x)=>s+x[0]*x[1],0)/fpsw;
+  expectedPts=Math.max(.2,Math.min(4.4,expectedPts));
+
+  // Long-term gross baseline.
   const exactRel=WP_avg(sig.exactGross[hole-1]);
   const siRel=Number(sig.siGrossRel.get(si)), parRel=Number(sig.parGrossRel.get(par));
   const grossParts=[];
@@ -16441,18 +16505,37 @@ function WP_expectedHoleProfile(sig,hole,par,si,yard,strokes){
   if(Number.isFinite(siRel))grossParts.push([siRel,2.2]);
   if(Number.isFinite(parRel))grossParts.push([parRel,2]);
   const gsw=grossParts.reduce((s,x)=>s+x[1],0);
-  let expectedGross=gsw?par+grossParts.reduce((s,x)=>s+x[0]*x[1],0)/gsw:(par+strokes);
-  if(!Number.isFinite(expectedGross)) expectedGross=par+strokes;
+  let longTermExpectedGross=gsw?par+grossParts.reduce((s,x)=>s+x[0]*x[1],0)/gsw:(par+strokes);
+  if(!Number.isFinite(longTermExpectedGross)) longTermExpectedGross=par+strokes;
 
-  // Evidence pack used by the visual report.  This deliberately shows the golfer
-  // the strongest reasons behind the recommendation rather than presenting the
-  // optimiser as a black box.
+  // Current-form gross overlay. This is deliberately strong enough that a very
+  // recent 79 at the same course materially affects tomorrow's prediction, but
+  // still leaves the long-term model as the largest single anchor.
+  const recentExactRel=Number(sig.recentExactGross?.[hole-1]);
+  const recentParRel=Number(sig.recentParGrossRel?.get(par));
+  const recentSiRel=Number(sig.recentSiGrossRel?.get(si));
+  const formGrossParts=[[longTermExpectedGross,5.5]];
+  if(Number.isFinite(recentExactRel))formGrossParts.push([par+recentExactRel,4.5]);
+  if(Number.isFinite(recentParRel))formGrossParts.push([par+recentParRel,2.0]);
+  if(Number.isFinite(recentSiRel))formGrossParts.push([par+recentSiRel,1.4]);
+  const fgsw=formGrossParts.reduce((s,x)=>s+x[1],0);
+  let expectedGross=formGrossParts.reduce((s,x)=>s+x[0]*x[1],0)/fgsw;
+  if(!Number.isFinite(expectedGross)) expectedGross=longTermExpectedGross;
+
+  // Cap a one-turn form shift so one freak round cannot rewrite ability.
+  expectedGross=Math.max(longTermExpectedGross-.65,Math.min(longTermExpectedGross+.65,expectedGross));
+  expectedPts=Math.max(longTermExpectedPts-.55,Math.min(longTermExpectedPts+.55,expectedPts));
+
+  const currentFormDeltaGross=expectedGross-longTermExpectedGross;
+  const currentFormDeltaPts=expectedPts-longTermExpectedPts;
+
+  // Evidence pack used by the report.
   const evidence=[];
   if(Number.isFinite(hp)) evidence.push({label:'Exact hole',value:`${hp.toFixed(1)} pts avg`,weight:5,n:sig.exactPts[hole-1].length});
+  if(Number.isFinite(rxp)) evidence.push({label:'Recent exact-hole form',value:`${rxp.toFixed(1)} pts`,weight:4.2});
   if(Number.isFinite(sp)) evidence.push({label:`SI ${si}`,value:`${sp.toFixed(1)} pts avg`,weight:2.2});
   if(Number.isFinite(pp)) evidence.push({label:`Par ${par}`,value:`${pp.toFixed(1)} pts avg`,weight:2});
   if(Number.isFinite(yp)) evidence.push({label:`${sig.yardBand(yard)} yds`,value:`${yp.toFixed(1)} pts avg`,weight:1});
-  if(Number.isFinite(rp)) evidence.push({label:'Recent form',value:`${rp.toFixed(1)} pts/hole`,weight:.8});
   evidence.sort((a,b)=>b.weight-a.weight);
   const evidenceWeight=evidence.reduce((sum,e)=>sum+Number(e.weight||0),0);
   const evidenceScore=Math.max(25,Math.min(100,Math.round(32+evidenceWeight*8)));
@@ -16461,9 +16544,12 @@ function WP_expectedHoleProfile(sig,hole,par,si,yard,strokes){
   const exactGrossValues=(sig.exactGross[hole-1]||[]).map(Number).filter(Number.isFinite);
   return {
     expectedPts,expectedGross,
+    longTermExpectedPts,longTermExpectedGross,
+    currentFormDeltaGross,currentFormDeltaPts,
     exactPtsN:exactPtsValues.length,exactGrossN:exactGrossValues.length,
     exactPtsValues,exactGrossValues,
     evidence,evidenceScore,holePtsAvg:hp,siPtsAvg:sp,parPtsAvg:pp,yardPtsAvg:yp,recentPtsAvg:rp,
+    recentExactGrossRel:recentExactRel,recentParGrossRel:recentParRel,recentSiGrossRel:recentSiRel,
     exactGrossRel:exactRel,siGrossRel:siRel,parGrossRel:parRel
   };
 }
@@ -16656,6 +16742,15 @@ function WP_shiftPmf(pmf,delta,{minIndex=0,maxIndex=null}={}){
 function WP_baselineHoleClone(h){
   return {...h,weatherActive:false,weatherStrokeDelta:0,weather:null};
 }
+function WP_longTermHoleClone(h){
+  return {
+    ...h,
+    expectedGross:Number.isFinite(Number(h?.longTermExpectedGross))?Number(h.longTermExpectedGross):Number(h.expectedGross),
+    expectedPts:Number.isFinite(Number(h?.longTermExpectedPts))?Number(h.longTermExpectedPts):Number(h.expectedPts),
+    currentFormDeltaGross:0,currentFormDeltaPts:0,
+    weatherActive:false,weatherStrokeDelta:0,weather:null
+  };
+}
 function WP_stablefordPmf(h){
   if(h?.played && Number.isFinite(Number(h.actualPts))){
     const pmf=Array(7).fill(0); pmf[Math.max(0,Math.min(6,Math.round(Number(h.actualPts))))]=1; return pmf;
@@ -16672,7 +16767,10 @@ function WP_stablefordPmf(h){
   vals.forEach(v=>counts[v]+=1);
   prior.forEach(([x,p])=>counts[x]+=p*priorStrength);
   const total=counts.reduce((s,v)=>s+v,0)||1;
-  const baseline=counts.map(v=>v/total);
+  let baseline=counts.map(v=>v/total);
+  if(Number.isFinite(Number(h?.currentFormDeltaPts))&&Math.abs(Number(h.currentFormDeltaPts))>.001){
+    baseline=WP_shiftPmf(baseline,Number(h.currentFormDeltaPts),{minIndex:0,maxIndex:6});
+  }
   if(h?.weatherActive && Number.isFinite(Number(h?.weatherStrokeDelta)) && Math.abs(Number(h.weatherStrokeDelta))>.001){
     // Roughly one Stableford point per stroke around the scoring range.
     return WP_shiftPmf(baseline,-Number(h.weatherStrokeDelta)*0.90,{minIndex:0,maxIndex:6});
@@ -16698,7 +16796,12 @@ function WP_grossPmf(h){
   vals.forEach(v=>{ if(v<=max) counts[v]+=1; });
   prior.forEach(([x,p])=>counts[x]+=p*priorStrength);
   const total=counts.reduce((s,v)=>s+v,0)||1;
-  const baseline=counts.map(v=>v/total);
+  let baseline=counts.map(v=>v/total);
+  if(Number.isFinite(Number(h?.currentFormDeltaGross))&&Math.abs(Number(h.currentFormDeltaGross))>.001){
+    const pad=Math.ceil(Math.max(0,Number(h.currentFormDeltaGross)))+2;
+    const padded=[...baseline,...Array(pad).fill(0)];
+    baseline=WP_shiftPmf(padded,Number(h.currentFormDeltaGross),{minIndex:1,maxIndex:padded.length-1});
+  }
   if(h?.weatherActive && Number.isFinite(Number(h?.weatherStrokeDelta)) && Math.abs(Number(h.weatherStrokeDelta))>.001){
     const extra=Math.ceil(Math.max(0,Number(h.weatherStrokeDelta)))+2;
     const padded=[...baseline,...Array(extra).fill(0)];
@@ -16761,6 +16864,11 @@ function WP_probabilitySummary(plan){
   if(!plan||!Array.isArray(plan.holes)||!plan.holes.length) return {};
   const isGross=plan.mode==='gross';
   const weatherActive=plan.holes.some(h=>h?.weatherActive);
+  const longTermPmfs=plan.holes.map(h=>{
+    const b=WP_longTermHoleClone(h);
+    return isGross?WP_grossPmf(b):WP_stablefordPmf(b);
+  });
+  const longTermDist=WP_convolvePmfs(longTermPmfs);
   const baselinePmfs=plan.holes.map(h=>{
     const b=WP_baselineHoleClone(h);
     return isGross?WP_grossPmf(b):WP_stablefordPmf(b);
@@ -16771,6 +16879,7 @@ function WP_probabilitySummary(plan){
   const target=Math.round(Number(plan.targetRequested ?? (isGross?plan.totalGross:plan.pointsTotal))||0);
   const targetProb=isGross?WP_probAtMost(dist,target):WP_probAtLeast(dist,target);
   const baselineTargetProb=isGross?WP_probAtMost(baselineDist,target):WP_probAtLeast(baselineDist,target);
+  const longTermTargetProb=isGross?WP_probAtMost(longTermDist,target):WP_probAtLeast(longTermDist,target);
   let mode=0,best=-1;
   dist.forEach((v,i)=>{ if(v>best){best=v;mode=i;} });
   const q25=WP_distQuantile(dist,.25), q50=WP_distQuantile(dist,.50), q75=WP_distQuantile(dist,.75);
@@ -16792,8 +16901,11 @@ function WP_probabilitySummary(plan){
     targetProbability:targetProb,
     targetProbabilityText:WP_probPctText(targetProb),
     weatherProbabilityActive:weatherActive,
+    longTermTargetProbability:longTermTargetProb,
+    longTermTargetProbabilityText:WP_probPctText(longTermTargetProb),
     baselineTargetProbability:baselineTargetProb,
     baselineTargetProbabilityText:WP_probPctText(baselineTargetProb),
+    currentFormProbabilityDelta:baselineTargetProb-longTermTargetProb,
     weatherProbabilityDelta:weatherActive?(targetProb-baselineTargetProb):0,
     probabilityLabel:riskLabel,
     probabilityTone:riskTone,
@@ -16835,6 +16947,8 @@ function WP_enrichPlanVisuals(plan){
   if(!plan || !Array.isArray(plan.holes) || !plan.holes.length) return plan;
   const holes=plan.holes;
   const isGross=plan.mode==='gross';
+  const longTermTypicalPts=holes.reduce((sum,h)=>sum+(Number.isFinite(Number(h.longTermExpectedPts))?Number(h.longTermExpectedPts):(Number.isFinite(Number(h.expectedPts))?Number(h.expectedPts):2)),0);
+  const longTermTypicalGross=holes.reduce((sum,h)=>sum+(Number.isFinite(Number(h.longTermExpectedGross))?Number(h.longTermExpectedGross):(Number.isFinite(Number(h.expectedGross))?Number(h.expectedGross):(Number(h.par)||0)+(Number(h.strokes)||0))),0);
   const baselineTypicalPts=holes.reduce((sum,h)=>sum+(Number.isFinite(Number(h.expectedPts))?Number(h.expectedPts):2),0);
   const baselineTypicalGross=holes.reduce((sum,h)=>sum+(Number.isFinite(Number(h.expectedGross))?Number(h.expectedGross):(Number(h.par)||0)+(Number(h.strokes)||0)),0);
   const weatherActive=holes.some(h=>h?.weatherActive);
@@ -16877,6 +16991,8 @@ function WP_enrichPlanVisuals(plan){
   const onPlanBogeys=holes.filter(h=>Number(h.targetGross)-Number(h.par)===1).map(h=>h.hole);
   const onPlanDoubles=holes.filter(h=>Number(h.targetGross)-Number(h.par)>=2).map(h=>h.hole);
 
+  plan.longTermTypicalPts=longTermTypicalPts;
+  plan.longTermTypicalGross=longTermTypicalGross;
   plan.baselineTypicalPts=baselineTypicalPts;
   plan.baselineTypicalGross=baselineTypicalGross;
   plan.typicalPts=typicalPts;
@@ -16913,6 +17029,13 @@ function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
     holes.push({hole:i+1,par,si,yard,strokes,...prof});
   }
   if(holes.length<9) return null;
+
+  const formSummary={
+    latestGross:Number(sig.latestGross),
+    currentFormGross:Number(sig.currentFormGross),
+    currentCourseFormGross:Number(sig.currentCourseFormGross),
+    roundsCount:Number(sig.roundsCount)||0
+  };
 
   // Apply today's weather as a temporary layer before optimisation.
   // Historical expectedGross/expectedPts remain intact for audit/reporting.
@@ -17009,7 +17132,7 @@ function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
       .sort((a,b)=>Number(b.upsideScore)-Number(a.upsideScore));
     const fragileRebalanced=holes.filter(h=>h.weatherFragilityRebalanced);
     const dangers=holes.slice().sort((a,b)=>a.opp-b.opp).slice(0,3);
-    return WP_enrichPlanVisuals({player:p,layout,holes,mode,total:totalGross,totalGross,pointsTotal,attacks,primaryAttacks,stretchGains,upsideOnly,fragileRebalanced,dangers,front:frontGross,back:backGross,frontPts,backPts,targetRequested:target});
+    return WP_enrichPlanVisuals({player:p,layout,holes,mode,total:totalGross,totalGross,pointsTotal,attacks,primaryAttacks,stretchGains,upsideOnly,fragileRebalanced,dangers,front:frontGross,back:backGross,frontPts,backPts,targetRequested:target,formSummary});
   }
 
   const desired=Math.max(0,Math.min(72,Math.round(Number(options?.target ?? event?.targetPoints)||37)));
@@ -17839,21 +17962,26 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
         ? `<div><div class="WPsmall">Gross target</div><b>${plan.totalGross} strokes</b><div style="font-size:10px;opacity:.75;margin-top:3px">Projected ${plan.pointsTotal} Stableford pts</div></div><div><div class="WPsmall">Front 9</div><b>${plan.front} gross</b></div><div><div class="WPsmall">Back 9</div><b>${plan.back} gross</b></div>`
         : `<div><div class="WPsmall">Stableford target</div><b>${plan.pointsTotal} points</b><div style="font-size:10px;opacity:.75;margin-top:3px">Projected gross ${plan.totalGross}</div></div><div><div class="WPsmall">Front 9</div><b>${plan.front} pts</b></div><div><div class="WPsmall">Back 9</div><b>${plan.back} pts</b></div>`;
 
-      const normalLabel=isGross?`${Math.round(plan.typicalGross)} gross`:`${plan.typicalPts.toFixed(1)} pts`;
+      const longTermLabel=isGross?`${Math.round(plan.longTermTypicalGross||plan.baselineTypicalGross||plan.typicalGross)} gross`:`${Number(plan.longTermTypicalPts||plan.baselineTypicalPts||plan.typicalPts).toFixed(1)} pts`;
+      const currentFormLabel=isGross?`${Math.round(plan.baselineTypicalGross||plan.typicalGross)} gross`:`${Number(plan.baselineTypicalPts||plan.typicalPts).toFixed(1)} pts`;
+      const todayLabel=isGross?`${Math.round(plan.typicalGross)} gross`:`${Number(plan.typicalPts).toFixed(1)} pts`;
       const improvementLabel=isGross
         ? `${Math.max(0,plan.improvementRequired).toFixed(1)} strokes`
         : `+${Math.max(0,plan.improvementRequired).toFixed(1)} pts`;
-      const routeSummary=`<div class="WProuteSummary"><div class="WPsum hero"><div class="WPk">Your mission</div><div class="WPsumV">${targetTop}</div><div style="font-size:9px;opacity:.72;margin-top:4px">Normal profile: ${normalLabel}</div></div><div class="WPsum"><div class="WPk">Improvement needed</div><div class="WPsumV">${improvementLabel}</div></div><div class="WPsum"><div class="WPk">Attack / upside</div><div class="WPsumV">${(plan.strategyCounts?.ATTACK||0)+(plan.strategyCounts?.OPPORTUNITY||0)}</div><div style="font-size:8px;color:#64748b">${plan.strategyCounts?.OPPORTUNITY||0} opportunity holes</div></div><div class="WPsum"><div class="WPk">Protect</div><div class="WPsumV">${plan.strategyCounts?.PROTECT||0}</div><div style="font-size:8px;color:#64748b">holes · damage ${(plan.strategyCounts?.ACCEPT||0)+(plan.strategyCounts?.RESET||0)}</div></div><div class="WPsum WPfit ${plan.routeFitTone||'mid'}"><div class="WPk">Route fit</div><div class="WPsumV">${plan.routeFitScore}/100</div><div style="font-size:8px;font-weight:900;margin-top:3px">${WP_escape(plan.routeFitLabel||'')}</div></div></div>`;
+      const routeSummary=`<div class="WProuteSummary"><div class="WPsum hero"><div class="WPk">Your mission</div><div class="WPsumV">${targetTop}</div><div style="font-size:8px;opacity:.76;margin-top:4px">Long-term ${longTermLabel} · Current form ${currentFormLabel}${plan.weatherActive?` · Today ${todayLabel}`:''}</div></div><div class="WPsum"><div class="WPk">Improvement needed</div><div class="WPsumV">${improvementLabel}</div></div><div class="WPsum"><div class="WPk">Attack / upside</div><div class="WPsumV">${(plan.strategyCounts?.ATTACK||0)+(plan.strategyCounts?.OPPORTUNITY||0)}</div><div style="font-size:8px;color:#64748b">${plan.strategyCounts?.OPPORTUNITY||0} opportunity holes</div></div><div class="WPsum"><div class="WPk">Protect</div><div class="WPsumV">${plan.strategyCounts?.PROTECT||0}</div><div style="font-size:8px;color:#64748b">holes · damage ${(plan.strategyCounts?.ACCEPT||0)+(plan.strategyCounts?.RESET||0)}</div></div><div class="WPsum WPfit ${plan.routeFitTone||'mid'}"><div class="WPk">Route fit</div><div class="WPsumV">${plan.routeFitScore}/100</div><div style="font-size:8px;font-weight:900;margin-top:3px">${WP_escape(plan.routeFitLabel||'')}</div></div></div>`;
       const weatherProbDelta=Number(plan.weatherProbabilityDelta);
+      const formProbText=`${plan.longTermTargetProbabilityText||'—'} long-term → ${plan.baselineTargetProbabilityText||'—'} current form`;
       const weatherProbText=plan.weatherProbabilityActive
-        ? `${plan.baselineTargetProbabilityText} normal → ${plan.targetProbabilityText} today`
+        ? `${plan.baselineTargetProbabilityText} current form → ${plan.targetProbabilityText} today`
         : '';
       const weatherDifficulty=Number(plan.weatherStrokeTotal)||0;
       const weatherDifficultyText=plan.weatherActive
         ? `${weatherDifficulty>=0?'+':''}${weatherDifficulty.toFixed(1)} modelled strokes vs normal`
         : '';
-      const probabilityPanel=`<div class="WPprob"><div class="WPprobTop"><div class="WPprobMain ${plan.probabilityTone||'mid'}"><div class="WPk" style="color:rgba(255,255,255,.72)">MODELLED TARGET CHANCE</div><div class="WPprobPct">${WP_escape(plan.targetProbabilityText||'—')}</div><div style="font-size:10px;font-weight:950;margin-top:4px">${WP_escape(plan.probabilityLabel||'')}</div></div><div class="WPprobBox"><div class="WPk">Most likely outcome</div><div class="WPsumV">${Math.round(plan.mostLikelyTotal||0)} ${isGross?'gross':'pts'}</div><div style="font-size:8px;color:#64748b;margin-top:3px">Middle 50%: ${Math.round(plan.probabilityQ25||0)}–${Math.round(plan.probabilityQ75||0)}</div></div><div class="WPprobBox"><div class="WPk">Data confidence</div><div class="WPsumV" style="font-size:18px">${WP_escape(plan.probabilityDataConfidence||'—')}</div><div style="font-size:8px;color:#64748b;margin-top:3px">${Number(plan.probabilityAvgExactRounds||0).toFixed(1)} exact-course rounds/hole avg</div></div></div><div class="WPprobLadder">${(plan.probabilityLadder||[]).map(x=>`<div class="WPprobStep"><span class="WPk">${Math.round(x.target)} ${isGross?'gross':'pts'}</span><b>${WP_probPctText(x.prob)}</b></div>`).join('')}</div><div class="WPprobNote">This is a modelled estimate from your historical scoring distribution, with small exact-hole samples shrunk toward your wider Par / SI / yardage profile. It is not a guarantee. Route Fit remains a separate measure of how closely the requested route resembles your normal scoring.${plan.weatherProbabilityActive?` <b>Weather-adjusted:</b> ${weatherProbText} · ${weatherDifficultyText}.`:''}</div></div>`;
+      const probabilityPanel=`<div class="WPprob"><div class="WPprobTop"><div class="WPprobMain ${plan.probabilityTone||'mid'}"><div class="WPk" style="color:rgba(255,255,255,.72)">MODELLED TARGET CHANCE</div><div class="WPprobPct">${WP_escape(plan.targetProbabilityText||'—')}</div><div style="font-size:10px;font-weight:950;margin-top:4px">${WP_escape(plan.probabilityLabel||'')}</div></div><div class="WPprobBox"><div class="WPk">Most likely outcome</div><div class="WPsumV">${Math.round(plan.mostLikelyTotal||0)} ${isGross?'gross':'pts'}</div><div style="font-size:8px;color:#64748b;margin-top:3px">Middle 50%: ${Math.round(plan.probabilityQ25||0)}–${Math.round(plan.probabilityQ75||0)}</div></div><div class="WPprobBox"><div class="WPk">Data confidence</div><div class="WPsumV" style="font-size:18px">${WP_escape(plan.probabilityDataConfidence||'—')}</div><div style="font-size:8px;color:#64748b;margin-top:3px">${Number(plan.probabilityAvgExactRounds||0).toFixed(1)} exact-course rounds/hole avg</div></div></div><div class="WPprobLadder">${(plan.probabilityLadder||[]).map(x=>`<div class="WPprobStep"><span class="WPk">${Math.round(x.target)} ${isGross?'gross':'pts'}</span><b>${WP_probPctText(x.prob)}</b></div>`).join('')}</div><div class="WPprobNote">This estimate now separates long-term ability from current form. Recent rounds are weighted most strongly, with extra weight for recent rounds on this exact course, while older rounds remain the stabilising baseline. <b>Form effect:</b> ${formProbText}.${Number.isFinite(Number(plan.formSummary?.latestGross))?` Latest round: ${Math.round(plan.formSummary.latestGross)} gross.`:''}${plan.weatherProbabilityActive?` <b>Weather-adjusted:</b> ${weatherProbText} · ${weatherDifficultyText}.`:''} It is still a probability estimate, not a guarantee.</div></div>`;
 
+
+      const formPanel=`<div class="WPgainSummary"><div class="WPgainSummaryTitle">Form calibration</div><div class="WPgainSummarySub">Older rounds anchor ability; recent rounds move the prediction faster. Exact-course recent rounds receive extra weight.</div><div class="WPgainAuditRows"><div class="WPgainAuditRow"><div class="WPgainAuditK">Long-term profile</div><div class="WPgainAuditV">${longTermLabel}</div></div><div class="WPgainAuditRow gain"><div class="WPgainAuditK">Current form</div><div class="WPgainAuditV">${currentFormLabel}</div>${Number.isFinite(Number(plan.formSummary?.latestGross))?`<div class="WPgainAuditHint">Latest round ${Math.round(plan.formSummary.latestGross)} gross</div>`:''}</div>${plan.weatherActive?`<div class="WPgainAuditRow"><div class="WPgainAuditK">Today's conditions</div><div class="WPgainAuditV">${todayLabel}</div><div class="WPgainAuditHint">${weatherDifficultyText}</div></div>`:''}<div class="WPgainAuditRow"><div class="WPgainAuditK">Target chance</div><div class="WPgainAuditV">${plan.longTermTargetProbabilityText||'—'} → ${plan.baselineTargetProbabilityText||'—'}${plan.weatherActive?` → ${plan.targetProbabilityText||'—'}`:''}</div><div class="WPgainAuditHint">Long-term → current form${plan.weatherActive?' → today':''}</div></div></div></div>`;
 
       const routeStrip=`<div class="WProuteStrip">${plan.holes.map(h=>{const op=Number(h.targetGross)-Number(h.par);const cue=String(h.planCue||'');const genuineBogey=(cue==='SMART_BOGEY'||cue==='BOGEY_ON_PLAN'||cue==='DAMAGE_CONTROL')&&op>=1;const cls=`${String(h.strategy||'protect').toLowerCase()} ${genuineBogey?'bogey':''}`;return `<div class="WPrCell ${cls}"><div class="WPrH">H${h.hole} · P${h.par}</div><div class="WPrGross">${h.targetGross}</div><div class="WPrPts">${h.targetPts} pt${h.targetPts===1?'':'s'}${cue==='OPPORTUNITY'?` · +1 available`:''}</div></div>`;}).join('')}</div>`;
 
@@ -17890,7 +18018,7 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
       ? `Temporary fixed handicap ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'} · Playing Handicap ${l.ch}`
       : `Temporary HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'} → Course Handicap ${l.ch}`)
   : `Den Handicap ${Number.isFinite(l.denHandicap)?Number(l.denHandicap).toFixed(1):'—'} · Playing Handicap ${l.ch}`}
-  ${l.teeName?'· '+WP_escape(l.teeName):''}</div></div><div style="text-align:right"><div class="WPk">TARGET</div><div class="WPtarget">${targetTop}</div></div></div>${hcapAudit}<div class="WPribbon">${ribbon}</div>${routeSummary}${probabilityPanel}<div class="WPsection"><div class="WPsectionTitle">Route at a glance</div><div class="WPprintNote">The BIG number is the score that keeps your route on pace. Green cells are attack or proven opportunity holes; neutral cells are protect holes; the subtle red underline is used only where your history says accepting bogey or worse is genuinely sensible.</div>${routeStrip}</div><div class="WPsection"><div class="WPsectionTitle">Your checkpoints</div><div class="WPprintNote">Use these as live pace markers. You only need to know whether you are ahead of, on, or behind the planned cumulative total.</div>${checkpoints}</div><div class="WPsection"><div class="WPsectionTitle">Why these holes?</div><div class="WPprintNote">The full 2+/3+ audit still drives the optimiser, but the live report only shows the gain holes you actually need to think about.</div>${gainSummary}${upsidePanel}</div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route</div><div class="WPprintNote">Use the BIG gross number live on the course. PRIMARY ATTACK = proven gain. STRETCH GAIN = target needs it, but don't force it. OPPORTUNITY = bonus point available. PROTECT = bank the planned score.</div><div class="WPholes">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Round strategy</div><div class="WPrules" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="WPrule"><div class="WPk">1 · FOLLOW THE GROSS NUMBER</div><strong>That is the score to make on each hole.</strong></div><div class="WPrule"><div class="WPk">2 · PRIMARY ATTACKS</div><strong class="WPattack">${WP_escape(primaryAttackText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Only holes where the route actually requires an above-baseline gain. Upside-only holes are shown separately.</div></div><div class="WPrule"><div class="WPk">3 · STRETCH GAINS</div><strong style="color:#b45309">${WP_escape(stretchGainText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Required by the route, but less strongly supported by history and/or today's conditions.</div></div><div class="WPrule"><div class="WPk">4 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong></div></div></div><div class="WPfoot">Route fit is a similarity-to-history score. The separate target-chance figure is a modelled probability estimate from the golfer's historical hole-score distribution, with small samples deliberately shrunk toward broader player history. Optimised from all recorded rounds for ${WP_escape(p?.name||'this player')}: exact-hole history first, then SI, Par, yardage and recent form. Course-management cues compare the planned score with your own historical expectation and exact-hole target-achievement rate, so required gains are placed first by exact-hole target achievement rate, then by the gross score required (par/bogey preferred over birdie when evidence is similar), with exact-hole average, SI, Par, yardage and recent form used as supporting evidence. ${l.temporaryHI
+  ${l.teeName?'· '+WP_escape(l.teeName):''}</div></div><div style="text-align:right"><div class="WPk">TARGET</div><div class="WPtarget">${targetTop}</div></div></div>${hcapAudit}<div class="WPribbon">${ribbon}</div>${routeSummary}${probabilityPanel}${formPanel}<div class="WPsection"><div class="WPsectionTitle">Route at a glance</div><div class="WPprintNote">The BIG number is the score that keeps your route on pace. Green cells are attack or proven opportunity holes; neutral cells are protect holes; the subtle red underline is used only where your history says accepting bogey or worse is genuinely sensible.</div>${routeStrip}</div><div class="WPsection"><div class="WPsectionTitle">Your checkpoints</div><div class="WPprintNote">Use these as live pace markers. You only need to know whether you are ahead of, on, or behind the planned cumulative total.</div>${checkpoints}</div><div class="WPsection"><div class="WPsectionTitle">Why these holes?</div><div class="WPprintNote">The full 2+/3+ audit still drives the optimiser, but the live report only shows the gain holes you actually need to think about.</div>${gainSummary}${upsidePanel}</div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route</div><div class="WPprintNote">Use the BIG gross number live on the course. PRIMARY ATTACK = proven gain. STRETCH GAIN = target needs it, but don't force it. OPPORTUNITY = bonus point available. PROTECT = bank the planned score.</div><div class="WPholes">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Round strategy</div><div class="WPrules" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="WPrule"><div class="WPk">1 · FOLLOW THE GROSS NUMBER</div><strong>That is the score to make on each hole.</strong></div><div class="WPrule"><div class="WPk">2 · PRIMARY ATTACKS</div><strong class="WPattack">${WP_escape(primaryAttackText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Only holes where the route actually requires an above-baseline gain. Upside-only holes are shown separately.</div></div><div class="WPrule"><div class="WPk">3 · STRETCH GAINS</div><strong style="color:#b45309">${WP_escape(stretchGainText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Required by the route, but less strongly supported by history and/or today's conditions.</div></div><div class="WPrule"><div class="WPk">4 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong></div></div></div><div class="WPfoot">Route fit is a similarity-to-history score. The separate target-chance figure is a modelled probability estimate from the golfer's historical hole-score distribution, with small samples deliberately shrunk toward broader player history. Long-term ability is anchored by all recorded rounds for ${WP_escape(p?.name||'this player')}: exact-hole history first, then SI, Par, yardage and recent form. Course-management cues compare the planned score with your own historical expectation and exact-hole target-achievement rate, so required gains are placed first by exact-hole target achievement rate, then by the gross score required (par/bogey preferred over birdie when evidence is similar), with exact-hole average, SI, Par, yardage and recent form used as supporting evidence. ${l.temporaryHI
   ? (l.usedWHSFallback?'Temporary HI used; WHS tee data was incomplete so a stored/fallback Course Handicap was used.':'Temporary HI converted to the tee-specific WHS Course Handicap before SI allocation. Weather fragility may move one required gain away from an unusually exposed hole to a safer upside hole while preserving the same total target.')
   : 'Latest current-year Den Society handicap used directly as the fixed playing handicap — no Slope/Rating conversion.'}</div></section>`;
     }).join('');
