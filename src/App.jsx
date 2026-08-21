@@ -7130,7 +7130,7 @@ function PlayerProgressView({
       pp: "trueGross",
       cohort: "field",
       rgb: "5,150,105",
-      hint: "Handicap completely ignored. Uses actual gross scores, gross vs par and the player's own gross-scoring history.",
+      hint: "Handicap completely ignored. Uses actual gross scores and gross minus Course Rating to compare performance fairly across easier and harder courses.",
     },
   ]), []);
 
@@ -13184,15 +13184,34 @@ const truePerformanceIntel = (() => {
       const a=arrParsTG(r).filter(Number.isFinite);
       return a.length?a.reduce((s,v)=>s+v,0):NaN;
     };
+    const courseRatingOf=r=>{
+      const vals=[r?.teeRating,r?.rating,r?.courseRating,r?.cr].map(Number);
+      return vals.find(Number.isFinite);
+    };
+    const slopeOf=r=>{
+      const vals=[r?.teeSlope,r?.slope,r?.slopeRating].map(Number);
+      return vals.find(Number.isFinite);
+    };
+    const courseNameOf=r=>String(r?.courseName||r?.course||r?.venue||r?.eventName||"Course");
+    const teeNameOf=r=>String(r?.teeName||r?.teeLabel||r?.tee||"");
 
     const series=filtered.map((r,i)=>{
-      const gross=totalGross(r), par=totalPar(r);
-      return {round:i+1,gross,par,overPar:(Number.isFinite(gross)&&Number.isFinite(par))?gross-par:NaN,dateMs:Number(r?.dateMs)||NaN};
+      const gross=totalGross(r), par=totalPar(r), courseRating=courseRatingOf(r), slope=slopeOf(r);
+      const overPar=(Number.isFinite(gross)&&Number.isFinite(par))?gross-par:NaN;
+      const vsCourseRating=(Number.isFinite(gross)&&Number.isFinite(courseRating))?gross-courseRating:NaN;
+      const ratingVsPar=(Number.isFinite(courseRating)&&Number.isFinite(par))?courseRating-par:NaN;
+      return {
+        round:i+1,gross,par,courseRating,slope,
+        courseName:courseNameOf(r),teeName:teeNameOf(r),
+        overPar,vsCourseRating,ratingVsPar,
+        dateMs:Number(r?.dateMs)||NaN
+      };
     }).filter(x=>Number.isFinite(x.gross));
 
     if(!series.length) return {ok:false};
 
     const grossVals=series.map(x=>x.gross);
+    const courseAdjVals=series.map(x=>x.vsCourseRating).filter(Number.isFinite);
     const latest=series[series.length-1];
     const avg=a=>a.length?a.reduce((s,v)=>s+v,0)/a.length:NaN;
     const sd=a=>{
@@ -13214,12 +13233,49 @@ const truePerformanceIntel = (() => {
       trend=d>=2?"Improving":d<=-2?"Worsening":"Broadly stable";
     }
 
+    const adjSeries=series.filter(x=>Number.isFinite(x.vsCourseRating));
+    const adjVals=adjSeries.map(x=>x.vsCourseRating);
+    const adjRecentN=Math.min(3,Math.floor(adjVals.length/2)||adjVals.length);
+    const adjRecent=adjVals.slice(-adjRecentN);
+    const adjPrevious=adjVals.length>adjRecentN?adjVals.slice(-(adjRecentN*2),-adjRecentN):[];
+    const adjRecentAvg=avg(adjRecent), adjPreviousAvg=avg(adjPrevious);
+    const adjImprovement=(Number.isFinite(adjRecentAvg)&&Number.isFinite(adjPreviousAvg))?adjPreviousAvg-adjRecentAvg:NaN;
+    let adjustedTrend="Not enough rated rounds";
+    if(Number.isFinite(adjImprovement)){
+      adjustedTrend=adjImprovement>=1.5?"Improving":adjImprovement<=-1.5?"Worsening":"Broadly stable";
+    }else if(adjVals.length>=2){
+      const d=adjVals[0]-adjVals[adjVals.length-1];
+      adjustedTrend=d>=1.5?"Improving":d<=-1.5?"Worsening":"Broadly stable";
+    }
+
+    const difficultyLabel=(r)=>{
+      const rv=Number(r?.ratingVsPar), s=Number(r?.slope);
+      if(Number.isFinite(rv)){
+        if(rv>=2.5) return "Very hard";
+        if(rv>=1.0) return "Hard";
+        if(rv<=-2.5) return "Easy";
+        if(rv<=-1.0) return "Easier";
+      }
+      if(Number.isFinite(s)){
+        if(s>=135) return "Very hard";
+        if(s>=125) return "Hard";
+        if(s<=105) return "Easy";
+        if(s<=115) return "Easier";
+      }
+      return "Standard / unknown";
+    };
+
     return {
       ok:true,series,latestGross:latest.gross,latestOverPar:latest.overPar,
+      latestCourseRating:latest.courseRating,latestSlope:latest.slope,
+      latestVsCourseRating:latest.vsCourseRating,latestDifficulty:difficultyLabel(latest),
+      latestCourseName:latest.courseName,latestTeeName:latest.teeName,
       avgGross:avg(grossVals),last3Avg:avg(last3),last5Avg:avg(last5),
+      avgVsCourseRating:avg(courseAdjVals),
+      adjRecentAvg,adjPreviousAvg,adjImprovement,adjustedTrend,
       bestGross:Math.min(...grossVals),worstGross:Math.max(...grossVals),
       consistency:sd(grossVals),recentAvg,previousAvg,improvement,trend,
-      rounds:grossVals.length
+      rounds:grossVals.length, ratedRounds:adjVals.length
     };
   }catch(e){
     console.error("True Performance engine failed",e);
@@ -13575,7 +13631,7 @@ const scorecardIntel = (() => {
     .PRbadVerdictK{font-size:9px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;color:#94a3b8}
     .PRbadVerdictV{font-size:14px;font-weight:950;margin-top:3px}
     .PRbadVerdictS{font-size:10px;color:#cbd5e1;line-height:1.45;margin-top:4px}
-    .PRtrueBanner{margin-top:12px;border-radius:20px;padding:15px 17px;background:linear-gradient(135deg,#064e3b,#047857 58%,#059669);color:#fff;break-inside:avoid;page-break-inside:avoid}.PRtrueK{font-size:9px;font-weight:950;letter-spacing:.14em;text-transform:uppercase;color:#a7f3d0}.PRtrueV{font-size:25px;font-weight:950;letter-spacing:-.03em;margin-top:3px}.PRtrueS{font-size:10px;line-height:1.45;color:#d1fae5;margin-top:4px}.PRtrueGrid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin-top:9px}.PRtrueCard{border:1px solid #a7f3d0;background:#ecfdf5;border-radius:13px;padding:9px;min-width:0}.PRtrueLabel{font-size:7.5px;font-weight:950;text-transform:uppercase;letter-spacing:.07em;color:#047857}.PRtrueValue{font-size:22px;font-weight:950;color:#064e3b;margin-top:2px}.PRtrueValue.small{font-size:13px;line-height:1.15}.PRtrueSub{font-size:7.5px;color:#64748b;line-height:1.25;margin-top:2px}.PRtrueTrend{margin-top:9px;border:1px solid #d1fae5;background:#f0fdf4;border-radius:14px;padding:10px;break-inside:avoid}.PRtrueScores{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}.PRtrueScore{display:flex;align-items:center;gap:4px;border:1px solid #a7f3d0;background:#fff;border-radius:999px;padding:4px 7px;font-size:8px;color:#64748b}.PRtrueScore b{font-size:11px;color:#064e3b}.PRpdfExportRoot .PRtrueGrid{grid-template-columns:repeat(5,minmax(0,1fr))!important}.PRpdfExportRoot .PRtrueBanner,.PRpdfExportRoot .PRtrueTrend,.PRpdfExportRoot .PRtrueCard{break-inside:avoid!important;page-break-inside:avoid!important}.PRgamePlan{margin-top:14px;border-radius:20px;padding:15px;background:linear-gradient(135deg,#eff6ff,#f8fafc);border:1px solid #bfdbfe}
+    .PRtrueBanner{margin-top:12px;border-radius:20px;padding:15px 17px;background:linear-gradient(135deg,#064e3b,#047857 58%,#059669);color:#fff;break-inside:avoid;page-break-inside:avoid}.PRtrueK{font-size:9px;font-weight:950;letter-spacing:.14em;text-transform:uppercase;color:#a7f3d0}.PRtrueV{font-size:25px;font-weight:950;letter-spacing:-.03em;margin-top:3px}.PRtrueS{font-size:10px;line-height:1.45;color:#d1fae5;margin-top:4px}.PRtrueGrid{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:7px;margin-top:9px}.PRtrueCard{border:1px solid #a7f3d0;background:#ecfdf5;border-radius:13px;padding:9px;min-width:0}.PRtrueLabel{font-size:7.5px;font-weight:950;text-transform:uppercase;letter-spacing:.07em;color:#047857}.PRtrueValue{font-size:22px;font-weight:950;color:#064e3b;margin-top:2px}.PRtrueValue.small{font-size:13px;line-height:1.15}.PRtrueSub{font-size:7.5px;color:#64748b;line-height:1.25;margin-top:2px}.PRtrueTrend{margin-top:9px;border:1px solid #d1fae5;background:#f0fdf4;border-radius:14px;padding:10px;break-inside:avoid}.PRtrueScores{display:flex;gap:6px;flex-wrap:wrap;margin-top:7px}.PRtrueScore{display:flex;align-items:center;gap:4px;border:1px solid #a7f3d0;background:#fff;border-radius:999px;padding:4px 7px;font-size:8px;color:#64748b}.PRtrueScore b{font-size:11px;color:#064e3b}.PRtrueScore{flex-wrap:wrap}.PRtrueScore small{font-size:6.5px;color:#64748b;width:100%;text-align:center}.PRtrueScore.unrated{opacity:.55}.PRtrueCourseNote{margin-top:8px;border:1px solid #a7f3d0;background:#f0fdf4;border-radius:12px;padding:8px 10px;font-size:8px;line-height:1.4;color:#475569}.PRpdfExportRoot .PRtrueCourseNote{break-inside:avoid!important;page-break-inside:avoid!important}.PRpdfExportRoot .PRtrueGrid{grid-template-columns:repeat(5,minmax(0,1fr))!important}.PRpdfExportRoot .PRtrueBanner,.PRpdfExportRoot .PRtrueTrend,.PRpdfExportRoot .PRtrueCard{break-inside:avoid!important;page-break-inside:avoid!important}.PRgamePlan{margin-top:14px;border-radius:20px;padding:15px;background:linear-gradient(135deg,#eff6ff,#f8fafc);border:1px solid #bfdbfe}
     .PRplanGrid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:10px}
     .PRplanCard{background:#fff;border:1px solid #dbeafe;border-radius:14px;padding:11px}
     .PRplanK{font-size:9px;font-weight:950;letter-spacing:.08em;text-transform:uppercase;color:#1d4ed8}
@@ -13815,20 +13871,28 @@ ${__truePerformance ? `
   <div class="PRtrueBanner">
     <div class="PRtrueK">TRUE PERFORMANCE REPORT</div>
     <div class="PRtrueV">HANDICAP IGNORED</div>
-    <div class="PRtrueS">Every figure in this report is based on actual gross scoring, gross relative to par, and the player's own gross-score history. Den handicap, WHS Handicap Index and Course Handicap do not affect this report.</div>
+    <div class="PRtrueS">Every figure in this report is based on actual gross scoring, gross relative to par, Course Rating and the player's own gross-score history. Den handicap, WHS Handicap Index and Course Handicap do not affect this report.</div>
   </div>
   ${truePerformanceIntel?.ok ? `
     <div class="PRtrueGrid">
       <div class="PRtrueCard"><div class="PRtrueLabel">Latest gross</div><div class="PRtrueValue">${Math.round(truePerformanceIntel.latestGross)}</div><div class="PRtrueSub">${Number.isFinite(truePerformanceIntel.latestOverPar)?`${truePerformanceIntel.latestOverPar>=0?"+":""}${truePerformanceIntel.latestOverPar.toFixed(0)} vs par`:"Raw gross score"}</div></div>
-      <div class="PRtrueCard"><div class="PRtrueLabel">3-round average</div><div class="PRtrueValue">${Number.isFinite(truePerformanceIntel.last3Avg)?truePerformanceIntel.last3Avg.toFixed(1):"—"}</div><div class="PRtrueSub">actual gross</div></div>
-      <div class="PRtrueCard"><div class="PRtrueLabel">5-round average</div><div class="PRtrueValue">${Number.isFinite(truePerformanceIntel.last5Avg)?truePerformanceIntel.last5Avg.toFixed(1):"—"}</div><div class="PRtrueSub">actual gross</div></div>
-      <div class="PRtrueCard"><div class="PRtrueLabel">Best gross</div><div class="PRtrueValue">${Math.round(truePerformanceIntel.bestGross)}</div><div class="PRtrueSub">${truePerformanceIntel.rounds} round${truePerformanceIntel.rounds===1?"":"s"} selected</div></div>
-      <div class="PRtrueCard"><div class="PRtrueLabel">True form</div><div class="PRtrueValue small">${PR_escapeHtml(truePerformanceIntel.trend)}</div><div class="PRtrueSub">${Number.isFinite(truePerformanceIntel.improvement)?`${truePerformanceIntel.improvement>=0?"+":""}${truePerformanceIntel.improvement.toFixed(1)} shots vs previous comparable window`:"Gross trend only"}</div></div>
+      <div class="PRtrueCard"><div class="PRtrueLabel">Course-adjusted</div><div class="PRtrueValue">${Number.isFinite(truePerformanceIntel.latestVsCourseRating)?`${truePerformanceIntel.latestVsCourseRating>=0?"+":""}${truePerformanceIntel.latestVsCourseRating.toFixed(1)}`:"—"}</div><div class="PRtrueSub">${Number.isFinite(truePerformanceIntel.latestCourseRating)?`vs Course Rating ${truePerformanceIntel.latestCourseRating.toFixed(1)}`:"Course Rating unavailable"}</div></div>
+      <div class="PRtrueCard"><div class="PRtrueLabel">Course difficulty</div><div class="PRtrueValue small">${PR_escapeHtml(truePerformanceIntel.latestDifficulty||"—")}</div><div class="PRtrueSub">${Number.isFinite(truePerformanceIntel.latestSlope)?`Slope ${Math.round(truePerformanceIntel.latestSlope)}`:"Slope unavailable"}</div></div>
+      <div class="PRtrueCard"><div class="PRtrueLabel">3-round gross avg</div><div class="PRtrueValue">${Number.isFinite(truePerformanceIntel.last3Avg)?truePerformanceIntel.last3Avg.toFixed(1):"—"}</div><div class="PRtrueSub">actual gross</div></div>
+      <div class="PRtrueCard"><div class="PRtrueLabel">Adjusted form</div><div class="PRtrueValue small">${PR_escapeHtml(truePerformanceIntel.adjustedTrend)}</div><div class="PRtrueSub">${Number.isFinite(truePerformanceIntel.adjImprovement)?`${truePerformanceIntel.adjImprovement>=0?"+":""}${truePerformanceIntel.adjImprovement.toFixed(1)} shots vs prior rated window`:`${truePerformanceIntel.ratedRounds} rated round${truePerformanceIntel.ratedRounds===1?"":"s"}`}</div></div>
+    </div>
+    <div class="PRtrueCourseNote">
+      <b>Course adjustment:</b> gross score minus Course Rating. Lower is better. This adjusts for course/tee difficulty without using the player's handicap. Slope is shown as supporting context only and does not add handicap strokes.
     </div>
     <div class="PRtrueTrend">
       <div class="PRvizTitle" style="font-size:12px;">Actual gross-score trend</div>
-      <div class="PRvizSub">Lower is better. Handicap is not used.</div>
+      <div class="PRvizSub">Raw score. Lower is better. Handicap is not used.</div>
       <div class="PRtrueScores">${truePerformanceIntel.series.map((r,i)=>`<div class="PRtrueScore"><span>R${i+1}</span><b>${Math.round(r.gross)}</b></div>`).join("")}</div>
+    </div>
+    <div class="PRtrueTrend">
+      <div class="PRvizTitle" style="font-size:12px;">Course-adjusted true-performance trend</div>
+      <div class="PRvizSub">Gross minus Course Rating. This is the fairest cross-course comparison when Course Rating is available.</div>
+      <div class="PRtrueScores">${truePerformanceIntel.series.map((r,i)=>`<div class="PRtrueScore ${Number.isFinite(r.vsCourseRating)?"rated":"unrated"}"><span>R${i+1}</span><b>${Number.isFinite(r.vsCourseRating)?`${r.vsCourseRating>=0?"+":""}${r.vsCourseRating.toFixed(1)}`:"—"}</b><small>${Number.isFinite(r.courseRating)?`CR ${r.courseRating.toFixed(1)}`:"no CR"}</small></div>`).join("")}</div>
     </div>
   `:""}
 `:""}
