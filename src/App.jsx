@@ -16038,6 +16038,71 @@ function WP_applyLiveHoleStrategy(h){
 }
 
 
+
+function WP_liveStorageKey({playerName,courseKey,startHole=1,liveMode='stableford'}){
+  const p=String(playerName||'player').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-');
+  const c=String(courseKey||'course').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-');
+  const s=Math.max(1,Math.min(18,Math.round(Number(startHole)||1)));
+  const m=String(liveMode||'stableford')==='gross'?'gross':'stableford';
+  return `den-live-round:v1:${p}:${c}:h${s}:${m}`;
+}
+function WP_saveLiveRound(payload){
+  try{
+    if(typeof window==='undefined'||!window.localStorage) return false;
+    const key=WP_liveStorageKey(payload||{});
+    const record={
+      version:1,
+      savedAt:new Date().toISOString(),
+      playerName:String(payload?.playerName||''),
+      courseKey:String(payload?.courseKey||''),
+      courseName:String(payload?.courseName||''),
+      startHole:Math.max(1,Math.min(18,Math.round(Number(payload?.startHole)||1))),
+      liveMode:String(payload?.liveMode||'stableford')==='gross'?'gross':'stableford',
+      target:Number(payload?.target),
+      tempHI:payload?.tempHI===''||payload?.tempHI==null?null:Number(payload?.tempHI),
+      tempMode:String(payload?.tempMode||'whs'),
+      scores:Array.from({length:18},(_,i)=>{
+        const n=Number(payload?.scores?.[i]);
+        return Number.isFinite(n)&&n>0?Math.round(n):null;
+      })
+    };
+    window.localStorage.setItem(key,JSON.stringify(record));
+    return true;
+  }catch(e){
+    console.warn('Live round autosave failed',e);
+    return false;
+  }
+}
+function WP_loadLiveRound(query){
+  try{
+    if(typeof window==='undefined'||!window.localStorage) return null;
+    const key=WP_liveStorageKey(query||{});
+    const raw=window.localStorage.getItem(key);
+    if(!raw) return null;
+    const r=JSON.parse(raw);
+    if(!r||r.version!==1||!Array.isArray(r.scores)) return null;
+    r.scores=Array.from({length:18},(_,i)=>{
+      const n=Number(r.scores?.[i]);
+      return Number.isFinite(n)&&n>0?String(Math.round(n)):"";
+    });
+    r.__completed=r.scores.filter(v=>String(v).trim()!=="").length;
+    return r;
+  }catch(e){
+    console.warn('Live round restore failed',e);
+    return null;
+  }
+}
+function WP_clearLiveRound(query){
+  try{
+    if(typeof window==='undefined'||!window.localStorage) return false;
+    window.localStorage.removeItem(WP_liveStorageKey(query||{}));
+    return true;
+  }catch(e){
+    console.warn('Live round clear failed',e);
+    return false;
+  }
+}
+
 function WP_liveHoleOrder(startHole=1){
   const s=Math.max(1,Math.min(18,Math.round(Number(startHole)||1)));
   return Array.from({length:18},(_,i)=>((s-1+i)%18)+1);
@@ -16654,6 +16719,7 @@ function WP_OnCourseMode({
               <div style={{fontSize:13,fontWeight:950,marginTop:2}}>{player?.name||'Player'} · {event?.courseName||courseKey}</div>
             </div>
             <div className="oc-actions">
+              <div style={{alignSelf:"center",fontSize:9,fontWeight:900,color:"#a7f3d0",whiteSpace:"nowrap"}}>✓ SAVED</div>
               <button className="oc-btn" onClick={onViewFull}>VIEW 18</button>
               <button className="oc-btn" onClick={onExit}>REDUCE</button>
             </div>
@@ -16754,6 +16820,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   const [onCourseMode, setOnCourseMode] = React.useState(false);
   const [liveScoringMode, setLiveScoringMode] = React.useState("stableford"); // stableford | gross
   const [liveStartHole, setLiveStartHole] = React.useState(1); // shotgun start hole 1..18
+  const [liveSaveStatus, setLiveSaveStatus] = React.useState("idle");
+  const [savedLiveRound, setSavedLiveRound] = React.useState(null);
 
   const [tempHandicaps, setTempHandicaps] = React.useState({});
   const [tempHandicapModes, setTempHandicapModes] = React.useState({}); // player -> "whs" | "fixed"
@@ -16784,6 +16852,49 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     if(!livePlayer || !event) return null;
     return WP_layoutForPlayer(seasonModel,event,livePlayer,courseKey,handicapMap,tempHandicaps?.[String(livePlayer?.name||"")],tempHandicapModes?.[String(livePlayer?.name||"")]||"whs");
   },[livePlayer,event,seasonModel,courseKey,handicapMap,tempHandicaps,tempHandicapModes]);
+
+  const activeLivePlayerName=selectedPlayers.length===1?String(selectedPlayers[0]||""):"";
+  const activeLiveTarget=liveScoringMode==="gross"?Number(customGross):Number(customPoints);
+
+  React.useEffect(()=>{
+    if(planMode!=="live" || !activeLivePlayerName || !courseKey) return;
+    const r=WP_loadLiveRound({
+      playerName:activeLivePlayerName,
+      courseKey,
+      startHole:liveStartHole,
+      liveMode:liveScoringMode
+    });
+    setSavedLiveRound(r);
+    if(r?.scores?.some(v=>String(v).trim()!=="")){
+      setLiveScores(prev=>{
+        const hasCurrent=(prev||[]).some(v=>Number.isFinite(Number(v))&&Number(v)>0);
+        return hasCurrent?prev:r.scores;
+      });
+      setLiveSaveStatus("saved");
+    }
+  },[planMode,activeLivePlayerName,courseKey,liveStartHole,liveScoringMode]);
+
+  React.useEffect(()=>{
+    if(planMode!=="live" || !activeLivePlayerName || !courseKey) return;
+    const hasData=(liveScores||[]).some(v=>Number.isFinite(Number(v))&&Number(v)>0);
+    if(!hasData) return;
+    const ok=WP_saveLiveRound({
+      playerName:activeLivePlayerName,
+      courseKey,
+      courseName:event?.courseName||courseKey,
+      startHole:liveStartHole,
+      liveMode:liveScoringMode,
+      target:activeLiveTarget,
+      tempHI:tempHandicaps?.[activeLivePlayerName],
+      tempMode:tempHandicapModes?.[activeLivePlayerName]||"whs",
+      scores:liveScores
+    });
+    setLiveSaveStatus(ok?"saved":"error");
+  },[
+    planMode,activeLivePlayerName,courseKey,event?.courseName,liveStartHole,liveScoringMode,
+    activeLiveTarget,tempHandicaps,tempHandicapModes,liveScores
+  ]);
+
   const livePreview = React.useMemo(()=>{
     if(!liveLayout) return {played:0,pts:0,gross:0};
     let played=0,pts=0,gross=0;
@@ -16813,7 +16924,24 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   };
 
   React.useEffect(()=>{
-    setLiveScores(Array(18).fill(""));
+    if(planMode!=="live"){
+      setLiveScores(Array(18).fill(""));
+      return;
+    }
+    if(!activeLivePlayerName||!courseKey) return;
+    const r=WP_loadLiveRound({
+      playerName:activeLivePlayerName,
+      courseKey,
+      startHole:liveStartHole,
+      liveMode:liveScoringMode
+    });
+    if(r?.scores?.some(v=>String(v).trim()!=="")){
+      setLiveScores(r.scores);
+      setSavedLiveRound(r);
+      setLiveSaveStatus("saved");
+    }else{
+      setLiveScores(Array(18).fill(""));
+    }
   },[courseKey]);
 
 
@@ -16855,6 +16983,34 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
   const setLiveScore=(i,v)=>{
     setLiveScores(prev=>{ const next=prev.slice(); next[i]=v; return next; });
+  };
+
+  const clearCurrentLiveRound=()=>{
+    if(activeLivePlayerName&&courseKey){
+      WP_clearLiveRound({
+        playerName:activeLivePlayerName,
+        courseKey,
+        startHole:liveStartHole,
+        liveMode:liveScoringMode
+      });
+    }
+    setLiveScores(Array(18).fill(""));
+    setSavedLiveRound(null);
+    setLiveSaveStatus("idle");
+  };
+
+  const resumeSavedLiveRound=()=>{
+    if(!savedLiveRound) return;
+    setLiveScores(Array.isArray(savedLiveRound.scores)?savedLiveRound.scores:Array(18).fill(""));
+    if(Number.isFinite(Number(savedLiveRound.target))){
+      if(savedLiveRound.liveMode==="gross") setCustomGross(Number(savedLiveRound.target));
+      else setCustomPoints(Number(savedLiveRound.target));
+    }
+    if(savedLiveRound.tempHI!=null && activeLivePlayerName){
+      setTempHandicaps(prev=>({...prev,[activeLivePlayerName]:String(savedLiveRound.tempHI)}));
+      setTempHandicapModes(prev=>({...prev,[activeLivePlayerName]:savedLiveRound.tempMode||"whs"}));
+    }
+    setLiveSaveStatus("saved");
   };
 
   const generatePlan = () => {
@@ -17008,6 +17164,16 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
             {planMode==='gross'?<div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4"><label className="text-[10px] font-black uppercase tracking-widest text-blue-700">Target gross score</label><div className="mt-2 flex items-center gap-3"><input type="number" min="54" max="180" step="1" value={customGross} onChange={e=>setCustomGross(e.target.value)} className="w-28 rounded-xl border border-blue-300 bg-white px-3 py-2 text-2xl font-black text-slate-900"/><span className="font-black text-blue-800">gross</span></div><div className="mt-2 text-xs text-blue-800">The optimizer allocates pars, bogeys and worse scores to the holes where your history says they are most likely, while making the 18-hole total equal your chosen gross score.</div></div>:null}
 
             {planMode==='live'?<div className="mt-4 rounded-3xl border border-violet-200 bg-gradient-to-b from-violet-50 to-white p-4 md:p-5">
+              {savedLiveRound && (savedLiveRound.scores||[]).some(v=>String(v).trim()!=="")?<div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-3">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div>
+                    <div className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Saved live round</div>
+                    <div className="mt-1 text-sm font-black text-slate-900">{savedLiveRound.__completed||0} holes completed · {savedLiveRound.liveMode==="gross"?"Gross":"Stableford"} · start H{savedLiveRound.startHole}</div>
+                    <div className="mt-1 text-[10px] text-slate-500">Saved on this device {savedLiveRound.savedAt?`· ${new Date(savedLiveRound.savedAt).toLocaleString()}`:""}.</div>
+                  </div>
+                  <button type="button" onClick={resumeSavedLiveRound} className="rounded-xl bg-emerald-700 px-4 py-2.5 text-xs font-black text-white">RESUME ROUND</button>
+                </div>
+              </div>:null}
               <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3">
                 <div>
                   <div className="text-[10px] font-black uppercase tracking-[.16em] text-violet-700">Live Replan</div>
@@ -17019,7 +17185,13 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
                   </div>
                   <div className="mt-3 flex flex-wrap items-center gap-2">
                     <span className="text-[10px] font-black uppercase tracking-widest text-violet-700">Start hole</span>
-                    <select value={liveStartHole} onChange={e=>{setLiveStartHole(Number(e.target.value));setLiveScores(Array(18).fill(""));}} className="rounded-xl border border-violet-300 bg-white px-3 py-2 text-sm font-black text-slate-900">
+                    <select value={liveStartHole} onChange={e=>{
+                      const nextHole=Number(e.target.value);
+                      const hasScores=(liveScores||[]).some(v=>Number.isFinite(Number(v))&&Number(v)>0);
+                      if(hasScores && !window.confirm("Changing the start hole opens a different live-round slot. Your current round will remain saved. Continue?")) return;
+                      setLiveStartHole(nextHole);
+                      setLiveScores(Array(18).fill(""));
+                    }} className="rounded-xl border border-violet-300 bg-white px-3 py-2 text-sm font-black text-slate-900">
                       {Array.from({length:18},(_,i)=><option key={i+1} value={i+1}>Hole {i+1}</option>)}
                     </select>
                     <span className="text-[10px] font-bold text-slate-500">{Number(liveStartHole)===1?'Normal start':`Shotgun: H${liveStartHole} is your first hole`}</span>
@@ -17059,7 +17231,13 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
                     </div>;
                   })}
                 </div>
-                <div className="mt-3 flex items-center justify-between gap-3"><div className="text-[10px] text-slate-500">You can re-run this after every hole. Previously entered scores stay fixed in the recalculation.</div><button type="button" onClick={()=>setLiveScores(Array(18).fill(""))} className="text-xs font-black text-violet-700 underline">Clear scores</button></div>
+                <div className="mt-3 flex items-center justify-between gap-3">
+                  <div>
+                    <div className="text-[10px] text-slate-500">Every score is autosaved on this device. Leaving the app, taking a call or refreshing should not lose the round.</div>
+                    <div className={`mt-1 text-[10px] font-black ${liveSaveStatus==="error"?"text-rose-600":"text-emerald-700"}`}>{liveSaveStatus==="error"?"⚠ Could not save locally":"✓ Round saved on this device"}</div>
+                  </div>
+                  <button type="button" onClick={clearCurrentLiveRound} className="text-xs font-black text-rose-700 underline">Clear round</button>
+                </div>
                 <button type="button" onClick={()=>setOnCourseMode(true)} className="mt-4 w-full rounded-2xl px-5 py-4 text-base font-black text-white shadow-lg" style={{background:"linear-gradient(90deg,#6d28d9 0%,#4c1d95 48%,#08775f 100%)"}}>
                   ⛳ ENTER ON-COURSE MODE
                 </button>
