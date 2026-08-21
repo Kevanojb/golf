@@ -14261,12 +14261,54 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length >= 1) ? `
         {label:"Par 5",v:avg(hs.filter(h=>h.par===5).map(h=>h.delta)),p:rows.find(r=>r.displayLabel==="Par: Par 5")?.avg}
       ].filter(x=>Number.isFinite(x.v)&&Number.isFinite(Number(x.p)));
       if(!latestCats.length)return "";
-      const strongest=latestCats.slice().sort((a,b)=>(b.v-Number(b.p))-(a.v-Number(a.p)))[0];
-      const weakest=latestCats.slice().sort((a,b)=>(a.v-Number(a.p))-(b.v-Number(b.p)))[0];
+      const compared=latestCats.map(x=>({...x,delta:Number(x.v)-Number(x.p)})).filter(x=>Number.isFinite(x.delta));
+      if(!compared.length)return "";
+      const strongest=compared.slice().sort((a,b)=>b.delta-a.delta)[0];
+      const weakest=compared.slice().sort((a,b)=>a.delta-b.delta)[0];
+      const negatives=compared.filter(x=>x.delta<0).sort((a,b)=>a.delta-b.delta);
+      const positives=compared.filter(x=>x.delta>0).sort((a,b)=>b.delta-a.delta);
+      const fmt=v=>`${Number(v)>=0?"+":""}${Number(v).toFixed(1)}`;
+
+      let headline="";
+      let detail="";
+
+      if(negatives.length){
+        const worst=negatives[0];
+        if(positives.length){
+          const best=positives[0];
+          headline=`${best.label} improved most versus your normal pattern (${fmt(best.delta)}); ${worst.label} was the biggest relative drop (${fmt(worst.delta)}).`;
+        }else{
+          headline=`All par types were below your normal pattern. ${worst.label} was the biggest relative drop (${fmt(worst.delta)}).`;
+        }
+        detail=`Relative change = latest round minus selected-period average. ${worst.label}: latest ${fmt(worst.v)} vs period ${fmt(worst.p)}.`;
+      }else if(positives.length===compared.length){
+        const tiedBest=compared.filter(x=>Math.abs(x.delta-strongest.delta)<0.0001);
+        const tiedWeak=compared.filter(x=>Math.abs(x.delta-weakest.delta)<0.0001);
+        if(tiedBest.length===compared.length){
+          headline=`All par types improved equally versus your normal pattern (${fmt(strongest.delta)}).`;
+        }else if(tiedBest.length>1){
+          headline=`All par types were better than your normal pattern. ${tiedBest.map(x=>x.label).join(" and ")} improved most (${fmt(strongest.delta)}), while ${tiedWeak.map(x=>x.label).join(" and ")} showed the smallest improvement (${fmt(weakest.delta)}).`;
+        }else if(tiedWeak.length>1){
+          headline=`All par types were better than your normal pattern. ${strongest.label} improved most (${fmt(strongest.delta)}), while ${tiedWeak.map(x=>x.label).join(" and ")} both improved by ${fmt(weakest.delta)}.`;
+        }else{
+          headline=`All par types were better than your normal pattern. ${strongest.label} improved most (${fmt(strongest.delta)}); ${weakest.label} showed the smallest improvement (${fmt(weakest.delta)}).`;
+        }
+        detail=`No par type recorded a relative drop. Relative change = latest round minus selected-period average.`;
+      }else{
+        const zeros=compared.filter(x=>Math.abs(x.delta)<0.0001);
+        if(positives.length){
+          const best=positives[0];
+          headline=`${best.label} improved most versus your normal pattern (${fmt(best.delta)}); ${zeros.map(x=>x.label).join(" and ")} matched the selected-period level.`;
+        }else{
+          headline=`All par types matched your selected-period pattern.`;
+        }
+        detail=`Relative change = latest round minus selected-period average.`;
+      }
+
       return `<div class="PRpatternCallout">
         <div class="PRpatternK">Pattern interpretation</div>
-        <div class="PRpatternV">${PR_escapeHtml(strongest.label)} was better than your normal pattern; ${PR_escapeHtml(weakest.label)} was the biggest relative drop.</div>
-        <div class="PRpatternS">This comparison separates a one-round event from a recurring weakness, so the action plan can focus on what actually repeats.</div>
+        <div class="PRpatternV">${PR_escapeHtml(headline)}</div>
+        <div class="PRpatternS">${PR_escapeHtml(detail)} This uses the same Par 3 / Par 4 / Par 5 figures shown alongside the spider chart.</div>
       </div>`;
     }catch(e){return "";}
   })()}
