@@ -18723,7 +18723,8 @@ function WP_MobileOnCourseSetup({
   courseKey,setCourseKey,selectedTeeId,setSelectedTeeId,
   liveScoringMode,setLiveScoringMode,customGross,setCustomGross,customPoints,setCustomPoints,
   liveStartHole,setLiveStartHole,tempHandicaps,setTempHandicaps,tempHandicapModes,setTempHandicapModes,
-  liveScores,setLiveScores,planningEvent,selectedDbTee,onStart,onAdvanced,onHome,onPendingTee
+  liveScores,setLiveScores,planningEvent,selectedDbTee,onStart,onAdvanced,onHome,onPendingTee,
+  playersLoading=false,onReloadPlayers
 }){
   const [step,setStep]=React.useState(0);
   const [latestPlan,setLatestPlan]=React.useState(()=>WP_loadLatestPreRoundPlanSnapshot());
@@ -18795,7 +18796,7 @@ function WP_MobileOnCourseSetup({
       .mq-player{width:100%;min-height:58px;border:2px solid #dbe5ee;border-radius:17px;background:#fff;padding:11px 13px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:10px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}
       .mq-player.on{border-color:#34d399;background:linear-gradient(145deg,#ecfdf5,#fff);box-shadow:0 7px 18px rgba(5,150,105,.10)}
       .mq-player-name{font-size:16px;font-weight:950;color:#0f172a}.mq-player-check{width:30px;height:30px;border-radius:999px;display:flex;align-items:center;justify-content:center;background:#f1f5f9;color:#94a3b8;font-size:15px;font-weight:950;flex:0 0 auto}.mq-player.on .mq-player-check{background:#10b981;color:#fff}
-      .mq-player-empty{border:1px dashed #cbd5e1;border-radius:16px;padding:16px;text-align:center;font-size:12px;color:#64748b}
+      .mq-player-empty{border:1px dashed #cbd5e1;border-radius:16px;padding:16px;text-align:center;font-size:12px;color:#64748b}.mq-player-empty b{display:block;color:#0f172a;font-size:14px;margin-bottom:4px}.mq-retry{margin-top:10px;min-height:48px;border:0;border-radius:15px;background:#0f172a;color:#fff;padding:0 16px;font-size:12px;font-weight:950}.mq-spinner{display:inline-block;width:16px;height:16px;border:2px solid #cbd5e1;border-top-color:#10b981;border-radius:999px;animation:mqspin .8s linear infinite;margin-right:7px;vertical-align:-3px}@keyframes mqspin{to{transform:rotate(360deg)}}
       .mq-two{display:grid;grid-template-columns:1fr 1fr;gap:9px}.mq-choice{min-height:58px;border-radius:16px;border:2px solid #dbe5ee;background:#fff;font-size:13px;font-weight:950}.mq-choice.on{border-color:#6ee7b7;background:#ecfdf5;color:#065f46}
       .mq-summary{display:flex;flex-direction:column;gap:8px;margin-top:14px}.mq-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #e2e8f0;background:#f8fafc;border-radius:14px;padding:10px 12px}.mq-row-k{font-size:9px;font-weight:900;color:#64748b;text-transform:uppercase}.mq-row-v{font-size:14px;font-weight:950;text-align:right}
       .mq-start{width:100%;min-height:64px;border:0;border-radius:20px;margin-top:14px;background:linear-gradient(90deg,#047857,#059669);color:#fff;font-size:18px;font-weight:950;box-shadow:0 12px 28px rgba(5,150,105,.24)}.mq-start:disabled{opacity:.35;box-shadow:none}.mq-next{width:100%;min-height:58px;border:0;border-radius:18px;margin-top:14px;background:#0f172a;color:#fff;font-size:16px;font-weight:950}.mq-note{text-align:center;font-size:9px;color:#64748b;margin-top:8px}
@@ -18857,9 +18858,21 @@ function WP_MobileOnCourseSetup({
                 <div className="mq-player-check">{selected?'✓':'›'}</div>
               </button>;
             })}
-            {!filteredPlayers.length?<div className="mq-player-empty">No golfers match that name.</div>:null}
+            {!filteredPlayers.length?<div className="mq-player-empty">
+              {playersLoading?<>
+                <b><span className="mq-spinner"></span>Loading golfers…</b>
+                Your saved Den Golf player history is loading.
+              </>:playerSearch.trim()?<>
+                <b>No matching golfer</b>
+                Clear the search or try another name.
+              </>:<>
+                <b>Golfers have not loaded yet</b>
+                The app normally loads them automatically from your saved golf history and Supabase roster.
+                <div><button type="button" className="mq-retry" onClick={onReloadPlayers}>LOAD GOLFERS</button></div>
+              </>}
+            </div>:null}
           </div>
-          <button className="mq-next" disabled={!playerName} onClick={()=>setStep(2)}>NEXT · COURSE & TEE →</button>
+          <button className="mq-next" disabled={!playerName||playersLoading} onClick={()=>setStep(2)}>{playersLoading?'LOADING GOLFERS…':'NEXT · COURSE & TEE →'}</button>
         </>:null}
 
         {step===2?<>
@@ -18998,9 +19011,32 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
     return Array.from(map.values()).sort((a,b)=>a.label.localeCompare(b.label));
   },[dbCourses,historicCourses]);
-  const players = React.useMemo(() => (Array.isArray(seasonModel?.players) ? seasonModel.players : [])
-    .filter(p => p && String(p?.name || "").trim())
-    .sort((a,b)=>String(a.name).localeCompare(String(b.name))), [seasonModel]);
+  const players = React.useMemo(() => {
+    const byKey=new Map();
+    for(const p of (Array.isArray(seasonModel?.players)?seasonModel.players:[])){
+      const name=String(p?.name||"").trim(),key=WP_norm(name);
+      if(name&&key)byKey.set(key,p);
+    }
+    // Mobile setup must not depend on score-history having already loaded.
+    // Supabase/manual roster golfers are valid choices immediately.
+    for(const mp of (manualPlayers||[])){
+      const name=String(mp?.name||"").trim(),key=WP_norm(name);
+      if(!name||!key)continue;
+      if(byKey.has(key))continue;
+      byKey.set(key,{
+        name,
+        series:[],roundSeries:[],
+        hcap:Number.isFinite(Number(mp?.den_handicap))?Number(mp.den_handicap):NaN,
+        handicapIndex:Number.isFinite(Number(mp?.handicap_index))?Number(mp.handicap_index):NaN,
+        gender:String(mp?.gender||""),
+        manualRoster:true,noHistory:true,
+        metrics:{avgHcap:Number.isFinite(Number(mp?.den_handicap))?Number(mp.den_handicap):NaN}
+      });
+    }
+    return Array.from(byKey.values())
+      .filter(p=>p&&String(p?.name||"").trim())
+      .sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+  },[seasonModel,manualPlayers]);
   const [courseKey, setCourseKey] = React.useState("");
   const [selectedPlayers, setSelectedPlayers] = React.useState([]);
   const [planMode, setPlanMode] = React.useState(() => {
@@ -19014,6 +19050,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     try{const v=!!window.__WP_MOBILE_SETUP;window.__WP_MOBILE_SETUP=false;return v;}catch{return false;}
   });
   const [mobilePendingTeeId,setMobilePendingTeeId]=React.useState("");
+  const [mobilePlayersLoading,setMobilePlayersLoading]=React.useState(false);
+  const mobilePlayersLoadRef=React.useRef(false);
   const [customPoints, setCustomPoints] = React.useState(40);
   const [customGross, setCustomGross] = React.useState(85);
   const [weatherEnabled,setWeatherEnabled]=React.useState(false);
@@ -19050,6 +19088,38 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     }
     return map;
   }, [seasonRoundsAllYears,currentYear,manualPlayers]);
+
+  const reloadMobilePlayers=React.useCallback(async()=>{
+    if(typeof runSeasonAnalysis!=="function"||mobilePlayersLoading)return;
+    setMobilePlayersLoading(true);
+    try{
+      try{window.__WP_START_MODE="live";window.__WP_MOBILE_SETUP=true;}catch{}
+      await runSeasonAnalysis({afterView:"pre_round"});
+    }catch(e){
+      console.error("Could not load golfers for mobile setup",e);
+    }finally{
+      setMobilePlayersLoading(false);
+    }
+  },[runSeasonAnalysis,mobilePlayersLoading]);
+
+  React.useEffect(()=>{
+    if(!mobileQuickSetup||planMode!=="live")return;
+    if(players.length>0){
+      mobilePlayersLoadRef.current=false;
+      setMobilePlayersLoading(false);
+      return;
+    }
+    if(mobilePlayersLoadRef.current)return;
+    mobilePlayersLoadRef.current=true;
+    setMobilePlayersLoading(true);
+    try{window.__WP_START_MODE="live";window.__WP_MOBILE_SETUP=true;}catch{}
+    Promise.resolve(
+      typeof runSeasonAnalysis==="function"
+        ? runSeasonAnalysis({afterView:"pre_round"})
+        : null
+    ).catch(e=>console.error("Automatic golfer load failed",e))
+     .finally(()=>setMobilePlayersLoading(false));
+  },[mobileQuickSetup,planMode,players.length,runSeasonAnalysis]);
 
   React.useEffect(() => {
     if (!courseKey && courses.length) setCourseKey(courses[0].key);
@@ -19360,6 +19430,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       planningEvent={planningEvent}
       selectedDbTee={selectedDbTee}
       onPendingTee={setMobilePendingTeeId}
+      playersLoading={mobilePlayersLoading}
+      onReloadPlayers={reloadMobilePlayers}
       onStart={()=>{setMobileQuickSetup(false);setOnCourseMode(true);}}
       onAdvanced={()=>setMobileQuickSetup(false)}
       onHome={()=>setView("home")}
