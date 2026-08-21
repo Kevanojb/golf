@@ -16404,7 +16404,7 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
       .LRmsg{margin-top:12px;border-radius:16px;border:1px solid #dbe5ee;background:#f8fafc;padding:12px 14px}.LRmsg b{display:block;font-size:14px}.LRmsg span{font-size:10px;color:#64748b}
       .LRsec{margin-top:16px}.LRsec h3{font-size:18px;margin:0 0 8px;font-weight:950}.LRstrip{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:5px}.LRcell{border:1px solid #dbe5ee;border-radius:10px;padding:6px 4px;text-align:center;background:#f8fafc}.LRcell.played{background:#eef2ff;border-color:#c7d2fe}.LRcell.attack{background:#ecfdf5;border-color:#a7f3d0}.LRcell.stretch{background:#fffbeb;border-color:#fde68a}.LRcell.protect{background:#f8fafc}.LRh{font-size:8px;font-weight:950;color:#64748b}.LRg{font-size:22px;font-weight:950;line-height:1;margin-top:3px}.LRp{font-size:8px;font-weight:900;color:#475569;margin-top:2px}
       .LRholes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.LRhole{border:1px solid #dbe5ee;border-radius:15px;padding:11px;background:#f8fafc}.LRhole.attack{background:#ecfdf5;border-color:#a7f3d0}.LRhole.stretch{background:#fffbeb;border-color:#fde68a}.LRtop{display:flex;justify-content:space-between;gap:8px}.LRtag{font-size:8px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.LRgross{font-size:36px;font-weight:950;line-height:1;margin-top:6px}.LRpts{font-size:13px;font-weight:950}.LRreason{font-size:9px;color:#475569;line-height:1.3;margin-top:6px}
-      .LRplayed{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}.LRplayedCell{border:1px solid #c7d2fe;background:#eef2ff;border-radius:10px;padding:7px;text-align:center}.LRfoot{font-size:9px;color:#64748b;margin-top:14px;border-top:1px solid #e2e8f0;padding-top:9px}
+      .LRplayed{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}.LRplayedCell{border:1px solid #c7d2fe;background:#eef2ff;border-radius:10px;padding:7px;text-align:center}.LRplayedCell.better{background:#dcfce7;border-color:#4ade80}.LRplayedCell.worse{background:#fee2e2;border-color:#fb7185}.LRplayedCell.on{background:#f8fafc;border-color:#cbd5e1}.LRfoot{font-size:9px;color:#64748b;margin-top:14px;border-top:1px solid #e2e8f0;padding-top:9px}
       @media(max-width:700px){.LRdash{grid-template-columns:repeat(2,1fr)}.LRdash .hero{grid-column:1/-1}.LRstrip{grid-template-columns:repeat(6,1fr)}.LRholes{grid-template-columns:repeat(2,1fr)}.LRplayed{grid-template-columns:repeat(3,1fr)}.LRtitle{font-size:30px}}
       .PRpdfExportRoot .LRdash{grid-template-columns:repeat(5,minmax(0,1fr))!important}.PRpdfExportRoot .LRstrip{grid-template-columns:repeat(9,minmax(0,1fr))!important}.PRpdfExportRoot .LRholes{grid-template-columns:repeat(3,minmax(0,1fr))!important}
     </style>`;
@@ -16417,7 +16417,8 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
       return `<div class="LRcell ${cls}"><div class="LRh">H${h.hole}${h.played?' · DONE':''}</div><div class="LRg">${g}</div><div class="LRp">${pts} pt${pts===1?'':'s'}</div></div>`;
     }).join('')}</div>`;
 
-    const played=`<div class="LRplayed">${plan.holes.filter(h=>h.played).map(h=>`<div class="LRplayedCell"><div class="LRh">H${h.hole}</div><div style="font-size:17px;font-weight:950">${h.actualGross} gross</div><div class="LRp">${h.actualPts} pt${h.actualPts===1?'':'s'}</div></div>`).join('')}</div>`;
+    const originalByHole=new Map((plan.originalPlan?.holes||[]).map(h=>[Number(h.hole),h]));
+    const played=`<div class="LRplayed">${(plan.playOrder||plan.holes.map(h=>h.hole)).map(n=>plan.holes.find(h=>Number(h.hole)===Number(n))).filter(h=>h?.played).map(h=>{const o=originalByHole.get(Number(h.hole));let cls='on';if(o){if(isGrossLive){cls=Number(h.actualGross)<Number(o.targetGross)?'better':Number(h.actualGross)>Number(o.targetGross)?'worse':'on';}else{cls=Number(h.actualPts)>Number(o.targetPts)?'better':Number(h.actualPts)<Number(o.targetPts)?'worse':'on';}}return `<div class="LRplayedCell ${cls}"><div class="LRh">H${h.hole}</div><div style="font-size:17px;font-weight:950">${h.actualGross} gross</div><div class="LRp">${h.actualPts} pt${h.actualPts===1?'':'s'}${o?` · target ${isGrossLive?o.targetGross+' gross':o.targetPts+' pts'}`:''}</div></div>`;}).join('')}</div>`;
 
     const future=plan.holes.filter(h=>!h.played).map(h=>{
       const cue=String(h.planCue||'PROTECT');
@@ -16685,6 +16686,37 @@ function WP_OnCourseMode({
   const currentValue=current ? (liveScores[current.hole-1]??"") : "";
   const currentPlayed=Number.isFinite(Number(currentValue))&&Number(currentValue)>0;
 
+  const roundComplete=Number(liveResult.holesLeft)===0;
+  const originalByHole=new Map((liveResult.originalPlan?.holes||[]).map(h=>[Number(h.hole),h]));
+  const completedComparisons=(liveResult.playOrder||WP_liveHoleOrder(startHole)).map(holeNo=>{
+    const actual=holes.find(h=>Number(h.hole)===Number(holeNo));
+    const planned=originalByHole.get(Number(holeNo));
+    if(!actual||!planned) return null;
+    const actualGross=Number(actual.actualGross);
+    const actualPts=Number(actual.actualPts);
+    const targetGross=Number(planned.targetGross);
+    const targetPts=Number(planned.targetPts);
+    let result='on';
+    let delta=0;
+    if(liveMode==='gross'){
+      delta=targetGross-actualGross; // + = better than target
+      result=delta>0?'better':delta<0?'worse':'on';
+    }else{
+      delta=actualPts-targetPts; // + = better than target
+      result=delta>0?'better':delta<0?'worse':'on';
+    }
+    return {
+      hole:Number(holeNo),
+      roundHole:WP_liveRoundIndex(holeNo,startHole),
+      par:Number(actual.par),
+      actualGross,actualPts,targetGross,targetPts,result,delta
+    };
+  }).filter(Boolean);
+
+  const betterCount=completedComparisons.filter(x=>x.result==='better').length;
+  const worseCount=completedComparisons.filter(x=>x.result==='worse').length;
+  const onCount=completedComparisons.filter(x=>x.result==='on').length;
+
   return (
     <div className="oc-shell">
       <style>{`
@@ -16707,8 +16739,8 @@ function WP_OnCourseMode({
         .oc-nav{display:flex;justify-content:center;gap:8px;margin-top:10px}.oc-nav button{border:1px solid #cbd5e1;background:#fff;border-radius:999px;padding:8px 12px;font-size:10px;font-weight:900;color:#334155}
         .oc-next-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px}.oc-next-card{border:1px solid #dbe5ee;border-radius:17px;background:#fff;padding:11px}.oc-next-card.oc-primary{background:#ecfdf5;border-color:#a7f3d0}.oc-next-card.oc-stretch{background:#fffbeb;border-color:#fde68a}.oc-next-card.oc-opportunity{background:#eff6ff;border-color:#bfdbfe}.oc-next-card.oc-danger{background:#fff7ed;border-color:#fed7aa}
         .oc-next-top{display:flex;justify-content:space-between;gap:6px;font-size:8px;font-weight:950;color:#64748b}.oc-next-main{display:flex;justify-content:space-between;align-items:end;margin-top:5px}.oc-mini-k{font-size:7px;font-weight:900;color:#64748b}.oc-mini-gross{font-size:34px;font-weight:950;line-height:1}.oc-mini-points{font-size:13px;font-weight:950}.oc-mini-tag{font-size:9px;font-weight:950;margin-top:6px}.oc-mini-advice{font-size:9px;color:#64748b;line-height:1.3;margin-top:4px}
-        .oc-change{margin-top:10px;border-radius:14px;border:1px solid #dbe5ee;background:#fff;padding:10px}.oc-change-title{font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.1em;color:#64748b}.oc-change-text{font-size:11px;font-weight:850;color:#334155;margin-top:3px}
-        @media(max-width:430px){.oc-stat-v{font-size:16px}.oc-gross{font-size:88px}.oc-current{min-height:50vh}.oc-advice{font-size:12px}}
+        .oc-change{margin-top:10px;border-radius:14px;border:1px solid #dbe5ee;background:#fff;padding:10px}.oc-change-title{font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.1em;color:#64748b}.oc-change-text{font-size:11px;font-weight:850;color:#334155;margin-top:3px}.oc-complete{border-radius:24px;border:1px solid #dbe5ee;background:#fff;padding:14px;box-shadow:0 14px 34px rgba(15,23,42,.08)}.oc-complete-head{text-align:center;padding:8px 4px 14px}.oc-complete-title{font-size:28px;font-weight:950;letter-spacing:-.035em;color:#0f172a}.oc-complete-sub{font-size:11px;color:#64748b;margin-top:4px}.oc-complete-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}.oc-count{border-radius:13px;padding:9px;text-align:center;border:1px solid #e2e8f0}.oc-count.good{background:#ecfdf5;border-color:#86efac}.oc-count.bad{background:#fff1f2;border-color:#fda4af}.oc-count.on{background:#f8fafc}.oc-count-v{font-size:22px;font-weight:950}.oc-count-k{font-size:8px;font-weight:950;text-transform:uppercase;letter-spacing:.08em;color:#64748b}.oc-result-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.oc-result{border-radius:14px;border:1px solid #e2e8f0;padding:9px;background:#f8fafc}.oc-result.better{background:#dcfce7;border-color:#4ade80;box-shadow:inset 0 0 0 1px rgba(22,163,74,.08)}.oc-result.worse{background:#fee2e2;border-color:#fb7185;box-shadow:inset 0 0 0 1px rgba(225,29,72,.08)}.oc-result.on{background:#f8fafc;border-color:#cbd5e1}.oc-result-h{display:flex;justify-content:space-between;gap:6px;align-items:center;font-size:9px;font-weight:950}.oc-result-main{display:flex;align-items:end;justify-content:space-between;gap:7px;margin-top:5px}.oc-result-actual{font-size:25px;font-weight:950;line-height:1}.oc-result-target{font-size:8px;color:#64748b;text-align:right}.oc-result-delta{font-size:9px;font-weight:950;margin-top:5px}.oc-result.better .oc-result-delta{color:#15803d}.oc-result.worse .oc-result-delta{color:#be123c}.oc-result.on .oc-result-delta{color:#64748b}.oc-legend{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:9px;font-weight:900;color:#64748b}.oc-dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}.oc-dot.good{background:#86efac}.oc-dot.bad{background:#fda4af}.oc-dot.on{background:#cbd5e1}
+        @media(max-width:430px){.oc-result-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-stat-v{font-size:16px}.oc-gross{font-size:88px}.oc-current{min-height:50vh}.oc-advice{font-size:12px}}
       `}</style>
 
       <div className="oc-wrap">
@@ -16743,7 +16775,47 @@ function WP_OnCourseMode({
               : 'Round complete.'}</div>
           </div>
 
-          {current?<div className={`oc-current ${cueClass(current)}`}>
+          {roundComplete?<div className="oc-complete">
+            <div className="oc-complete-head">
+              <div className="oc-complete-title">🎯 Round Complete</div>
+              <div className="oc-complete-sub">
+                {liveMode==='gross'
+                  ? `Target ${liveResult.liveTarget} gross · Actual ${liveResult.actualGrossTotal} · ${liveResult.actualGrossTotal<liveResult.liveTarget?`${liveResult.liveTarget-liveResult.actualGrossTotal} better than target`:liveResult.actualGrossTotal>liveResult.liveTarget?`${liveResult.actualGrossTotal-liveResult.liveTarget} worse than target`:'exactly on target'}`
+                  : `Target ${liveResult.liveTarget} pts · Actual ${liveResult.actualPts} pts · ${liveResult.actualPts>liveResult.liveTarget?`+${liveResult.actualPts-liveResult.liveTarget} better than target`:liveResult.actualPts<liveResult.liveTarget?`${liveResult.liveTarget-liveResult.actualPts} below target`:'exactly on target'}`
+                }
+              </div>
+              <div className="oc-complete-counts">
+                <div className="oc-count good"><div className="oc-count-v">{betterCount}</div><div className="oc-count-k">Better than target</div></div>
+                <div className="oc-count on"><div className="oc-count-v">{onCount}</div><div className="oc-count-k">On target</div></div>
+                <div className="oc-count bad"><div className="oc-count-v">{worseCount}</div><div className="oc-count-k">Worse than target</div></div>
+              </div>
+              <div className="oc-legend"><span><i className="oc-dot good"></i>Better</span><span><i className="oc-dot on"></i>On plan</span><span><i className="oc-dot bad"></i>Worse</span></div>
+            </div>
+
+            <div className="oc-result-grid">
+              {completedComparisons.map(x=><div key={x.hole} className={`oc-result ${x.result}`}>
+                <div className="oc-result-h"><span>#{x.roundHole} · H{x.hole}</span><span>PAR {x.par}</span></div>
+                <div className="oc-result-main">
+                  <div>
+                    <div style={{fontSize:7,fontWeight:900,color:"#64748b",textTransform:"uppercase"}}>Actual</div>
+                    <div className="oc-result-actual">{liveMode==='gross'?x.actualGross:`${x.actualPts} pts`}</div>
+                  </div>
+                  <div className="oc-result-target">
+                    TARGET<br/><b>{liveMode==='gross'?x.targetGross:`${x.targetPts} pts`}</b>
+                  </div>
+                </div>
+                <div className="oc-result-delta">
+                  {x.result==='better'
+                    ? `✓ Better by ${Math.abs(x.delta)} ${liveMode==='gross'?(Math.abs(x.delta)===1?'stroke':'strokes'):(Math.abs(x.delta)===1?'point':'points')}`
+                    : x.result==='worse'
+                      ? `↓ Worse by ${Math.abs(x.delta)} ${liveMode==='gross'?(Math.abs(x.delta)===1?'stroke':'strokes'):(Math.abs(x.delta)===1?'point':'points')}`
+                      : '● Exactly on target'}
+                </div>
+              </div>)}
+            </div>
+          </div>:null}
+
+          {!roundComplete && current?<div className={`oc-current ${cueClass(current)}`}>
             <div>
               <div className="oc-holehead">
                 <div className="oc-hole-no">ROUND HOLE {WP_liveRoundIndex(current.hole,startHole)} OF 18 · COURSE H{current.hole}</div>
