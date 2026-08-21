@@ -17660,9 +17660,18 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
   }
   if(holes.length<9) return null;
 
+  // App-109: the live scoring caddie uses the same course/time weather layer
+  // as the pre-round planner. Completed holes stay locked; weather only affects
+  // the remaining route and its probability.
+  if(options?.weatherContext){
+    WP_applyWeatherToHoles(holes,options.weatherContext);
+  }
+
   // Original route = benchmark before any live scores were entered.
   const original=WP_makePlayerPlan(model,event,p,courseKey,handicapMap,{
-    mode:isGross?'gross':'stableford',target,tempHI,tempMode
+    mode:isGross?'gross':'stableford',target,tempHI,tempMode,
+    weatherContext:options?.weatherContext||null,
+    layoutOverride:options?.layoutOverride
   });
 
   let actualPts=0, actualGrossTotal=0, holesPlayed=0;
@@ -17974,7 +17983,7 @@ function WP_liveScoringCaddie(plan){
   };
 }
 
-function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,tempMode="whs",liveMode="stableford",startHole=1,actualGross=[],eventOverride=null,layoutOverride=null}){
+function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,tempMode="whs",liveMode="stableford",startHole=1,actualGross=[],eventOverride=null,layoutOverride=null,weatherContext=null}){
   try{
     const event=eventOverride||WP_findLatestEventAtCourse(model,courseKey);
     if(!event) return {ok:false,error:'Choose a course and tee before starting Live Replan.'};
@@ -17984,7 +17993,7 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
     const scores=(actualGross||[]).map(Number);
     if(!scores.some(x=>Number.isFinite(x)&&x>0)) return {ok:false,error:'Enter at least one completed-hole gross score.'};
 
-    const plan=WP_makeLiveReplan(model,event,p,courseKey,handicapMap,{target,tempHI,tempMode,liveMode,startHole,actualGross,layoutOverride});
+    const plan=WP_makeLiveReplan(model,event,p,courseKey,handicapMap,{target,tempHI,tempMode,liveMode,startHole,actualGross,layoutOverride,weatherContext});
     if(!plan) return {ok:false,error:'Could not build the live replan.'};
     const caddie=WP_liveScoringCaddie(plan);
 
@@ -18241,7 +18250,7 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
 
 function WP_OnCourseMode({
   model, event, courseKey, player, handicapMap, target, liveMode, startHole, layoutOverride,
-  tempHI, tempMode, liveScores, setLiveScores, onExit, onViewFull
+  tempHI, tempMode, liveScores, setLiveScores, onExit, onViewFull, weatherContext=null
 }){
   const [cursorHole,setCursorHole]=React.useState(()=>{
     const order=WP_liveHoleOrder(startHole);
@@ -18255,9 +18264,9 @@ function WP_OnCourseMode({
   const liveResult=React.useMemo(()=>{
     if(!model||!event||!player) return null;
     return WP_makeLiveReplan(model,event,player,courseKey,handicapMap,{
-      target:Number(target),tempHI,tempMode,liveMode,startHole,actualGross:liveScores,layoutOverride
+      target:Number(target),tempHI,tempMode,liveMode,startHole,actualGross:liveScores,layoutOverride,weatherContext
     });
-  },[model,event,player,courseKey,handicapMap,target,tempHI,tempMode,liveMode,startHole,layoutOverride,liveScores]);
+  },[model,event,player,courseKey,handicapMap,target,tempHI,tempMode,liveMode,startHole,layoutOverride,liveScores,weatherContext]);
 
   React.useEffect(()=>{
     const order=WP_liveHoleOrder(startHole);
@@ -18454,6 +18463,7 @@ function WP_OnCourseMode({
             <div className="oc-stat"><div className="oc-stat-k">Left</div><div className="oc-stat-v">{liveResult.holesLeft}</div></div>
             <div className="oc-stat"><div className="oc-stat-k">Target+</div><div className="oc-stat-v">{prob}</div></div>
           </div>
+          {weatherContext?<div style={{marginTop:6,fontSize:9,fontWeight:850,color:"#bae6fd",textAlign:"center"}}>☁️ WEATHER ON · {WP_weatherLabel(WP_weatherAtHole(weatherContext,liveResult.nextCourseHole||1))}</div>:null}
         </div>
 
         <div className="oc-body">
@@ -18724,7 +18734,9 @@ function WP_MobileOnCourseSetup({
   liveScoringMode,setLiveScoringMode,customGross,setCustomGross,customPoints,setCustomPoints,
   liveStartHole,setLiveStartHole,tempHandicaps,setTempHandicaps,tempHandicapModes,setTempHandicapModes,
   liveScores,setLiveScores,planningEvent,selectedDbTee,onStart,onAdvanced,onHome,onPendingTee,
-  playersLoading=false,onReloadPlayers
+  playersLoading=false,onReloadPlayers,
+  weatherEnabled,setWeatherEnabled,weatherBusy,weatherError,weatherSummary,
+  weatherDate,setWeatherDate,weatherTeeTime,setWeatherTeeTime,onLoadWeather
 }){
   const [step,setStep]=React.useState(0);
   const [latestPlan,setLatestPlan]=React.useState(()=>WP_loadLatestPreRoundPlanSnapshot());
@@ -18732,10 +18744,31 @@ function WP_MobileOnCourseSetup({
   const [playerSearch,setPlayerSearch]=React.useState("");
 
   const playerName=selectedPlayers.length===1?String(selectedPlayers[0]||""):"";
+  const selectedPlayer=(players||[]).find(p=>String(p?.name||"")===playerName)||null;
+  const storedMode=String(tempHandicapModes?.[playerName]||"den").toLowerCase();
+  const handicapMode=(storedMode==="whs"||storedMode==="fixed")?storedMode:"den";
+  const enteredHandicap=String(tempHandicaps?.[playerName]??"").trim();
   const filteredPlayers=(players||[]).filter(p=>{
     const n=String(p?.name||"");
     return !playerSearch.trim() || n.toLowerCase().includes(playerSearch.trim().toLowerCase());
   });
+  const storedDenHandicap=(()=>{
+    const n1=Number(selectedPlayer?.metrics?.avgHcap);
+    const n2=Number(selectedPlayer?.hcap);
+    const n3=Number(selectedPlayer?.handicapIndex);
+    return Number.isFinite(n1)?n1:(Number.isFinite(n2)?n2:(Number.isFinite(n3)?n3:NaN));
+  })();
+  const teeSlope=Number(selectedDbTee?.slope);
+  const teeRating=Number(selectedDbTee?.rating);
+  const teePar=(selectedDbTee?.pars||[]).filter(Number.isFinite).reduce((s,v)=>s+Number(v),0);
+  const whsIndex=Number(enteredHandicap);
+  const whsCourseHandicap=(handicapMode==="whs" && Number.isFinite(whsIndex) && Number.isFinite(teeSlope))
+    ? Math.round(whsIndex*(teeSlope/113) + (Number.isFinite(teeRating)&&Number.isFinite(teePar)?(teeRating-teePar):0))
+    : NaN;
+  const fixedPlayingHandicap=(handicapMode==="fixed"&&Number.isFinite(Number(enteredHandicap)))
+    ? Math.round(Number(enteredHandicap))
+    : NaN;
+
   const course=courses.find(c=>String(c.key)===String(courseKey))||null;
   const target=liveScoringMode==='gross'?Number(customGross):Number(customPoints);
   const canStart=!!playerName&&!!courseKey&&!!selectedDbTee&&!!planningEvent&&Number.isFinite(target);
@@ -18759,7 +18792,7 @@ function WP_MobileOnCourseSetup({
       const n=Number(r.scores?.[i]); return Number.isFinite(n)&&n>0?String(Math.round(n)):"";
     }));
     else setLiveScores(Array(18).fill(""));
-    setStep(3);
+    setStep(4);
   };
 
   const newRound=()=>{
@@ -18777,6 +18810,7 @@ function WP_MobileOnCourseSetup({
   const stepTitle=step===0?"Ready to play?"
     :step===1?"Who is playing?"
     :step===2?"Where are you playing?"
+    :step===3?"Handicap today"
     :"Check and start";
 
   return <div className="mq-shell">
@@ -18799,6 +18833,7 @@ function WP_MobileOnCourseSetup({
       .mq-player-empty{border:1px dashed #cbd5e1;border-radius:16px;padding:16px;text-align:center;font-size:12px;color:#64748b}.mq-player-empty b{display:block;color:#0f172a;font-size:14px;margin-bottom:4px}.mq-retry{margin-top:10px;min-height:48px;border:0;border-radius:15px;background:#0f172a;color:#fff;padding:0 16px;font-size:12px;font-weight:950}.mq-spinner{display:inline-block;width:16px;height:16px;border:2px solid #cbd5e1;border-top-color:#10b981;border-radius:999px;animation:mqspin .8s linear infinite;margin-right:7px;vertical-align:-3px}@keyframes mqspin{to{transform:rotate(360deg)}}
       .mq-two{display:grid;grid-template-columns:1fr 1fr;gap:9px}.mq-choice{min-height:58px;border-radius:16px;border:2px solid #dbe5ee;background:#fff;font-size:13px;font-weight:950}.mq-choice.on{border-color:#6ee7b7;background:#ecfdf5;color:#065f46}
       .mq-summary{display:flex;flex-direction:column;gap:8px;margin-top:14px}.mq-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #e2e8f0;background:#f8fafc;border-radius:14px;padding:10px 12px}.mq-row-k{font-size:9px;font-weight:900;color:#64748b;text-transform:uppercase}.mq-row-v{font-size:14px;font-weight:950;text-align:right}
+      .mq-weather{margin-top:10px;border:1px solid #bae6fd;border-radius:17px;background:linear-gradient(145deg,#f0f9ff,#fff);padding:12px}.mq-weather-top{display:flex;align-items:center;justify-content:space-between;gap:10px}.mq-weather-title{font-size:13px;font-weight:950;color:#0c4a6e}.mq-weather-sub{font-size:9px;color:#64748b;margin-top:3px;line-height:1.35}.mq-weather-btn{min-height:44px;border:0;border-radius:14px;padding:0 13px;background:#0369a1;color:#fff;font-size:10px;font-weight:950;white-space:nowrap}.mq-weather-btn:disabled{opacity:.5}.mq-weather-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:9px}.mq-weather-input{width:100%;min-height:48px;border:1px solid #bae6fd;border-radius:13px;background:#fff;padding:0 10px;font-size:14px;font-weight:900;color:#0f172a}.mq-weather-live{margin-top:9px;border-radius:13px;background:#e0f2fe;padding:9px 10px;font-size:11px;font-weight:900;color:#075985}.mq-weather-error{margin-top:7px;font-size:9px;font-weight:850;color:#be123c}
       .mq-start{width:100%;min-height:64px;border:0;border-radius:20px;margin-top:14px;background:linear-gradient(90deg,#047857,#059669);color:#fff;font-size:18px;font-weight:950;box-shadow:0 12px 28px rgba(5,150,105,.24)}.mq-start:disabled{opacity:.35;box-shadow:none}.mq-next{width:100%;min-height:58px;border:0;border-radius:18px;margin-top:14px;background:#0f172a;color:#fff;font-size:16px;font-weight:950}.mq-note{text-align:center;font-size:9px;color:#64748b;margin-top:8px}
       .mq-edit{border:0;background:transparent;color:#047857;font-size:10px;font-weight:950;text-decoration:underline}
       @media(max-width:390px){.mq-title{font-size:26px}.mq-card{padding:14px}.mq-big{min-height:65px}.mq-big-title{font-size:16px}}
@@ -18811,8 +18846,8 @@ function WP_MobileOnCourseSetup({
       </div>
 
       <div className="mq-card">
-        <div className="mq-progress">{[0,1,2,3].map(n=><div key={n} className={`mq-dot ${n<=step?'on':''}`}/>)}</div>
-        <div className="mq-k">QUICK SETUP · {step+1} OF 4</div>
+        <div className="mq-progress">{[0,1,2,3,4].map(n=><div key={n} className={`mq-dot ${n<=step?'on':''}`}/>)}</div>
+        <div className="mq-k">QUICK SETUP · {step+1} OF 5</div>
         <div className="mq-title">{stepTitle}</div>
 
         {step===0?<>
@@ -18902,18 +18937,127 @@ function WP_MobileOnCourseSetup({
           <select className="mq-select" value={liveStartHole} onChange={e=>setLiveStartHole(Number(e.target.value)||1)}>
             {Array.from({length:18},(_,i)=><option key={i+1} value={i+1}>Hole {i+1}{i===0?' · normal start':''}</option>)}
           </select>
-          <button className="mq-next" disabled={!courseKey||!selectedTeeId||!Number.isFinite(target)} onClick={()=>setStep(3)}>REVIEW & START →</button>
+          <button className="mq-next" disabled={!courseKey||!selectedTeeId||!Number.isFinite(target)} onClick={()=>setStep(3)}>NEXT · HANDICAP TODAY →</button>
         </>:null}
 
         {step===3?<>
-          <div className="mq-sub">No duplicate setup. These are the only details the live caddie needs.</div>
+          <div className="mq-sub">Den Society is the default. Change it only if today's round is using a temporary WHS Index or a fixed playing handicap.</div>
+
+          <div className="mq-stack">
+            <button type="button" className={`mq-big ${handicapMode==='den'?'primary':''}`} onClick={()=>{
+              if(!playerName)return;
+              setTempHandicapModes(prev=>({...prev,[playerName]:"den"}));
+              setTempHandicaps(prev=>{const n={...prev};delete n[playerName];return n;});
+            }}>
+              <div>
+                <div className="mq-big-title">DEN SOCIETY HANDICAP</div>
+                <div className="mq-big-sub">{Number.isFinite(storedDenHandicap)?`Use ${storedDenHandicap.toFixed(1)} directly as the playing handicap.`:"Use the latest stored Den handicap."}</div>
+              </div>
+              <div className="mq-player-check">{handicapMode==='den'?'✓':'›'}</div>
+            </button>
+
+            <button type="button" className={`mq-big ${handicapMode==='whs'?'primary':''}`} onClick={()=>{
+              if(!playerName)return;
+              setTempHandicapModes(prev=>({...prev,[playerName]:"whs"}));
+            }}>
+              <div>
+                <div className="mq-big-title">TEMPORARY WHS INDEX</div>
+                <div className="mq-big-sub">Enter today's Handicap Index. The app converts it to Course Handicap for this tee.</div>
+              </div>
+              <div className="mq-player-check">{handicapMode==='whs'?'✓':'›'}</div>
+            </button>
+
+            {handicapMode==='whs'?<div>
+              <div className="mq-label">Today's WHS Index</div>
+              <input className="mq-number" inputMode="decimal" type="number" min="0" max="54" step="0.1"
+                placeholder="e.g. 7.4"
+                value={enteredHandicap}
+                onChange={e=>setTempHandicaps(prev=>({...prev,[playerName]:e.target.value}))}
+              />
+              <div className="mq-row" style={{marginTop:8}}>
+                <div><div className="mq-row-k">Course Handicap</div><div className="mq-row-v">{Number.isFinite(whsCourseHandicap)?whsCourseHandicap:'—'}</div></div>
+                <div className="mq-big-sub">{selectedDbTee?.teeName||'Selected tee'}{Number.isFinite(teeSlope)?` · Slope ${Math.round(teeSlope)}`:''}{Number.isFinite(teeRating)?` · CR ${teeRating.toFixed(1)}`:''}</div>
+              </div>
+            </div>:null}
+
+            <button type="button" className={`mq-big ${handicapMode==='fixed'?'primary':''}`} onClick={()=>{
+              if(!playerName)return;
+              setTempHandicapModes(prev=>({...prev,[playerName]:"fixed"}));
+            }}>
+              <div>
+                <div className="mq-big-title">TEMPORARY FIXED HANDICAP</div>
+                <div className="mq-big-sub">Use exactly this many shots. No Slope or Course Rating conversion.</div>
+              </div>
+              <div className="mq-player-check">{handicapMode==='fixed'?'✓':'›'}</div>
+            </button>
+
+            {handicapMode==='fixed'?<div>
+              <div className="mq-label">Playing handicap today</div>
+              <input className="mq-number" inputMode="numeric" type="number" min="0" max="54" step="1"
+                placeholder="e.g. 12"
+                value={enteredHandicap}
+                onChange={e=>setTempHandicaps(prev=>({...prev,[playerName]:e.target.value}))}
+              />
+              <div className="mq-row" style={{marginTop:8}}>
+                <div><div className="mq-row-k">Playing Handicap</div><div className="mq-row-v">{Number.isFinite(fixedPlayingHandicap)?fixedPlayingHandicap:'—'}</div></div>
+                <div className="mq-big-sub">Used exactly as entered.</div>
+              </div>
+            </div>:null}
+          </div>
+
+          <button className="mq-next"
+            disabled={
+              handicapMode==='whs' ? !Number.isFinite(whsIndex) :
+              handicapMode==='fixed' ? !Number.isFinite(fixedPlayingHandicap) :
+              false
+            }
+            onClick={()=>setStep(4)}
+          >REVIEW & START →</button>
+        </>:null}
+
+        {step===4?<>
+          <div className="mq-sub">No duplicate setup. Confirm the course, tee, handicap and target, then start.</div>
           <div className="mq-summary">
             <div className="mq-row"><div><div className="mq-row-k">Golfer</div><div className="mq-row-v">{playerName||'—'}</div></div><button className="mq-edit" onClick={()=>setStep(1)}>CHANGE</button></div>
             <div className="mq-row"><div><div className="mq-row-k">Course</div><div className="mq-row-v">{course?.label||'—'}</div></div><button className="mq-edit" onClick={()=>setStep(2)}>CHANGE</button></div>
             <div className="mq-row"><div><div className="mq-row-k">Tee</div><div className="mq-row-v">{selectedDbTee?.teeName||'Loading…'}</div></div></div>
+            <div className="mq-row">
+              <div>
+                <div className="mq-row-k">Handicap today</div>
+                <div className="mq-row-v">
+                  {handicapMode==='den'
+                    ? `Den Society${Number.isFinite(storedDenHandicap)?` · ${storedDenHandicap.toFixed(1)}`:''}`
+                    : handicapMode==='whs'
+                      ? `WHS ${Number.isFinite(whsIndex)?whsIndex.toFixed(1):'—'} → CH ${Number.isFinite(whsCourseHandicap)?whsCourseHandicap:'—'}`
+                      : `Fixed · ${Number.isFinite(fixedPlayingHandicap)?fixedPlayingHandicap:'—'} shots`}
+                </div>
+              </div>
+              <button className="mq-edit" onClick={()=>setStep(3)}>CHANGE</button>
+            </div>
             <div className="mq-row"><div><div className="mq-row-k">Target</div><div className="mq-row-v">{Number.isFinite(target)?Math.round(target):'—'} {liveScoringMode==='gross'?'gross':'pts'}</div></div></div>
             <div className="mq-row"><div><div className="mq-row-k">Start</div><div className="mq-row-v">Hole {liveStartHole}</div></div></div>
           </div>
+
+          <div className="mq-weather">
+            <div className="mq-weather-top">
+              <div>
+                <div className="mq-weather-title">☁️ Weather for this round</div>
+                <div className="mq-weather-sub">Optional. Add it and the live caddie will adjust the remaining-hole route and target probability as you play.</div>
+              </div>
+              <button type="button" className="mq-weather-btn" disabled={weatherBusy||!courseKey} onClick={onLoadWeather}>
+                {weatherBusy?'LOADING…':weatherEnabled&&weatherSummary?'REFRESH':'ADD WEATHER'}
+              </button>
+            </div>
+            <div className="mq-weather-grid">
+              <input className="mq-weather-input" type="date" value={weatherDate} onChange={e=>{setWeatherDate(e.target.value);setWeatherEnabled(false);}} />
+              <input className="mq-weather-input" type="time" value={weatherTeeTime} onChange={e=>{setWeatherTeeTime(e.target.value);setWeatherEnabled(false);}} />
+            </div>
+            {weatherEnabled&&weatherSummary?<div className="mq-weather-live">
+              ✓ {WP_weatherLabel(weatherSummary)}
+            </div>:null}
+            {weatherError?<div className="mq-weather-error">{weatherError}</div>:null}
+          </div>
+
           <button className="mq-start" disabled={!canStart} onClick={onStart}>⛳ START LIVE CADDIE</button>
           <div className="mq-note">{canStart?"Scores autosave after every hole.":"Waiting for course/tee data to finish loading…"}</div>
         </>:null}
@@ -19432,6 +19576,16 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       onPendingTee={setMobilePendingTeeId}
       playersLoading={mobilePlayersLoading}
       onReloadPlayers={reloadMobilePlayers}
+      weatherEnabled={weatherEnabled}
+      setWeatherEnabled={setWeatherEnabled}
+      weatherBusy={weatherBusy}
+      weatherError={weatherError}
+      weatherSummary={weatherSummary}
+      weatherDate={weatherDate}
+      setWeatherDate={setWeatherDate}
+      weatherTeeTime={weatherTeeTime}
+      setWeatherTeeTime={setWeatherTeeTime}
+      onLoadWeather={loadWeatherForPlan}
       onStart={()=>{setMobileQuickSetup(false);setOnCourseMode(true);}}
       onAdvanced={()=>setMobileQuickSetup(false)}
       onHome={()=>setView("home")}
@@ -19455,12 +19609,14 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       tempMode={tempHandicapModes?.[selectedPlayers[0]]||"den"}
       liveScores={liveScores}
       setLiveScores={setLiveScores}
+      weatherContext={(weatherEnabled&&courseWeather)?{...courseWeather,date:weatherDate,teeTime:weatherTeeTime,location:weatherLocation,geometryByHole}:null}
       onExit={()=>setOnCourseMode(false)}
       onViewFull={()=>{
         const r=WP_generateLiveReplanHTML({
           model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
           target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],
-          tempMode:tempHandicapModes?.[selectedPlayers[0]]||"den",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores,eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null
+          tempMode:tempHandicapModes?.[selectedPlayers[0]]||"den",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores,eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null,
+          weatherContext:(weatherEnabled&&courseWeather)?{...courseWeather,date:weatherDate,teeTime:weatherTeeTime,location:weatherLocation,geometryByHole}:null
         });
         if(r?.ok){
           window.__dslSeasonReportParams={
@@ -19513,7 +19669,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         const r=WP_generateLiveReplanHTML({
           model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
           target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],tempMode:tempHandicapModes?.[selectedPlayers[0]]||"den",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores,
-          eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null
+          eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null,
+          weatherContext:(weatherEnabled&&courseWeather)?{...courseWeather,date:weatherDate,teeTime:weatherTeeTime,location:weatherLocation,geometryByHole}:null
         });
         if(!r?.ok){ alert(r?.error||"Could not build live replan."); return; }
         window.__dslSeasonReportParams={
