@@ -13663,7 +13663,19 @@ const scorecardIntel = (() => {
     .PRpdfExportRoot .PRcourseDnaPage .PRplanV{font-size:11.5px!important}
     .PRpdfExportRoot .PRcourseDnaPage .PRplanS{font-size:7.8px!important}
 
-  </style>
+  
+.PRspiderWrap{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(210px,.95fr);gap:10px;align-items:center}
+.PRspiderFigures{border:1px solid #e2e8f0;border-radius:12px;background:#fff;padding:8px}
+.PRspiderHead,.PRspiderRow{display:grid;grid-template-columns:1.25fr .7fr .7fr .55fr;gap:5px;align-items:center}
+.PRspiderHead{font-size:7px;font-weight:950;letter-spacing:.06em;text-transform:uppercase;color:#64748b;padding:0 5px 5px}
+.PRspiderRow{font-size:8px;padding:5px;border-top:1px solid #f1f5f9}
+.PRspiderLabel{font-weight:900;color:#334155}
+.PRspiderVal{text-align:center;font-weight:950}.PRspiderVal.latest{color:#16a34a}.PRspiderVal.period{color:#2563eb}
+.PRspiderChange{text-align:center;font-weight:950;border-radius:999px;padding:2px 4px}
+.PRspiderUp .PRspiderChange{background:#dcfce7;color:#166534}.PRspiderDown .PRspiderChange{background:#fee2e2;color:#991b1b}.PRspiderEven .PRspiderChange{background:#f1f5f9;color:#64748b}
+.PRspiderNote{font-size:7px;color:#64748b;line-height:1.3;margin-top:6px;border-top:1px solid #e2e8f0;padding-top:6px}
+@media(max-width:700px){.PRspiderWrap{grid-template-columns:1fr}.PRspiderFigures{margin-top:2px}}
+</style>
 
   <div class="PRr">
     <div class="PRvisualHero">
@@ -14171,15 +14183,34 @@ ${(postRoundIntel.exactCategories?.roundSummaries?.length >= 1) ? `
         const score=v=>Number.isFinite(Number(v))?Math.max(12,Math.min(92,50+Number(v)*32)):50;
         const latestPoly=axes.map(([l,a],i)=>pt(i,maxR*score(a)/100).join(",")).join(" ");
         const periodPoly=axes.map(([l,a,b],i)=>pt(i,maxR*score(b)/100).join(",")).join(" ");
-        return `<svg class="PRchartSvg" viewBox="0 0 300 290">
-          ${[25,50,75,100].map(q=>`<polygon points="${axes.map((_,i)=>pt(i,maxR*q/100).join(",")).join(" ")}" fill="none" stroke="${q===50?"#64748b":"#e2e8f0"}" stroke-width="${q===50?1.8:1}" ${q===50?'stroke-dasharray="4 3"':""}/>`).join("")}
-          ${axes.map((_,i)=>{const [x2,y2]=pt(i,maxR);return `<line x1="${cx}" y1="${cy}" x2="${x2}" y2="${y2}" stroke="#e2e8f0"/>`;}).join("")}
-          <polygon points="${periodPoly}" fill="rgba(37,99,235,.10)" stroke="#2563eb" stroke-width="2.5"/>
-          <polygon points="${latestPoly}" fill="rgba(22,163,74,.12)" stroke="#16a34a" stroke-width="3"/>
-          ${axes.map(([label],i)=>{const [lx,ly]=pt(i,maxR+20);return `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="8.5" font-weight="800" fill="#475569">${PR_escapeHtml(label)}</text>`;}).join("")}
-          <text x="16" y="272" font-size="9" font-weight="900" fill="#16a34a">LATEST ROUND</text>
-          <text x="105" y="272" font-size="9" font-weight="900" fill="#2563eb">SELECTED PERIOD</text>
-        </svg>`;
+        const fmt=v=>Number.isFinite(Number(v))?`${Number(v)>=0?"+":""}${Number(v).toFixed(1)}`:"—";
+        const figureRows=axes.map(([label,latest,period])=>{
+          const change=(Number.isFinite(Number(latest))&&Number.isFinite(Number(period)))?Number(latest)-Number(period):NaN;
+          const tone=Number.isFinite(change)?(change>0?"PRspiderUp":change<0?"PRspiderDown":"PRspiderEven"):"PRspiderEven";
+          const changeTxt=Number.isFinite(change)?`${change>0?"+":""}${change.toFixed(1)}`:"—";
+          return `<div class="PRspiderRow ${tone}">
+            <div class="PRspiderLabel">${PR_escapeHtml(label)}</div>
+            <div class="PRspiderVal latest">${fmt(latest)}</div>
+            <div class="PRspiderVal period">${fmt(period)}</div>
+            <div class="PRspiderChange">${changeTxt}</div>
+          </div>`;
+        }).join("");
+        return `<div class="PRspiderWrap">
+          <svg class="PRchartSvg" viewBox="0 0 300 290">
+            ${[25,50,75,100].map(q=>`<polygon points="${axes.map((_,i)=>pt(i,maxR*q/100).join(",")).join(" ")}" fill="none" stroke="${q===50?"#64748b":"#e2e8f0"}" stroke-width="${q===50?1.8:1}" ${q===50?'stroke-dasharray="4 3"':""}/>`).join("")}
+            ${axes.map((_,i)=>{const [x2,y2]=pt(i,maxR);return `<line x1="${cx}" y1="${cy}" x2="${x2}" y2="${y2}" stroke="#e2e8f0"/>`;}).join("")}
+            <polygon points="${periodPoly}" fill="rgba(37,99,235,.10)" stroke="#2563eb" stroke-width="2.5"/>
+            <polygon points="${latestPoly}" fill="rgba(22,163,74,.12)" stroke="#16a34a" stroke-width="3"/>
+            ${axes.map(([label],i)=>{const [lx,ly]=pt(i,maxR+20);return `<text x="${lx}" y="${ly}" text-anchor="middle" font-size="8.5" font-weight="800" fill="#475569">${PR_escapeHtml(label)}</text>`;}).join("")}
+            <text x="16" y="272" font-size="9" font-weight="900" fill="#16a34a">LATEST ROUND</text>
+            <text x="105" y="272" font-size="9" font-weight="900" fill="#2563eb">SELECTED PERIOD</text>
+          </svg>
+          <div class="PRspiderFigures">
+            <div class="PRspiderHead"><div>Category</div><div>Latest</div><div>Period</div><div>Δ</div></div>
+            ${figureRows}
+            <div class="PRspiderNote">Δ = latest round minus selected-period average. Positive = latest round better than normal; negative = latest round below normal.</div>
+          </div>
+        </div>`;
       })()}
     </div>
 
