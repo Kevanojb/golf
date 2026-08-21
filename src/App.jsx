@@ -17040,6 +17040,25 @@ function WP_OnCourseMode({
   const worseCount=completedComparisons.filter(x=>x.result==='worse').length;
   const onCount=completedComparisons.filter(x=>x.result==='on').length;
 
+  // Course-nine totals are always H1–9 and H10–18, even for shotgun starts.
+  // This keeps the score summary identical to a normal scorecard.
+  const frontNine=completedComparisons.filter(x=>x.hole>=1&&x.hole<=9);
+  const backNine=completedComparisons.filter(x=>x.hole>=10&&x.hole<=18);
+  const sumBy=(arr,key)=>arr.reduce((s,x)=>s+(Number.isFinite(Number(x?.[key]))?Number(x[key]):0),0);
+
+  const frontGross=sumBy(frontNine,'actualGross');
+  const backGross=sumBy(backNine,'actualGross');
+  const totalGross18=frontGross+backGross;
+
+  const frontPts=sumBy(frontNine,'actualPts');
+  const backPts=sumBy(backNine,'actualPts');
+  const totalPts18=frontPts+backPts;
+
+  const frontTargetGross=sumBy(frontNine,'targetGross');
+  const backTargetGross=sumBy(backNine,'targetGross');
+  const frontTargetPts=sumBy(frontNine,'targetPts');
+  const backTargetPts=sumBy(backNine,'targetPts');
+
   return (
     <div className="oc-shell">
       <style>{`
@@ -17062,8 +17081,8 @@ function WP_OnCourseMode({
         .oc-nav{display:flex;justify-content:center;gap:8px;margin-top:10px}.oc-nav button{border:1px solid #cbd5e1;background:#fff;border-radius:999px;padding:8px 12px;font-size:10px;font-weight:900;color:#334155}
         .oc-next-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px}.oc-next-card{border:1px solid #dbe5ee;border-radius:17px;background:#fff;padding:11px}.oc-next-card.oc-primary{background:#ecfdf5;border-color:#a7f3d0}.oc-next-card.oc-stretch{background:#fffbeb;border-color:#fde68a}.oc-next-card.oc-opportunity{background:#eff6ff;border-color:#bfdbfe}.oc-next-card.oc-danger{background:#fff7ed;border-color:#fed7aa}
         .oc-next-top{display:flex;justify-content:space-between;gap:6px;font-size:8px;font-weight:950;color:#64748b}.oc-next-main{display:flex;justify-content:space-between;align-items:end;margin-top:5px}.oc-mini-k{font-size:7px;font-weight:900;color:#64748b}.oc-mini-gross{font-size:34px;font-weight:950;line-height:1}.oc-mini-points{font-size:13px;font-weight:950}.oc-mini-tag{font-size:9px;font-weight:950;margin-top:6px}.oc-mini-advice{font-size:9px;color:#64748b;line-height:1.3;margin-top:4px}
-        .oc-change{margin-top:10px;border-radius:14px;border:1px solid #dbe5ee;background:#fff;padding:10px}.oc-change-title{font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.1em;color:#64748b}.oc-change-text{font-size:11px;font-weight:850;color:#334155;margin-top:3px}.oc-complete{border-radius:24px;border:1px solid #dbe5ee;background:#fff;padding:14px;box-shadow:0 14px 34px rgba(15,23,42,.08)}.oc-complete-head{text-align:center;padding:8px 4px 14px}.oc-complete-title{font-size:28px;font-weight:950;letter-spacing:-.035em;color:#0f172a}.oc-complete-sub{font-size:11px;color:#64748b;margin-top:4px}.oc-complete-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}.oc-count{border-radius:13px;padding:9px;text-align:center;border:1px solid #e2e8f0}.oc-count.good{background:#ecfdf5;border-color:#86efac}.oc-count.bad{background:#fff1f2;border-color:#fda4af}.oc-count.on{background:#f8fafc}.oc-count-v{font-size:22px;font-weight:950}.oc-count-k{font-size:8px;font-weight:950;text-transform:uppercase;letter-spacing:.08em;color:#64748b}.oc-result-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.oc-result{border-radius:14px;border:1px solid #e2e8f0;padding:9px;background:#f8fafc}.oc-result.better{background:#dcfce7;border-color:#4ade80;box-shadow:inset 0 0 0 1px rgba(22,163,74,.08)}.oc-result.worse{background:#fee2e2;border-color:#fb7185;box-shadow:inset 0 0 0 1px rgba(225,29,72,.08)}.oc-result.on{background:#f8fafc;border-color:#cbd5e1}.oc-result-h{display:flex;justify-content:space-between;gap:6px;align-items:center;font-size:9px;font-weight:950}.oc-result-main{display:flex;align-items:end;justify-content:space-between;gap:7px;margin-top:5px}.oc-result-actual{font-size:25px;font-weight:950;line-height:1}.oc-result-target{font-size:8px;color:#64748b;text-align:right}.oc-result-delta{font-size:9px;font-weight:950;margin-top:5px}.oc-result.better .oc-result-delta{color:#15803d}.oc-result.worse .oc-result-delta{color:#be123c}.oc-result.on .oc-result-delta{color:#64748b}.oc-legend{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:9px;font-weight:900;color:#64748b}.oc-dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}.oc-dot.good{background:#86efac}.oc-dot.bad{background:#fda4af}.oc-dot.on{background:#cbd5e1}
-        @media(max-width:430px){.oc-result-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-stat-v{font-size:16px}.oc-gross{font-size:88px}.oc-current{min-height:50vh}.oc-advice{font-size:12px}}
+        .oc-change{margin-top:10px;border-radius:14px;border:1px solid #dbe5ee;background:#fff;padding:10px}.oc-change-title{font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.1em;color:#64748b}.oc-change-text{font-size:11px;font-weight:850;color:#334155;margin-top:3px}.oc-complete{border-radius:24px;border:1px solid #dbe5ee;background:#fff;padding:14px;box-shadow:0 14px 34px rgba(15,23,42,.08)}.oc-complete-head{text-align:center;padding:8px 4px 14px}.oc-complete-title{font-size:28px;font-weight:950;letter-spacing:-.035em;color:#0f172a}.oc-complete-sub{font-size:11px;color:#64748b;margin-top:4px}.oc-complete-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}.oc-score-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.oc-nine-card{border:1px solid #cbd5e1;border-radius:15px;background:#f8fafc;padding:10px}.oc-nine-card.total{background:linear-gradient(145deg,#0f172a,#1e293b);border-color:#0f172a;color:#fff}.oc-nine-title{font-size:8px;font-weight:950;letter-spacing:.09em;text-transform:uppercase;color:#64748b}.oc-nine-card.total .oc-nine-title{color:#cbd5e1}.oc-nine-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}.oc-nine-stat{min-width:0}.oc-nine-k{font-size:7px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8}.oc-nine-v{font-size:23px;font-weight:950;line-height:1;margin-top:2px;color:#0f172a}.oc-nine-card.total .oc-nine-v{color:#fff}.oc-nine-sub{font-size:7px;color:#94a3b8;margin-top:3px}.oc-total-gross{margin-top:9px;border-top:1px solid rgba(148,163,184,.35);padding-top:8px}.oc-total-gross .oc-nine-v{font-size:31px}.oc-count{border-radius:13px;padding:9px;text-align:center;border:1px solid #e2e8f0}.oc-count.good{background:#ecfdf5;border-color:#86efac}.oc-count.bad{background:#fff1f2;border-color:#fda4af}.oc-count.on{background:#f8fafc}.oc-count-v{font-size:22px;font-weight:950}.oc-count-k{font-size:8px;font-weight:950;text-transform:uppercase;letter-spacing:.08em;color:#64748b}.oc-result-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.oc-result{border-radius:14px;border:1px solid #e2e8f0;padding:9px;background:#f8fafc}.oc-result.better{background:#dcfce7;border-color:#4ade80;box-shadow:inset 0 0 0 1px rgba(22,163,74,.08)}.oc-result.worse{background:#fee2e2;border-color:#fb7185;box-shadow:inset 0 0 0 1px rgba(225,29,72,.08)}.oc-result.on{background:#f8fafc;border-color:#cbd5e1}.oc-result-h{display:flex;justify-content:space-between;gap:6px;align-items:center;font-size:9px;font-weight:950}.oc-result-main{display:flex;align-items:end;justify-content:space-between;gap:7px;margin-top:5px}.oc-result-actual{font-size:25px;font-weight:950;line-height:1}.oc-result-target{font-size:8px;color:#64748b;text-align:right}.oc-result-delta{font-size:9px;font-weight:950;margin-top:5px}.oc-result.better .oc-result-delta{color:#15803d}.oc-result.worse .oc-result-delta{color:#be123c}.oc-result.on .oc-result-delta{color:#64748b}.oc-legend{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:9px;font-weight:900;color:#64748b}.oc-dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}.oc-dot.good{background:#86efac}.oc-dot.bad{background:#fda4af}.oc-dot.on{background:#cbd5e1}
+        @media(max-width:430px){.oc-score-totals{grid-template-columns:1fr 1fr}.oc-nine-card.total{grid-column:1/-1}.oc-result-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-stat-v{font-size:16px}.oc-gross{font-size:88px}.oc-current{min-height:50vh}.oc-advice{font-size:12px}}
       `}</style>
 
       <div className="oc-wrap">
@@ -17103,10 +17122,64 @@ function WP_OnCourseMode({
               <div className="oc-complete-title">🎯 Round Complete</div>
               <div className="oc-complete-sub">
                 {liveMode==='gross'
-                  ? `Target ${liveResult.liveTarget} gross · Actual ${liveResult.actualGrossTotal} · ${liveResult.actualGrossTotal<liveResult.liveTarget?`${liveResult.liveTarget-liveResult.actualGrossTotal} better than target`:liveResult.actualGrossTotal>liveResult.liveTarget?`${liveResult.actualGrossTotal-liveResult.liveTarget} worse than target`:'exactly on target'}`
-                  : `Target ${liveResult.liveTarget} pts · Actual ${liveResult.actualPts} pts · ${liveResult.actualPts>liveResult.liveTarget?`+${liveResult.actualPts-liveResult.liveTarget} better than target`:liveResult.actualPts<liveResult.liveTarget?`${liveResult.liveTarget-liveResult.actualPts} below target`:'exactly on target'}`
+                  ? `Target ${liveResult.liveTarget} gross · Actual ${totalGross18} gross · ${liveResult.actualPts} Stableford pts · ${totalGross18<liveResult.liveTarget?`${liveResult.liveTarget-totalGross18} better than target`:totalGross18>liveResult.liveTarget?`${totalGross18-liveResult.liveTarget} worse than target`:'exactly on target'}`
+                  : `Target ${liveResult.liveTarget} pts · Actual ${totalPts18} pts · ${totalGross18} gross · ${totalPts18>liveResult.liveTarget?`+${totalPts18-liveResult.liveTarget} better than target`:totalPts18<liveResult.liveTarget?`${liveResult.liveTarget-totalPts18} below target`:'exactly on target'}`
                 }
               </div>
+              <div className="oc-score-totals">
+                <div className="oc-nine-card">
+                  <div className="oc-nine-title">Front 9 · H1–9</div>
+                  <div className="oc-nine-grid">
+                    <div className="oc-nine-stat">
+                      <div className="oc-nine-k">Stableford</div>
+                      <div className="oc-nine-v">{frontPts}</div>
+                      <div className="oc-nine-sub">target {frontTargetPts} pts</div>
+                    </div>
+                    <div className="oc-nine-stat">
+                      <div className="oc-nine-k">Gross</div>
+                      <div className="oc-nine-v">{frontGross}</div>
+                      <div className="oc-nine-sub">planned {frontTargetGross}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="oc-nine-card">
+                  <div className="oc-nine-title">Back 9 · H10–18</div>
+                  <div className="oc-nine-grid">
+                    <div className="oc-nine-stat">
+                      <div className="oc-nine-k">Stableford</div>
+                      <div className="oc-nine-v">{backPts}</div>
+                      <div className="oc-nine-sub">target {backTargetPts} pts</div>
+                    </div>
+                    <div className="oc-nine-stat">
+                      <div className="oc-nine-k">Gross</div>
+                      <div className="oc-nine-v">{backGross}</div>
+                      <div className="oc-nine-sub">planned {backTargetGross}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="oc-nine-card total">
+                  <div className="oc-nine-title">18-hole totals</div>
+                  <div className="oc-nine-grid">
+                    <div className="oc-nine-stat">
+                      <div className="oc-nine-k">Stableford</div>
+                      <div className="oc-nine-v">{totalPts18}</div>
+                      <div className="oc-nine-sub">front {frontPts} · back {backPts}</div>
+                    </div>
+                    <div className="oc-nine-stat">
+                      <div className="oc-nine-k">Gross</div>
+                      <div className="oc-nine-v">{totalGross18}</div>
+                      <div className="oc-nine-sub">front {frontGross} · back {backGross}</div>
+                    </div>
+                  </div>
+                  <div className="oc-total-gross">
+                    <div className="oc-nine-k">Total gross score</div>
+                    <div className="oc-nine-v">{totalGross18}</div>
+                  </div>
+                </div>
+              </div>
+
               <div className="oc-complete-counts">
                 <div className="oc-count good"><div className="oc-count-v">{betterCount}</div><div className="oc-count-k">Better than target</div></div>
                 <div className="oc-count on"><div className="oc-count-v">{onCount}</div><div className="oc-count-k">On target</div></div>
