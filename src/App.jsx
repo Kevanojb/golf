@@ -1029,6 +1029,52 @@ async function onImportFile(e) {
   }
 }
 
+  // App-88 referenced this handler in the JSX but did not actually define it.
+  // That caused Manage Players to crash to a blank screen as soon as the modal rendered.
+  async function submitManualPlayer(){
+    const name=String(newName||"").trim();
+    if(!name){ setAddMsg("Enter the player's name."); return; }
+
+    const denRaw=String(newDenHcap??"").trim();
+    const whsRaw=String(newWHS??"").trim();
+    const den=denRaw===""?null:Number(denRaw);
+    const whs=whsRaw===""?null:Number(whsRaw);
+
+    if(den!==null && (!Number.isFinite(den)||den<0||den>54)){
+      setAddMsg("Enter a valid Den handicap between 0 and 54.");
+      return;
+    }
+    if(whs!==null && (!Number.isFinite(whs)||whs<0||whs>54)){
+      setAddMsg("Enter a valid WHS Handicap Index between 0 and 54.");
+      return;
+    }
+
+    setAddBusy(true);
+    setAddMsg("");
+    try{
+      if(typeof onAddPlayer!=="function") throw new Error("Add Player is not connected.");
+      const result=await onAddPlayer({
+        name,
+        den_handicap:den,
+        handicap_index:whs,
+        gender:String(newGender||""),
+        source:"manual"
+      });
+      if(result?.ok===false) throw new Error(result.error||"Could not add player.");
+
+      setNewName("");
+      setNewDenHcap("");
+      setNewWHS("");
+      setNewGender("M");
+      setAddOpen(false);
+      setAddMsg("");
+    }catch(e){
+      setAddMsg(e?.message||String(e));
+    }finally{
+      setAddBusy(false);
+    }
+  }
+
   if (!open) return null;
 
   return (
@@ -1072,25 +1118,24 @@ async function onImportFile(e) {
         </div>
 
 
-        {addOpen?<div className="border-b border-emerald-200 bg-emerald-50/70 p-4">
-          <div className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Add golfer to Den Golf</div>
-          <div className="mt-1 text-xs text-emerald-900">This creates a persistent Supabase roster entry. The golfer can use Game Plan and Live Replan before ever appearing in Squabbit.</div>
-          <div className="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-2">
-            <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Player name *" className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-bold"/>
-            <input value={newDenHcap} onChange={e=>setNewDenHcap(e.target.value)} inputMode="decimal" type="number" step="0.1" min="0" max="54" placeholder="Den handicap" className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-bold"/>
-            <input value={newWHS} onChange={e=>setNewWHS(e.target.value)} inputMode="decimal" type="number" step="0.1" min="0" max="54" placeholder="WHS HI (optional)" className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-bold"/>
-            <select value={newGender} onChange={e=>setNewGender(e.target.value)} className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-bold">
-              <option value="M">Male</option><option value="F">Female</option><option value="">Not specified</option>
-            </select>
-          </div>
-          {addMsg?<div className="mt-2 text-xs font-bold text-rose-600">{addMsg}</div>:null}
-          <div className="mt-3 flex justify-end gap-2">
-            <button className="btn-secondary" onClick={()=>{setAddOpen(false);setAddMsg("");}}>Cancel</button>
-            <button className="btn-primary" disabled={addBusy} onClick={submitManualPlayer}>{addBusy?"Saving…":"Save Player to Supabase"}</button>
-          </div>
-        </div>:null}
-
         <div className="p-4 overflow-y-auto flex-1 min-h-0">
+          {addOpen?<div className="mb-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4">
+            <div className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Add golfer to Den Golf</div>
+            <div className="mt-1 text-xs text-emerald-900">Creates a persistent Supabase roster entry so the golfer can use Game Plan and Live Replan before ever appearing in Squabbit.</div>
+            <div className="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2">
+              <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Player name *" className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-bold text-slate-900"/>
+              <input value={newDenHcap} onChange={e=>setNewDenHcap(e.target.value)} inputMode="decimal" type="number" step="0.1" min="0" max="54" placeholder="Den handicap" className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-bold text-slate-900"/>
+              <input value={newWHS} onChange={e=>setNewWHS(e.target.value)} inputMode="decimal" type="number" step="0.1" min="0" max="54" placeholder="WHS HI (optional)" className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-bold text-slate-900"/>
+              <select value={newGender} onChange={e=>setNewGender(e.target.value)} className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-bold text-slate-900">
+                <option value="M">Male</option><option value="F">Female</option><option value="">Not specified</option>
+              </select>
+            </div>
+            {addMsg?<div className="mt-2 rounded-xl border border-rose-200 bg-white px-3 py-2 text-xs font-bold text-rose-600">{addMsg}</div>:null}
+            <div className="mt-3 flex flex-wrap justify-end gap-2">
+              <button type="button" className="btn-secondary" onClick={()=>{setAddOpen(false);setAddMsg("");}}>Cancel</button>
+              <button type="button" className="btn-primary" disabled={addBusy} onClick={submitManualPlayer}>{addBusy?"Saving…":"Save Player to Supabase"}</button>
+            </div>
+          </div>:null}
           {!rows.length ? (
             <div className="text-sm text-neutral-600">No players yet. Use <b>+ Add Player</b> to create the first golfer without needing a Squabbit round.</div>
           ) : (
@@ -17865,32 +17910,134 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
               <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
                 <div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white text-sm font-black">3</div><div><div className="text-[10px] font-black tracking-widest uppercase text-slate-400">Golfers</div><div className="font-black text-slate-900">Who needs a plan?</div></div></div>
                 <div className="mt-4 max-h-52 overflow-auto rounded-2xl border border-slate-200 bg-white p-2">
-                  {players.map(p=>{ const name=String(p.name); const checked=selectedPlayers.includes(name); const hx=handicapMap.get(WP_norm(name)); const hi=Number(hx?.newHI); return <div key={name} className={`rounded-xl px-3 py-2.5 ${checked?"bg-emerald-50":"hover:bg-slate-50"}`}><label className={`flex cursor-pointer items-center gap-3 text-sm font-bold ${checked?"text-emerald-900":"text-slate-700"}`}><input type="checkbox" checked={checked} onChange={()=>togglePlayer(name)} className="h-4 w-4"/><span className="flex-1">{name}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ${Number.isFinite(hi)?"bg-blue-50 text-blue-700":"bg-slate-100 text-slate-400"}`}>{Number.isFinite(hi)?`HI ${hi.toFixed(1)}`:"HI —"}</span>{checked?<span className="text-emerald-600">✓</span>:null}</label>{checked?<div className="mt-2 ml-7 rounded-xl border border-slate-200 bg-white/80 p-2.5">
-  <div className="flex flex-wrap items-center gap-2">
-    <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">Temporary handicap</span>
-    <input type="number" min="0" max="54" step="0.1" placeholder="optional" value={tempHandicaps[name]??""} onChange={e=>setTempHandicaps(prev=>({...prev,[name]:e.target.value}))} className="w-24 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-xs font-black text-slate-900"/>
-    <span className="text-[10px] font-bold text-slate-500">leave blank = fixed Den handicap</span>
-  </div>
-  {String(tempHandicaps[name]??"").trim()!==""?<div className="mt-2 grid grid-cols-2 gap-2">
-    <button type="button" onClick={()=>setTempHandicapModes(prev=>({...prev,[name]:"whs"}))} className={`rounded-xl border px-3 py-2 text-left ${String(tempHandicapModes[name]||"whs")==="whs"?"border-blue-300 bg-blue-50":"border-slate-200 bg-white"}`}>
-      <div className="text-[9px] font-black uppercase tracking-wider text-blue-700">WHS Index</div>
-      <div className="mt-1 text-[10px] font-bold text-slate-600">Convert to Course Handicap using the selected tee.</div>
-    </button>
-    <button type="button" onClick={()=>setTempHandicapModes(prev=>({...prev,[name]:"fixed"}))} className={`rounded-xl border px-3 py-2 text-left ${String(tempHandicapModes[name]||"whs")==="fixed"?"border-violet-300 bg-violet-50":"border-slate-200 bg-white"}`}>
-      <div className="text-[9px] font-black uppercase tracking-wider text-violet-700">Fixed Playing Handicap</div>
-      <div className="mt-1 text-[10px] font-bold text-slate-600">Use exactly this many shots. No Slope/Rating conversion.</div>
-    </button>
-  </div>:null}
-  <div className="mt-1.5 text-[10px] leading-relaxed text-slate-500">
-    {String(tempHandicaps[name]??"").trim()===""?"No override: the latest Den Society handicap is used directly.":String(tempHandicapModes[name]||"whs")==="fixed"?"Fixed mode: the entered number is the playing handicap and shots are allocated directly by SI.":"WHS mode: the entered number is treated as a Handicap Index and converted to Course Handicap before SI allocation."}
-  </div>
-</div>:null}</div>; })}
+                  {players.map(p=>{ const name=String(p.name); const checked=selectedPlayers.includes(name); const hx=handicapMap.get(WP_norm(name)); const hi=Number(hx?.newHI); return <div key={name} className={`rounded-xl px-3 py-2.5 ${checked?"bg-emerald-50":"hover:bg-slate-50"}`}><label className={`flex cursor-pointer items-center gap-3 text-sm font-bold ${checked?"text-emerald-900":"text-slate-700"}`}><input type="checkbox" checked={checked} onChange={()=>togglePlayer(name)} className="h-4 w-4"/><span className="flex-1">{name}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ${Number.isFinite(hi)?"bg-blue-50 text-blue-700":"bg-slate-100 text-slate-400"}`}>{Number.isFinite(hi)?`HI ${hi.toFixed(1)}`:"HI —"}</span>{checked?<span className="text-emerald-600">✓</span>:null}</label>{checked?(()=>{
+  const entered=String(tempHandicaps[name]??"").trim();
+  const mode=entered===""?"den":String(tempHandicapModes[name]||"whs");
+  const denValue=Number.isFinite(hi)?hi:null;
+
+  const chooseHcapMode=(nextMode)=>{
+    if(nextMode==="den"){
+      setTempHandicaps(prev=>({...prev,[name]:""}));
+      return;
+    }
+    setTempHandicapModes(prev=>({...prev,[name]:nextMode}));
+    // Leave an existing entered temporary number in place. If none exists,
+    // the input is shown immediately so the user can enter it.
+  };
+
+  return <div className="mt-2 ml-7 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
+    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1.15fr)_minmax(250px,.85fr)] gap-3">
+
+      {/* LEFT = THINGS THE USER CAN SELECT */}
+      <div>
+        <div className="text-[9px] font-black uppercase tracking-[.14em] text-slate-400">Handicap to use</div>
+        <div className="mt-2 grid grid-cols-1 gap-2">
+
+          <button
+            type="button"
+            onClick={()=>chooseHcapMode("den")}
+            className={`rounded-xl border p-3 text-left transition ${mode==="den"?"border-emerald-400 bg-emerald-50 ring-1 ring-emerald-200":"border-slate-200 bg-white hover:bg-slate-50"}`}
+          >
+            <div className="flex items-center gap-2">
+              <span className={`flex h-4 w-4 items-center justify-center rounded-full border ${mode==="den"?"border-emerald-600 bg-emerald-600 text-white":"border-slate-300 bg-white"}`}>{mode==="den"?"✓":""}</span>
+              <div className="text-[10px] font-black uppercase tracking-wider text-emerald-800">Den Society Handicap</div>
+              <div className="ml-auto text-sm font-black text-slate-900">{denValue!==null?denValue.toFixed(1):"—"}</div>
+            </div>
+            <div className="mt-1 ml-6 text-[10px] text-slate-500">Use the latest {currentYear} Den handicap directly.</div>
+          </button>
+
+          <button
+            type="button"
+            onClick={()=>chooseHcapMode("whs")}
+            className={`rounded-xl border p-3 text-left transition ${mode==="whs"?"border-blue-400 bg-blue-50 ring-1 ring-blue-200":"border-slate-200 bg-white hover:bg-slate-50"}`}
+          >
+            <div className="flex items-center gap-2">
+              <span className={`flex h-4 w-4 items-center justify-center rounded-full border ${mode==="whs"?"border-blue-600 bg-blue-600 text-white":"border-slate-300 bg-white"}`}>{mode==="whs"?"✓":""}</span>
+              <div className="text-[10px] font-black uppercase tracking-wider text-blue-800">Temporary WHS Index</div>
+            </div>
+            {mode==="whs"?<div className="mt-2 ml-6 flex items-center gap-2">
+              <input
+                type="number" min="0" max="54" step="0.1"
+                placeholder="Enter HI"
+                value={tempHandicaps[name]??""}
+                onClick={e=>e.stopPropagation()}
+                onChange={e=>setTempHandicaps(prev=>({...prev,[name]:e.target.value}))}
+                className="w-28 rounded-lg border border-blue-300 bg-white px-2 py-1.5 text-sm font-black text-slate-900"
+              />
+              <span className="text-[9px] font-bold text-blue-700">Handicap Index</span>
+            </div>:null}
+          </button>
+
+          <button
+            type="button"
+            onClick={()=>chooseHcapMode("fixed")}
+            className={`rounded-xl border p-3 text-left transition ${mode==="fixed"?"border-violet-400 bg-violet-50 ring-1 ring-violet-200":"border-slate-200 bg-white hover:bg-slate-50"}`}
+          >
+            <div className="flex items-center gap-2">
+              <span className={`flex h-4 w-4 items-center justify-center rounded-full border ${mode==="fixed"?"border-violet-600 bg-violet-600 text-white":"border-slate-300 bg-white"}`}>{mode==="fixed"?"✓":""}</span>
+              <div className="text-[10px] font-black uppercase tracking-wider text-violet-800">Temporary Fixed Handicap</div>
+            </div>
+            {mode==="fixed"?<div className="mt-2 ml-6 flex items-center gap-2">
+              <input
+                type="number" min="0" max="54" step="0.1"
+                placeholder="Enter shots"
+                value={tempHandicaps[name]??""}
+                onClick={e=>e.stopPropagation()}
+                onChange={e=>setTempHandicaps(prev=>({...prev,[name]:e.target.value}))}
+                className="w-28 rounded-lg border border-violet-300 bg-white px-2 py-1.5 text-sm font-black text-slate-900"
+              />
+              <span className="text-[9px] font-bold text-violet-700">exact playing handicap</span>
+            </div>:null}
+          </button>
+        </div>
+
+        <div className={`mt-3 rounded-xl px-3 py-2 text-[10px] font-black ${
+          mode==="den"?"border border-emerald-200 bg-emerald-50 text-emerald-800":
+          mode==="fixed"?"border border-violet-200 bg-violet-50 text-violet-800":
+          "border border-blue-200 bg-blue-50 text-blue-800"
+        }`}>
+          CURRENT SELECTION: {
+            mode==="den"
+              ? `DEN SOCIETY${denValue!==null?` · ${denValue.toFixed(1)} SHOTS`:""}`
+              : mode==="fixed"
+                ? `TEMPORARY FIXED${entered?` · ${entered} SHOTS`:" · ENTER A VALUE"}`
+                : `TEMPORARY WHS${entered?` · HI ${entered}`:" · ENTER A VALUE"}`
+          }
+        </div>
+      </div>
+
+      {/* RIGHT = EXPLANATION ONLY — deliberately non-interactive */}
+      <aside className="rounded-xl border border-slate-200 bg-slate-50 p-3 pointer-events-none select-none">
+        <div className="text-[9px] font-black uppercase tracking-[.14em] text-slate-500">How handicaps work</div>
+
+        <div className="mt-3 space-y-3">
+          <div>
+            <div className="text-[10px] font-black text-emerald-800">Den Society</div>
+            <div className="mt-0.5 text-[10px] leading-relaxed text-slate-600">
+              Uses the latest {currentYear} Den handicap directly as the playing handicap. No Course Handicap conversion.
+            </div>
+          </div>
+
+          <div className="border-t border-slate-200 pt-3">
+            <div className="text-[10px] font-black text-blue-800">Temporary WHS</div>
+            <div className="mt-0.5 text-[10px] leading-relaxed text-slate-600">
+              Enter a Handicap Index. The selected tee's Course Rating and Slope are used to calculate Course Handicap before shots are allocated by SI.
+            </div>
+          </div>
+
+          <div className="border-t border-slate-200 pt-3">
+            <div className="text-[10px] font-black text-violet-800">Temporary Fixed</div>
+            <div className="mt-0.5 text-[10px] leading-relaxed text-slate-600">
+              Enter the exact playing handicap supplied for the event. The app uses exactly that many shots with no Slope or Rating conversion.
+            </div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </div>;
+})():null}</div>; })}
                 </div>
-                <div className="mt-3 flex items-center justify-between gap-3"><div className="text-xs font-bold text-slate-500">{selectedPlayers.length} selected</div><button type="button" className="text-xs font-black text-slate-700 underline" onClick={()=>setSelectedPlayers(selectedPlayers.length===players.length?[]:players.map(p=>String(p.name)))}>{selectedPlayers.length===players.length?"Clear all":"Select all"}</button></div><div className="mt-2 grid grid-cols-1 gap-2">
-  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-bold text-emerald-800"><b>Den Society:</b> latest {currentYear} Den handicap is used directly as the fixed playing handicap.</div>
-  <div className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-[11px] font-bold text-blue-800"><b>Temporary WHS:</b> enter a Handicap Index and let the system calculate Course Handicap for the selected tee.</div>
-  <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-[11px] font-bold text-violet-800"><b>Temporary fixed:</b> enter a handicap supplied for another society/event and use that exact number as the playing handicap — no WHS conversion.</div>
-</div>
+                <div className="mt-3 flex items-center justify-between gap-3"><div className="text-xs font-bold text-slate-500">{selectedPlayers.length} selected</div><button type="button" className="text-xs font-black text-slate-700 underline" onClick={()=>setSelectedPlayers(selectedPlayers.length===players.length?[]:players.map(p=>String(p.name)))}>{selectedPlayers.length===players.length?"Clear all":"Select all"}</button></div>
               </div>
             </div>
           </section>
