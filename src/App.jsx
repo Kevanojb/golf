@@ -13304,13 +13304,13 @@ const scorecardIntel = (() => {
       classWhy = "You beat the playing-to-handicap target by a clear margin.";
     } else if (latest.delta <= -3 && latest.damageShare >= 0.65 && latest.restDelta >= -1) {
       classification = "Good golf, damaged by a few holes";
-      classWhy = `${Math.round(latest.damageShare*100)}% of measured losses came from the three costliest holes, while the rest of the card was close to target.`;
+      { const n=Math.min(3,Number(latest.losses?.length||0)); const label=n===1?"the only costly hole":n===2?"the two costliest holes":"the three costliest holes"; classWhy = `${Math.round(latest.damageShare*100)}% of measured losses came from ${label}, while the rest of the card was close to target.`; }
     } else if (latest.delta <= -3 && latest.damageShare < 0.55) {
       classification = "Broadly below target";
       classWhy = "The lost strokes were spread across the card rather than concentrated in only a few holes.";
     } else if (latest.damageShare >= 0.70 && latest.totalLoss >= 4) {
       classification = "Volatile round";
-      classWhy = `${Math.round(latest.damageShare*100)}% of the lost strokes were concentrated in only three holes.`;
+      { const n=Math.min(3,Number(latest.losses?.length||0)); const label=n===1?"one hole":n===2?"two holes":"three holes"; classWhy = `${Math.round(latest.damageShare*100)}% of the lost strokes were concentrated in only ${label}.`; }
     }
 
     // Confidence for the overall scorecard diagnosis.
@@ -13725,8 +13725,16 @@ const scorecardIntel = (() => {
                 detail:"No area of this round finished meaningfully below your playing-to-handicap target."
               };
         const verdict=d>=2?"Beat handicap target":d>0?"Slightly better than handicap":d<=-3&&eh.damageShare>=.65?"Good golf, damaged by a few holes":d<0?"Below handicap target":"Played to handicap";
+        const costlyHoleCount=Math.min(3,eh.losses.length);
+        const costlyHoleLabel=costlyHoleCount===1
+          ? "the only costly hole"
+          : costlyHoleCount===2
+            ? "the two costliest holes"
+            : "the three costliest holes";
+        const otherHoleCount=Math.max(0,(eh.holes||[]).length-costlyHoleCount);
+        const otherHoleLabel=otherHoleCount===1?"The other hole":`The other ${otherHoleCount} holes`;
         const story=eh.losses.length&&eh.damageShare>=.65
-          ? `${Math.round(eh.damageShare*100)}% of all ${ehIsPoints?"Stableford damage":"strokes lost"} to handicap target came from the three costliest holes. The other holes combined were ${eh.restDelta>=0?`${eh.restDelta.toFixed(0)} ${ehUnit} better than target`:`${Math.abs(eh.restDelta).toFixed(0)} ${ehUnit} below target`}.`
+          ? `${Math.round(eh.damageShare*100)}% of all ${ehIsPoints?"Stableford damage":"strokes lost"} to handicap target came from ${costlyHoleLabel}. ${otherHoleLabel} combined ${eh.restDelta>0?`gained ${eh.restDelta.toFixed(0)} ${ehUnit} versus target`:eh.restDelta<0?`lost ${Math.abs(eh.restDelta).toFixed(0)} ${ehUnit} versus target`:"played exactly to target"}.`
           : d>0?`You beat your handicap target by ${d.toFixed(0)} ${ehUnit}.`:d<0?`You finished ${Math.abs(d).toFixed(0)} ${ehUnit} below handicap target.`:"You played exactly to handicap target.";
         const latestSummary=d>0?`${Math.abs(d).toFixed(0)} ${ehUnit} better than target`:d<0?`${Math.abs(d).toFixed(0)} ${ehUnit} worse than target`:"Played exactly to target";
         const latestTone=d>0?"PRsignGood":d<0?"PRsignBad":"";
@@ -13902,22 +13910,44 @@ const scorecardIntel = (() => {
 
   <div class="PRchartBox" style="margin-top:12px;">
     <div class="PRvizTitle" style="font-size:12px;">Damage concentration</div>
-    <div class="PRvizSub">How much of the round's lost-score damage came from the three costliest holes.</div>
+    ${(() => {
+      const costlyCount=Math.min(3,eh.losses.length);
+      const otherCount=Math.max(0,(eh.holes||[]).length-costlyCount);
+      const costlyPhrase=costlyCount===1?"the round's only costly hole":costlyCount===2?"the two costliest holes":"the three costliest holes";
+      return `<div class="PRvizSub">${eh.totalLoss>0?`How much of the round's lost-score damage came from ${costlyPhrase}.`:"No strokes were lost to the handicap target in this round."}</div>`;
+    })()}
     <div class="PRdamageWrap" style="margin-top:10px;">
       ${(() => {
-        const pct=Math.max(0,Math.min(100,Math.round((eh.damageShare||0)*100)));
+        const costlyCount=Math.min(3,eh.losses.length);
+        const otherCount=Math.max(0,(eh.holes||[]).length-costlyCount);
+        const pct=eh.totalLoss>0?Math.max(0,Math.min(100,Math.round((eh.damageShare||0)*100))):0;
         const r=52,circ=2*Math.PI*r,dash=circ*pct/100;
+        const donutLabel=costlyCount===1?"1 COSTLY HOLE":costlyCount===2?"2 COSTLY HOLES":costlyCount>=3?"TOP 3 HOLES":"NO LOST HOLES";
         return `<svg width="130" height="130" viewBox="0 0 130 130">
           <circle cx="65" cy="65" r="${r}" fill="none" stroke="#e2e8f0" stroke-width="15"/>
-          <circle cx="65" cy="65" r="${r}" fill="none" stroke="#dc2626" stroke-width="15"
-            stroke-dasharray="${dash} ${circ-dash}" stroke-linecap="round" transform="rotate(-90 65 65)"/>
+          ${eh.totalLoss>0?`<circle cx="65" cy="65" r="${r}" fill="none" stroke="#dc2626" stroke-width="15"
+            stroke-dasharray="${dash} ${circ-dash}" stroke-linecap="round" transform="rotate(-90 65 65)"/>`:''}
           <text x="65" y="61" text-anchor="middle" font-size="25" font-weight="950" fill="#0f172a">${pct}%</text>
-          <text x="65" y="79" text-anchor="middle" font-size="9" font-weight="800" fill="#64748b">TOP 3 HOLES</text>
+          <text x="65" y="79" text-anchor="middle" font-size="9" font-weight="800" fill="#64748b">${donutLabel}</text>
         </svg>`;
       })()}
       <div class="PRdonutText">
-        <b>${eh.top3Loss.toFixed(0)} strokes</b> lost on the three costliest holes.<br/>
-        <b>${Math.max(0,eh.totalLoss-eh.top3Loss).toFixed(0)} strokes</b> lost across the other holes.
+        ${(() => {
+          const costlyCount=Math.min(3,eh.losses.length);
+          const otherCount=Math.max(0,(eh.holes||[]).length-costlyCount);
+          const costlyText=costlyCount===1?"the only costly hole":costlyCount===2?"the two costliest holes":"the three costliest holes";
+          const lossWord=Math.round(eh.top3Loss)===1?"stroke":"strokes";
+          const restUnit=ehIsPoints?"points":"strokes";
+          const otherLabel=otherCount===1?"The other hole":`The other ${otherCount} holes`;
+          const restText=eh.restDelta>0
+            ? `${otherLabel} combined <b>gained ${eh.restDelta.toFixed(0)} ${restUnit}</b> versus target.`
+            : eh.restDelta<0
+              ? `${otherLabel} combined <b>lost ${Math.abs(eh.restDelta).toFixed(0)} ${restUnit}</b> versus target.`
+              : `${otherLabel} combined were <b>exactly on target</b>.`;
+          return eh.totalLoss>0
+            ? `<b>${eh.top3Loss.toFixed(0)} ${lossWord}</b> lost on ${costlyText}.<br/>${restText}`
+            : `<b>No strokes lost.</b><br/>The whole card was at or better than the handicap target.`;
+        })()}
       </div>
     </div>
   </div>
