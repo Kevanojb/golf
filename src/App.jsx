@@ -17795,6 +17795,108 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
   return plan;
 }
 
+
+function WP_liveScoringCaddie(plan){
+  const isGross=plan?.liveMode==='gross';
+  const remaining=(plan?.playOrder||[])
+    .map(n=>(plan?.holes||[]).find(h=>Number(h?.hole)===Number(n)))
+    .filter(h=>h&&!h.played);
+  const next=remaining[0]||null;
+  const delta=Number(plan?.deltaVsOriginal)||0;
+
+  const opportunityScore=h=>{
+    if(!h)return -999;
+    const risk=isGross?WP_holeRisk(h,Number(h.targetGross),'gross'):WP_holeRisk(h,Number(h.targetPts),'stableford');
+    const exactN=isGross?Number(h.exactGrossN||0):Number(h.exactPtsN||0);
+    const expected=isGross
+      ? Number(h.expectedGross)
+      : Number(h.personalExpectedPts??h.expectedPts);
+    const route=isGross?Number(h.targetGross):Number(h.targetPts);
+    const edge=isGross
+      ? (Number.isFinite(expected)?expected-route:0)
+      : (Number.isFinite(expected)?route-expected:0);
+    const historyBoost=Math.min(3,exactN)*0.08;
+    return Number(risk?.successProb||0)*1.8 + historyBoost - Math.max(0,edge)*0.12;
+  };
+
+  const recovery=remaining
+    .filter(h=>h!==next)
+    .map(h=>({h,score:opportunityScore(h)}))
+    .sort((a,b)=>b.score-a.score)
+    .slice(0,3)
+    .map(x=>x.h);
+
+  const bestRecovery=recovery.slice(0,2);
+  const nextCue=String(next?.planCue||'PROTECT');
+  const routeNeedsGain=next
+    ? (isGross ? Number(next.targetGross)<=Number(next.par) : Number(next.targetPts)>=3)
+    : false;
+  const nextIsDamage=nextCue==='DAMAGE_CONTROL'||nextCue==='BOGEY_ON_PLAN'||nextCue==='SMART_BOGEY'||Number(next?.targetGross)>=Number(next?.par)+1;
+
+  let mode='NORMAL';
+  let headline='Stay with the route';
+  let instruction='Bank the planned score. There is no need to manufacture anything.';
+  let why='The live plan already accounts for what has happened so far.';
+  let tone='normal';
+
+  if(!next){
+    mode='COMPLETE';
+    headline=plan?.status==='TARGET ACHIEVED'?'Target achieved':'Round complete';
+    instruction='No further scoring decision is required.';
+    why=`Final result: ${isGross?`${plan.actualGrossTotal} gross`:`${plan.actualPts} points`}.`;
+    tone=plan?.status==='TARGET ACHIEVED'?'good':'normal';
+  }else if(delta>=2){
+    mode='BANK IT';
+    headline=`You are ${Math.abs(delta)} ahead of the original route`;
+    instruction=routeNeedsGain
+      ? `H${next.hole} was originally a gain hole, but you do not need to force it now. Make the route score first.`
+      : `H${next.hole}: protect the score already banked. Play for ${isGross?`${next.targetGross} gross`:`${next.targetPts} points`} and let any extra gain happen naturally.`;
+    why='Being ahead is valuable only if you keep the big number off the card.';
+    tone='good';
+  }else if(delta<=-2){
+    mode='NO PANIC';
+    headline=`You are ${Math.abs(delta)} behind the original route`;
+    const futureTxt=bestRecovery.length?bestRecovery.map(h=>`H${h.hole}`).join(' and '):'later holes';
+    if(routeNeedsGain && opportunityScore(next)>=opportunityScore(bestRecovery[0])){
+      instruction=`H${next.hole} is one of your better recovery chances. Commit to the planned ${isGross?`${next.targetGross} gross`:`${next.targetPts} points`}, but do not chase a miracle score.`;
+    }else{
+      instruction=`Do not try to win the lost shots back immediately on H${next.hole}. Play the planned score; ${futureTxt} offer better recovery opportunities.`;
+    }
+    why='One bad hole should not turn into two. The route can recover strokes later where your history is stronger.';
+    tone='warn';
+  }else if(nextIsDamage){
+    mode='DAMAGE CONTROL';
+    headline=`H${next.hole}: keep the big number off the card`;
+    instruction=`Your route allows ${isGross?`${next.targetGross} gross`:`${next.targetPts} points`} here. Accept that score rather than forcing a better one.`;
+    why='This is not where the round needs to be won.';
+    tone='warn';
+  }else if(routeNeedsGain){
+    mode='OPPORTUNITY';
+    headline=`H${next.hole}: this is a scoring opportunity`;
+    instruction=`The route asks for ${isGross?`${next.targetGross} gross`:`${next.targetPts} points`}. Commit to that target, but an extra gain is a bonus rather than a reason to bring double into play.`;
+    why='This is one of the better places in the remaining route to improve the score.';
+    tone='good';
+  }else{
+    mode='NORMAL';
+    headline=`H${next.hole}: stay patient`;
+    instruction=`Make the planned ${isGross?`${next.targetGross} gross`:`${next.targetPts} points`}. Do not change strategy just because of the previous hole.`;
+    why=bestRecovery.length?`If you need a gain later, ${bestRecovery.map(h=>`H${h.hole}`).join(' and ')} rate better.`:'The route remains achievable without forcing this hole.';
+    tone='normal';
+  }
+
+  const recoveryText=bestRecovery.length
+    ? bestRecovery.map(h=>`H${h.hole} (${isGross?`${h.targetGross} gross`:`${h.targetPts} pts`})`).join(' · ')
+    : 'None needed';
+
+  return {
+    mode,headline,instruction,why,tone,
+    nextHole:next?.hole??null,
+    nextTarget:next?(isGross?`${next.targetGross} gross`:`${next.targetPts} pts`):'—',
+    recoveryHoles:bestRecovery.map(h=>h.hole),
+    recoveryText
+  };
+}
+
 function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,tempMode="whs",liveMode="stableford",startHole=1,actualGross=[],eventOverride=null,layoutOverride=null}){
   try{
     const event=eventOverride||WP_findLatestEventAtCourse(model,courseKey);
@@ -17807,6 +17909,7 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
 
     const plan=WP_makeLiveReplan(model,event,p,courseKey,handicapMap,{target,tempHI,tempMode,liveMode,startHole,actualGross,layoutOverride});
     if(!plan) return {ok:false,error:'Could not build the live replan.'};
+    const caddie=WP_liveScoringCaddie(plan);
 
     const c=event.courseName||courseKey;
     const l=plan.layout;
@@ -17824,6 +17927,7 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
       .LRhdr{background:linear-gradient(120deg,#071d35,#0b3e61 55%,#08775f);color:#fff;border-radius:28px;padding:26px 28px}.LReye{font-size:10px;font-weight:950;letter-spacing:.18em;text-transform:uppercase;color:#a7f3d0}.LRtitle{font-size:38px;font-weight:950;letter-spacing:-.045em;line-height:1;margin-top:8px}.LRsub{font-size:12px;opacity:.78;margin-top:8px}
       .LRdash{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin-top:13px}.LRstat{border:1px solid #dbe5ee;border-radius:15px;padding:11px;background:#fff}.LRk{font-size:8px;font-weight:950;letter-spacing:.1em;text-transform:uppercase;color:#64748b}.LRv{font-size:22px;font-weight:950;margin-top:3px}.LRstat.hero{background:#0b1f36;color:#fff;border-color:#0b1f36}.LRstat.hero .LRk{color:#bfdbfe}.LRstat.good{background:#ecfdf5;border-color:#a7f3d0}.LRstat.bad{background:#fff1f2;border-color:#fecdd3}.LRstat.mid{background:#eff6ff;border-color:#bfdbfe}
       .LRmsg{margin-top:12px;border-radius:16px;border:1px solid #dbe5ee;background:#f8fafc;padding:12px 14px}.LRmsg b{display:block;font-size:14px}.LRmsg span{font-size:10px;color:#64748b}
+      .LRcaddie{margin-top:12px;border:2px solid #dbe5ee;border-radius:18px;padding:14px;background:linear-gradient(180deg,#ffffff,#f8fafc)}.LRcaddie.good{border-color:#86efac;background:linear-gradient(180deg,#ecfdf5,#fff)}.LRcaddie.warn{border-color:#fde68a;background:linear-gradient(180deg,#fffbeb,#fff)}.LRcaddieTop{display:flex;align-items:center;justify-content:space-between;gap:10px}.LRcaddieMode{font-size:9px;font-weight:950;letter-spacing:.12em;text-transform:uppercase;color:#08775f}.LRcaddieTarget{font-size:10px;font-weight:950;color:#475569}.LRcaddieHead{font-size:20px;font-weight:950;margin-top:5px}.LRcaddieInstruction{font-size:13px;font-weight:850;line-height:1.35;margin-top:7px}.LRcaddieWhy{font-size:10px;color:#64748b;line-height:1.35;margin-top:5px}.LRrecovery{margin-top:9px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:9px;color:#475569}.LRrecovery b{color:#0b1f36}
       .LRsec{margin-top:16px}.LRsec h3{font-size:18px;margin:0 0 8px;font-weight:950}.LRstrip{display:grid;grid-template-columns:repeat(9,minmax(0,1fr));gap:5px}.LRcell{border:1px solid #dbe5ee;border-radius:10px;padding:6px 4px;text-align:center;background:#f8fafc}.LRcell.played{background:#eef2ff;border-color:#c7d2fe}.LRcell.attack{background:#ecfdf5;border-color:#a7f3d0}.LRcell.stretch{background:#fffbeb;border-color:#fde68a}.LRcell.protect{background:#f8fafc}.LRh{font-size:8px;font-weight:950;color:#64748b}.LRg{font-size:22px;font-weight:950;line-height:1;margin-top:3px}.LRp{font-size:8px;font-weight:900;color:#475569;margin-top:2px}
       .LRholes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}.LRhole{border:1px solid #dbe5ee;border-radius:15px;padding:11px;background:#f8fafc}.LRhole.attack{background:#ecfdf5;border-color:#a7f3d0}.LRhole.stretch{background:#fffbeb;border-color:#fde68a}.LRtop{display:flex;justify-content:space-between;gap:8px}.LRtag{font-size:8px;font-weight:950;letter-spacing:.08em;text-transform:uppercase}.LRgross{font-size:36px;font-weight:950;line-height:1;margin-top:6px}.LRpts{font-size:13px;font-weight:950}.LRreason{font-size:9px;color:#475569;line-height:1.3;margin-top:6px}
       .LRplayed{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:6px}.LRplayedCell{border:1px solid #c7d2fe;background:#eef2ff;border-radius:10px;padding:7px;text-align:center}.LRplayedCell.better{background:#dcfce7;border-color:#4ade80}.LRplayedCell.worse{background:#fee2e2;border-color:#fb7185}.LRplayedCell.on{background:#f8fafc;border-color:#cbd5e1}.LRfoot{font-size:9px;color:#64748b;margin-top:14px;border-top:1px solid #e2e8f0;padding-top:9px}
@@ -17845,18 +17949,18 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
     const future=plan.holes.filter(h=>!h.played).map(h=>{
       const cue=String(h.planCue||'PROTECT');
       const cls=cue==='PRIMARY_ATTACK'?'attack':cue==='STRETCH_GAIN'?'stretch':'protect';
-      const tag=cue==='PRIMARY_ATTACK'?'PRIMARY ATTACK':cue==='STRETCH_GAIN'?'STRETCH GAIN':cue==='OPPORTUNITY'?'OPPORTUNITY':cue==='SMART_BOGEY'?'BANK IT':'PROTECT';
+      const tag=cue==='PRIMARY_ATTACK'?'OPPORTUNITY':cue==='STRETCH_GAIN'?'RECOVERY CHANCE':cue==='OPPORTUNITY'?'BONUS UPSIDE':cue==='SMART_BOGEY'||cue==='BOGEY_ON_PLAN'||cue==='DAMAGE_CONTROL'?'DAMAGE CONTROL':'NORMAL';
       const n=Number(h.gain3HitN)||0,cnt=Number(h.gain3HitCount)||0,pct=n?Math.round(cnt/n*100):NaN;
       let reason='';
-      if(cue==='PRIMARY_ATTACK') reason=`Best-supported place to find the extra point${Number.isFinite(pct)?` · 3+ pts ${pct}%`:''}.`;
-      else if(cue==='STRETCH_GAIN') reason=`The new target needs a gain here, but don't manufacture it${Number.isFinite(pct)?` · 3+ pts ${pct}%`:''}.`;
+      if(cue==='PRIMARY_ATTACK') reason=`One of your better scoring opportunities${Number.isFinite(pct)?` · 3+ pts ${pct}%`:''}. Make the route score first; anything better is bonus.`;
+      else if(cue==='STRETCH_GAIN') reason=`This is a recovery chance, but don't manufacture the score${Number.isFinite(pct)?` · 3+ pts ${pct}%`:''}.`;
       else if(cue==='OPPORTUNITY') reason=`Baseline is enough; take the bonus point only if it comes naturally.`;
-      else if(cue==='SMART_BOGEY') reason=`Two points is a good outcome here — don't chase par.`;
+      else if(cue==='SMART_BOGEY'||cue==='BOGEY_ON_PLAN'||cue==='DAMAGE_CONTROL') reason=`Damage control: accept the route score and keep the big number off the card.`;
       else reason=`Bank the planned score and keep the round moving.`;
       return `<div class="LRhole ${cls}"><div class="LRtop"><div class="LRtag">H${h.hole} · PAR ${h.par} · SI ${Number.isFinite(h.si)?h.si:'—'}</div><div class="LRtag">${tag}</div></div><div class="LRgross">${h.targetGross}</div><div class="LRpts">${h.targetPts} pts · ${h.strokes} shot${h.strokes===1?'':'s'}</div><div class="LRreason">${reason}</div></div>`;
     }).join('');
 
-    const html=`${css}<div class="LR"><div class="LRhdr"><div class="LReye">DEN GOLF · LIVE REPLAN</div><div class="LRtitle">${WP_escape(p.name)}</div><div class="LRsub">${WP_escape(c)} · target ${plan.liveTarget} pts · ${l.temporaryHI?(l.handicapMethod==="TEMP_FIXED"?`Temporary fixed handicap ${Number(l.hi).toFixed(1)} · PH ${l.ch}`:`Temporary HI ${Number(l.hi).toFixed(1)} → CH ${l.ch}`):`Den handicap ${Number(l.denHandicap).toFixed(1)}`}</div></div>
+    const html=`${css}<div class="LR"><div class="LRhdr"><div class="LReye">DEN GOLF · LIVE SCORING CADDIE</div><div class="LRtitle">${WP_escape(p.name)}</div><div class="LRsub">${WP_escape(c)} · target ${plan.liveTarget} pts · ${l.temporaryHI?(l.handicapMethod==="TEMP_FIXED"?`Temporary fixed handicap ${Number(l.hi).toFixed(1)} · PH ${l.ch}`:`Temporary HI ${Number(l.hi).toFixed(1)} → CH ${l.ch}`):`Den handicap ${Number(l.denHandicap).toFixed(1)}`}</div></div>
       <div class="LRdash">
         <div class="LRstat hero"><div class="LRk">Round target</div><div class="LRv">${plan.liveTarget}${isGrossLive?'':' pts'}</div></div>
         <div class="LRstat"><div class="LRk">${isGrossLive?'Strokes used':'Points banked'}</div><div class="LRv">${isGrossLive?plan.actualGrossTotal:plan.actualPts}</div></div>
@@ -17865,11 +17969,18 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
         <div class="LRstat"><div class="LRk">Holes left</div><div class="LRv">${plan.holesLeft}</div></div>
         <div class="LRstat ${plan.probabilityTone||'mid'}"><div class="LRk">Chance of ${plan.liveTarget}</div><div class="LRv">${WP_escape(plan.targetProbabilityText||'—')}</div><div style="font-size:8px;color:#64748b">${WP_escape(plan.probabilityLabel||'')}</div></div>
       </div>
-      <div class="LRmsg"><b>${WP_escape(plan.status)} · projected ${isGrossLive?plan.projectedGross+' gross':plan.projectedTotal+' pts'}</b><span>${WP_escape(changedText)}${plan.holesLeft?` · Need ${plan.requiredRate.toFixed(2)} ${isGrossLive?'strokes/hole':'pts/hole'} from here to hit ${plan.liveTarget}.`:''}${Number.isFinite(plan.probabilityChange)?` · Target chance ${plan.originalTargetProbabilityText} → ${plan.targetProbabilityText} (${plan.probabilityChange>=0?'+':''}${Math.round(plan.probabilityChange*100)} pts).`:''}</span></div>
+      <div class="LRmsg"><b>${WP_escape(plan.status)} · projected ${isGrossLive?plan.projectedGross+' gross':plan.projectedTotal+' pts'}</b><span>${WP_escape(changedText)}${plan.holesLeft?` · Need ${plan.requiredRate.toFixed(2)} ${isGrossLive?'strokes/hole':'pts/hole'} from here to hit ${plan.liveTarget}.`:''}${Number.isFinite(plan.probabilityChange)?` · Target-or-better chance ${plan.originalTargetProbabilityText} → ${plan.targetProbabilityText} (${plan.probabilityChange>=0?'+':''}${Math.round(plan.probabilityChange*100)} pts).`:''}</span></div>
+      <div class="LRcaddie ${WP_escape(caddie.tone)}">
+        <div class="LRcaddieTop"><div class="LRcaddieMode">SCORING CADDIE · ${WP_escape(caddie.mode)}</div><div class="LRcaddieTarget">${caddie.nextHole?`NEXT H${caddie.nextHole} · ${WP_escape(caddie.nextTarget)}`:'ROUND COMPLETE'}</div></div>
+        <div class="LRcaddieHead">${WP_escape(caddie.headline)}</div>
+        <div class="LRcaddieInstruction">${WP_escape(caddie.instruction)}</div>
+        <div class="LRcaddieWhy">${WP_escape(caddie.why)}</div>
+        ${plan.holesLeft&&caddie.recoveryHoles?.length?`<div class="LRrecovery"><b>Best recovery opportunities later:</b> ${WP_escape(caddie.recoveryText)}</div>`:''}
+      </div>
       <div class="LRsec"><h3>Revised route at a glance</h3>${routeStrip}</div>
       <div class="LRsec"><h3>Scores already banked</h3>${played}</div>
       <div class="LRsec"><h3>From the next hole</h3><div class="LRholes">${future}</div></div>
-      <div class="LRfoot">Every replan preserves completed scores, then re-optimises only the remaining holes using your exact-hole 3+ achievement rate first, gross score required for the gain second, then exact-hole average, SI, Par, yardage and recent form.</div>
+      <div class="LRfoot"><b>Scoring Caddie:</b> completed scores are locked, then only the remaining route is re-optimised. Advice is about <b>what score to pursue, protect or accept</b> — not club selection. It uses exact-hole history, current form, route position and target probability so one bad hole does not trigger emotional recovery golf.</div>
     </div>`;
 
     return {ok:true,event,plan,htmlFragment:html};
