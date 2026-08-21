@@ -17516,7 +17516,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   const [savedLiveRound, setSavedLiveRound] = React.useState(null);
 
   const [tempHandicaps, setTempHandicaps] = React.useState({});
-  const [tempHandicapModes, setTempHandicapModes] = React.useState({}); // player -> "whs" | "fixed"
+  const [tempHandicapModes, setTempHandicapModes] = React.useState({}); // player -> "den" | "whs" | "fixed"
   const handicapMap = React.useMemo(() => {
     const map=WP_currentYearHandicapMap(seasonRoundsAllYears,currentYear);
     for(const mp of (manualPlayers||[])){
@@ -17650,7 +17650,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     return WP_layoutForPlayer(
       seasonModel,planningEvent,livePlayer,courseKey,handicapMap,
       tempHandicaps?.[String(livePlayer?.name||"")],
-      tempHandicapModes?.[String(livePlayer?.name||"")]||"whs",
+      tempHandicapModes?.[String(livePlayer?.name||"")]||"den",
       selectedDbTee?.round||null
     );
   },[livePlayer,planningEvent,seasonModel,courseKey,handicapMap,tempHandicaps,tempHandicapModes,selectedDbTee]);
@@ -17688,7 +17688,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       liveMode:liveScoringMode,
       target:activeLiveTarget,
       tempHI:tempHandicaps?.[activeLivePlayerName],
-      tempMode:tempHandicapModes?.[activeLivePlayerName]||"whs",
+      tempMode:tempHandicapModes?.[activeLivePlayerName]||"den",
       scores:liveScores
     });
     setLiveSaveStatus(ok?"saved":"error");
@@ -17762,7 +17762,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       startHole={liveStartHole}
       layoutOverride={selectedDbTee?.round||null}
       tempHI={tempHandicaps?.[selectedPlayers[0]]}
-      tempMode={tempHandicapModes?.[selectedPlayers[0]]||"whs"}
+      tempMode={tempHandicapModes?.[selectedPlayers[0]]||"den"}
       liveScores={liveScores}
       setLiveScores={setLiveScores}
       onExit={()=>setOnCourseMode(false)}
@@ -17770,7 +17770,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         const r=WP_generateLiveReplanHTML({
           model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
           target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],
-          tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores,eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null
+          tempMode:tempHandicapModes?.[selectedPlayers[0]]||"den",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores,eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null
         });
         if(r?.ok){
           window.__dslSeasonReportParams={
@@ -17811,7 +17811,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     }
     if(savedLiveRound.tempHI!=null && activeLivePlayerName){
       setTempHandicaps(prev=>({...prev,[activeLivePlayerName]:String(savedLiveRound.tempHI)}));
-      setTempHandicapModes(prev=>({...prev,[activeLivePlayerName]:savedLiveRound.tempMode||"whs"}));
+      setTempHandicapModes(prev=>({...prev,[activeLivePlayerName]:savedLiveRound.tempMode||"den"}));
     }
     setLiveSaveStatus("saved");
   };
@@ -17822,7 +17822,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         if(selectedPlayers.length!==1){ alert("Choose exactly one player for Live Replan."); return; }
         const r=WP_generateLiveReplanHTML({
           model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
-          target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores,
+          target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],tempMode:tempHandicapModes?.[selectedPlayers[0]]||"den",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores,
           eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null
         });
         if(!r?.ok){ alert(r?.error||"Could not build live replan."); return; }
@@ -17958,17 +17958,24 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
                 <div className="mt-4 max-h-52 overflow-auto rounded-2xl border border-slate-200 bg-white p-2">
                   {players.map(p=>{ const name=String(p.name); const checked=selectedPlayers.includes(name); const hx=handicapMap.get(WP_norm(name)); const hi=Number(hx?.newHI); return <div key={name} className={`rounded-xl px-3 py-2.5 ${checked?"bg-emerald-50":"hover:bg-slate-50"}`}><label className={`flex cursor-pointer items-center gap-3 text-sm font-bold ${checked?"text-emerald-900":"text-slate-700"}`}><input type="checkbox" checked={checked} onChange={()=>togglePlayer(name)} className="h-4 w-4"/><span className="flex-1">{name}</span><span className={`rounded-full px-2 py-1 text-[10px] font-black ${Number.isFinite(hi)?"bg-blue-50 text-blue-700":"bg-slate-100 text-slate-400"}`}>{Number.isFinite(hi)?`HI ${hi.toFixed(1)}`:"HI —"}</span>{checked?<span className="text-emerald-600">✓</span>:null}</label>{checked?(()=>{
   const entered=String(tempHandicaps[name]??"").trim();
-  const mode=entered===""?"den":String(tempHandicapModes[name]||"whs");
+
+  // IMPORTANT: the selected handicap TYPE is independent of whether a number
+  // has been entered yet. App-90 derived the type from `entered`, which meant
+  // clicking WHS or Fixed with a blank box instantly snapped back to Den.
+  const storedMode=String(tempHandicapModes[name]||"den").toLowerCase();
+  const mode=(storedMode==="whs"||storedMode==="fixed")?storedMode:"den";
   const denValue=Number.isFinite(hi)?hi:null;
 
   const chooseHcapMode=(nextMode)=>{
-    if(nextMode==="den"){
+    const next=(nextMode==="whs"||nextMode==="fixed")?nextMode:"den";
+    setTempHandicapModes(prev=>({...prev,[name]:next}));
+
+    if(next==="den"){
+      // Den mode deliberately has no temporary override value.
       setTempHandicaps(prev=>({...prev,[name]:""}));
-      return;
     }
-    setTempHandicapModes(prev=>({...prev,[name]:nextMode}));
-    // Leave an existing entered temporary number in place. If none exists,
-    // the input is shown immediately so the user can enter it.
+    // WHS / Fixed now remain selected even while the input is blank,
+    // allowing the user to choose the type first and enter the value second.
   };
 
   return <div className="mt-2 ml-7 rounded-2xl border border-slate-200 bg-white p-3 shadow-sm">
