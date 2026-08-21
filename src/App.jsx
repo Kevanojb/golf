@@ -3708,6 +3708,70 @@ function AdminView({
   const [societyBusy, setSocietyBusy] = React.useState(false);
 
   // ------------------------------------------------------------
+  // KML COURSE GEOMETRY (App-96)
+  // ProVisualizer-style KML: Hole N Tee / Target N / Pin / Center Line.
+  // Geometry is course-level. Tees can continue to hold their own WHS yardages.
+  // ------------------------------------------------------------
+  function CG_num(v){ const n=Number(v); return Number.isFinite(n)?n:NaN; }
+  function CG_bearing(a,b){
+    if(!a||!b)return NaN;
+    const r=x=>Number(x)*Math.PI/180,d=x=>x*180/Math.PI;
+    const p1=r(a.lat),p2=r(b.lat),dl=r(Number(b.lng)-Number(a.lng));
+    const y=Math.sin(dl)*Math.cos(p2);
+    const x=Math.cos(p1)*Math.sin(p2)-Math.sin(p1)*Math.cos(p2)*Math.cos(dl);
+    return (d(Math.atan2(y,x))+360)%360;
+  }
+  function CG_distanceYards(a,b){
+    if(!a||!b)return NaN; const R=6371008.8;
+    const r=x=>Number(x)*Math.PI/180;
+    const p1=r(a.lat),p2=r(b.lat),dp=r(Number(b.lat)-Number(a.lat)),dl=r(Number(b.lng)-Number(a.lng));
+    const q=Math.sin(dp/2)**2+Math.cos(p1)*Math.cos(p2)*Math.sin(dl/2)**2;
+    return 2*R*Math.asin(Math.sqrt(q))*1.0936133;
+  }
+  function CG_compass(deg){
+    if(!Number.isFinite(Number(deg)))return '—';
+    const a=['N','NE','E','SE','S','SW','W','NW']; return a[Math.round(((Number(deg)%360)+360)%360/45)%8];
+  }
+  function CG_parseCoordinates(text){
+    return String(text||'').trim().split(/\s+/).map(x=>{
+      const p=x.split(',').map(Number); return {lng:p[0],lat:p[1],alt:Number.isFinite(p[2])?p[2]:0};
+    }).filter(p=>Number.isFinite(p.lat)&&Number.isFinite(p.lng));
+  }
+  function CG_parseKML(xmlText){
+    const doc=new DOMParser().parseFromString(String(xmlText||''),'application/xml');
+    if(doc.querySelector('parsererror')) throw new Error('That file is not valid KML/XML.');
+    const docName=String(doc.querySelector('Document > name')?.textContent||'').trim();
+    const holes=Array.from({length:18},(_,i)=>({hole_number:i+1,tee:null,pin:null,targets:[],centerline:[],legs:[]}));
+    const placemarks=Array.from(doc.getElementsByTagName('Placemark'));
+    for(const pm of placemarks){
+      const name=String(pm.getElementsByTagName('name')?.[0]?.textContent||'').trim();
+      const m=name.match(/^Hole\s+(\d+)\s+(Tee|Pin|Target\s+\d+|Center\s+Line)$/i); if(!m)continue;
+      const hn=Number(m[1]); if(hn<1||hn>18)continue;
+      const coords=CG_parseCoordinates(pm.getElementsByTagName('coordinates')?.[0]?.textContent||''); if(!coords.length)continue;
+      const h=holes[hn-1],kind=m[2].toLowerCase();
+      if(kind==='tee') h.tee=coords[0];
+      else if(kind==='pin') h.pin=coords[0];
+      else if(kind.startsWith('target')) h.targets.push({index:Number((kind.match(/\d+/)||[99])[0]),...coords[0]});
+      else if(kind.includes('center')) h.centerline=coords;
+    }
+    for(const h of holes){
+      h.targets.sort((a,b)=>a.index-b.index);
+      let pts=[h.tee,...h.targets,h.pin].filter(Boolean);
+      // If named points are incomplete, a center line is still useful.
+      if(pts.length<2 && h.centerline.length>=2) pts=h.centerline;
+      h.points=pts;
+      h.legs=[];
+      for(let i=0;i<pts.length-1;i++) h.legs.push({
+        leg_number:i+1,from:pts[i],to:pts[i+1],bearing_deg:CG_bearing(pts[i],pts[i+1]),yards:CG_distanceYards(pts[i],pts[i+1])
+      });
+      h.primary_bearing_deg=h.legs[0]?.bearing_deg;
+      h.tee_to_green_bearing_deg=(h.tee&&h.pin)?CG_bearing(h.tee,h.pin):NaN;
+    }
+    const valid=holes.filter(h=>h.tee&&h.pin&&h.legs.length);
+    if(valid.length<9) throw new Error(`Only ${valid.length} holes with tee/pin geometry were found.`);
+    return {courseName:docName,holes,validHoles:valid.length};
+  }
+  // ------------------------------------------------------------
   // Course Manager
   // Existing schema already used elsewhere in the app:
   // courses(id,name)
@@ -3736,6 +3800,10 @@ function AdminView({
   const [adminCoursesBusy,setAdminCoursesBusy] = React.useState(false);
   const [courseSaveBusy,setCourseSaveBusy] = React.useState(false);
   const [courseStatus,setCourseStatus] = React.useState("");
+  const [kmlBusy,setKmlBusy]=React.useState(false);
+  const [kmlStatus,setKmlStatus]=React.useState("");
+  const [kmlPreview,setKmlPreview]=React.useState(null);
+  const [kmlCourseId,setKmlCourseId]=React.useState("");
   const [newCourseName,setNewCourseName] = React.useState("");
   const [newCourseTees,setNewCourseTees] = React.useState(()=>[{
     client_id:`tee-${Date.now()}`,
@@ -3757,7 +3825,7 @@ function AdminView({
     if(!supabase) return;
     setAdminCoursesBusy(true);
     try{
-      const cr=await supabase.from("courses").select("id,name").order("name",{ascending:true});
+      const cr=await supabase.from("courses").select("*").order("name",{ascending:true});
       if(cr.error) throw cr.error;
       const courses=Array.isArray(cr.data)?cr.data:[];
       if(!courses.length){ setAdminCourses([]); return; }
@@ -3874,6 +3942,53 @@ function AdminView({
     }
 
     return {ok:true,name,tees:prepared};
+  }
+
+  async function handleCourseKMLFile(file){
+    if(!file)return;
+    setKmlBusy(true);setKmlStatus('Reading KML…');setKmlPreview(null);
+    try{
+      const parsed=CG_parseKML(await file.text());
+      setKmlPreview(parsed);
+      const key=WP_courseMatchKey(parsed.courseName);
+      const match=(adminCourses||[]).find(c=>WP_courseMatchKey(c?.name)===key) ||
+        (adminCourses||[]).find(c=>key&&WP_courseMatchKey(c?.name).includes(key));
+      if(match)setKmlCourseId(String(match.id));
+      setKmlStatus(`✅ ${parsed.courseName||file.name}: ${parsed.validHoles}/18 holes mapped. Choose the Supabase course and save geometry.`);
+    }catch(e){setKmlStatus(`KML error: ${e?.message||e}`);}
+    finally{setKmlBusy(false);}
+  }
+
+  async function saveKMLGeometryToSupabase(){
+    if(!isAdmin||!kmlPreview)return;
+    const courseId=kmlCourseId;
+    if(!courseId){setKmlStatus('Choose which Supabase course this KML belongs to.');return;}
+    const supabase=typeof window!=="undefined"?window.__supabase_client__:null;
+    if(!supabase){setKmlStatus('Supabase client missing.');return;}
+    setKmlBusy(true);setKmlStatus('Saving hole geometry…');
+    try{
+      const rows=kmlPreview.holes.filter(h=>h.tee&&h.pin&&h.legs.length).map(h=>({
+        course_id:courseId,hole_number:h.hole_number,
+        tee_lat:h.tee.lat,tee_lng:h.tee.lng,green_lat:h.pin.lat,green_lng:h.pin.lng,
+        primary_bearing_deg:h.primary_bearing_deg,
+        tee_to_green_bearing_deg:(h.tee&&h.pin)?CG_bearing(h.tee,h.pin):null,
+        points:h.points,legs:h.legs,source:'kml'
+      }));
+      const gr=await supabase.from('course_geometry').upsert(rows,{onConflict:'course_id,hole_number'});
+      if(gr.error)throw gr.error;
+      // Store course centre as a weather coordinate where schema permits it.
+      const pts=rows.flatMap(r=>[{lat:r.tee_lat,lng:r.tee_lng},{lat:r.green_lat,lng:r.green_lng}]);
+      const latitude=pts.reduce((a,p)=>a+p.lat,0)/pts.length,longitude=pts.reduce((a,p)=>a+p.lng,0)/pts.length;
+      const ur=await supabase.from('courses').update({latitude,longitude}).eq('id',courseId);
+      // latitude/longitude are useful but optional; don't fail geometry if older schema lacks them.
+      if(ur.error) console.warn('Course coordinates were not stored:',ur.error);
+      setKmlStatus(`✅ Saved ${rows.length} mapped holes. Doglegs/targets are now available to the weather engine.`);
+      try{window.dispatchEvent(new CustomEvent('den_courses_changed',{detail:{courseId,geometry:true}}));}catch{}
+      await loadAdminCourses();
+    }catch(e){
+      const msg=String(e?.message||e);
+      setKmlStatus(`Save failed: ${msg}${/course_geometry/i.test(msg)?' — run the App-96 Supabase migration once, then retry.':''}`);
+    }finally{setKmlBusy(false);}
   }
 
   async function saveNewCourseToSupabase(){
@@ -4523,6 +4638,18 @@ function AdminView({
                   </div>
                 )}
               </div>
+            </div>
+
+            <div className="lg:col-span-2 rounded-2xl border border-sky-200 bg-sky-50/60 p-3 md:p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div><div className="text-[10px] font-black uppercase tracking-widest text-sky-700">Course geometry</div><div className="text-lg font-black text-neutral-900">Import Course KML</div><div className="mt-1 text-xs text-neutral-600">Upload a ProVisualizer-style KML. The app extracts tee, landing targets, green and dogleg legs for all 18 holes, calculates bearings, and saves them for weather-aware planning.</div></div>
+                <label className="btn-primary cursor-pointer">{kmlBusy?'Working…':'🗺️ Choose KML'}<input type="file" accept=".kml,application/vnd.google-earth.kml+xml,application/xml,text/xml" className="hidden" disabled={kmlBusy} onChange={e=>{const f=e.target.files?.[0];if(f)handleCourseKMLFile(f);e.target.value='';}}/></label>
+              </div>
+              {kmlPreview?<div className="mt-3">
+                <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 items-end"><label><div className="text-[9px] font-black uppercase text-neutral-500">Save geometry to</div><select value={kmlCourseId} onChange={e=>setKmlCourseId(e.target.value)} className="mt-1 w-full rounded-xl border border-sky-200 bg-white px-3 py-2 text-sm font-black"><option value="">Choose Supabase course…</option>{adminCourses.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label><button type="button" className="btn-primary" onClick={saveKMLGeometryToSupabase} disabled={kmlBusy||!kmlCourseId}>Save 18-hole geometry</button></div>
+                <div className="mt-3 grid grid-cols-3 sm:grid-cols-6 md:grid-cols-9 gap-1.5">{kmlPreview.holes.map(h=><div key={h.hole_number} className={`rounded-lg border p-1.5 text-center ${h.legs?.length?'border-emerald-200 bg-white':'border-amber-200 bg-amber-50'}`}><div className="text-[8px] font-black text-neutral-400">H{h.hole_number}</div><div className="text-[10px] font-black text-neutral-800">{h.legs?.length?`${Math.round(h.primary_bearing_deg)}° ${CG_compass(h.primary_bearing_deg)}`:'—'}</div><div className="text-[8px] text-neutral-500">{h.legs?.length||0} leg{h.legs?.length===1?'':'s'}</div></div>)}</div>
+              </div>:null}
+              {kmlStatus?<div className="mt-3 rounded-xl border border-sky-200 bg-white px-3 py-2 text-xs font-bold text-sky-900">{kmlStatus}</div>:null}
             </div>
 
             {/* New course */}
@@ -17357,7 +17484,22 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
 }
 
 function WP_escape(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
-function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mode='winning',customTarget,tempHandicaps={},tempHandicapModes={},eventOverride=null,layoutOverride=null}){
+function WP_weatherGeometryHTML(ctx){
+  const geo=ctx?.geometryByHole||{}; const rows=[];
+  for(let h=1;h<=18;h++){
+    const g=geo[h]; if(!g)continue;
+    const legs=Array.isArray(g.legs)?g.legs:[];
+    const ws=legs.map(l=>WP_holeWeather(ctx,Number(l.bearing_deg))).filter(Boolean);
+    if(!ws.length)continue;
+    const head=ws.reduce((a,w)=>a+Number(w.headwindMph||0),0)/ws.length;
+    const cross=ws.reduce((a,w)=>a+Math.abs(Number(w.crosswindMph||0)),0)/ws.length;
+    const label=head>2.5?'Into':head<-2.5?'Helping':cross>3?'Cross':'Neutral';
+    rows.push(`<div style="border:1px solid #e2e8f0;border-radius:10px;padding:7px;text-align:center;background:#fff"><div style="font-size:8px;font-weight:900;color:#94a3b8">H${h}</div><div style="font-size:10px;font-weight:950;color:#0f172a">${label}</div><div style="font-size:8px;color:#64748b">${head>=0?'+':''}${head.toFixed(0)} mph head · ${cross.toFixed(0)} cross</div></div>`);
+  }
+  if(!rows.length)return '';
+  return `<div style="margin-top:9px"><div style="font-size:8px;font-weight:950;color:#0369a1;text-transform:uppercase;letter-spacing:.08em">Hole-by-hole wind geometry</div><div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin-top:5px">${rows.join('')}</div></div>`;
+}
+function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mode='winning',customTarget,tempHandicaps={},tempHandicapModes={},weatherContext=null,eventOverride=null,layoutOverride=null}){
   try{
     const historicEvent=WP_findLatestEventAtCourse(model,courseKey);
     const event=eventOverride||historicEvent;
@@ -17472,7 +17614,8 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
         <div><div class="WPhcapAuditK">Slope</div><div class="WPhcapAuditV">${Number.isFinite(Number(l.slope))?Math.round(Number(l.slope)):'—'}</div><div class="WPhcapAuditS">${l.handicapMethod==='TEMP_WHS'?'Used in WHS conversion':'Reference only'}</div></div>
       </div>`;
 
-      return `<section class="WPplayer"><div class="WPplayerHead"><div><div class="WPeyebrow" style="color:#0b7a6e;opacity:1">PERSONALISED ROUTE</div><div class="WPname">${WP_escape(p?.name||'Player')}</div><div class="WPmeta">${l.temporaryHI
+      const weatherBanner=weatherContext?`<div style="margin:12px 0 16px;border:1px solid #bae6fd;background:#f0f9ff;border-radius:16px;padding:12px 14px"><div style="font-size:9px;font-weight:950;letter-spacing:.1em;text-transform:uppercase;color:#0369a1">☁ WEATHER AT TEE TIME</div><div style="font-size:16px;font-weight:950;color:#0f172a;margin-top:3px">${WP_escape(WP_weatherLabel(WP_holeWeather(weatherContext,NaN)))}</div><div style="font-size:9px;color:#64748b;margin-top:3px">Baseline targets remain based on player history. Weather is a separate current-conditions overlay and does not alter historical ability.</div>${WP_weatherGeometryHTML(weatherContext)}</div>`:"";
+      return `<section class="WPplayer">${weatherBanner}<div class="WPplayerHead"><div><div class="WPeyebrow" style="color:#0b7a6e;opacity:1">PERSONALISED ROUTE</div><div class="WPname">${WP_escape(p?.name||'Player')}</div><div class="WPmeta">${l.temporaryHI
   ? (l.handicapMethod==='TEMP_FIXED'
       ? `Temporary fixed handicap ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'} · Playing Handicap ${l.ch}`
       : `Temporary HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'} → Course Handicap ${l.ch}`)
@@ -17867,10 +18010,21 @@ function WP_OnCourseMode({
   );
 }
 
+function WP_degDiff(a,b){return ((Number(a)-Number(b)+540)%360)-180;}
+function WP_holeWeather(w,bearing){
+ if(!w)return null; const speed=Number(w.windMph)||0,from=Number(w.windDirection),b=Number(bearing);
+ let head=0,cross=0;if(Number.isFinite(from)&&Number.isFinite(b)){const r=WP_degDiff(from,b)*Math.PI/180;head=speed*Math.cos(r);cross=speed*Math.sin(r);}
+ const penalty=Math.min(.55,Math.max(-.15,Math.max(0,head)*.018+Math.abs(cross)*.005+Math.max(0,(Number(w.gustMph)||0)-speed)*.004+Math.max(0,Number(w.rainMm)||0)*.035+Math.max(0,10-(Number(w.tempC)||15))*.008-Math.max(0,-head)*.007));
+ return {...w,headwindMph:head,crosswindMph:cross,strokePenalty:penalty};
+}
+function WP_weatherLabel(w){if(!w)return"No weather";const a=[];if(Number.isFinite(w.windMph))a.push(`${Math.round(w.windMph)} mph wind`);if(Number.isFinite(w.gustMph)&&w.gustMph>w.windMph+3)a.push(`gust ${Math.round(w.gustMph)}`);if(Number(w.rainMm)>.1)a.push(`${Number(w.rainMm).toFixed(1)} mm rain`);if(Number.isFinite(w.tempC))a.push(`${Math.round(w.tempC)}°C`);return a.join(" · ");}
+async function WP_geocodeCourse(name){const r=await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(String(name||""))}&count=5&language=en&format=json`);if(!r.ok)throw new Error("Could not locate course.");const j=await r.json(),xs=Array.isArray(j.results)?j.results:[];if(!xs.length)throw new Error("Course location not found. Add latitude/longitude in Course Manager.");const x=xs.find(v=>String(v.country_code).toUpperCase()==="GB")||xs[0];return{latitude:Number(x.latitude),longitude:Number(x.longitude),label:[x.name,x.admin1,x.country].filter(Boolean).join(", ")};}
+async function WP_fetchCourseWeather({latitude,longitude,date,teeTime}){const p=new URLSearchParams({latitude:String(latitude),longitude:String(longitude),hourly:"temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m",wind_speed_unit:"mph",timezone:"auto",start_date:date,end_date:date});const r=await fetch(`https://api.open-meteo.com/v1/forecast?${p}`);if(!r.ok)throw new Error("Forecast unavailable for that date.");const j=await r.json(),h=j.hourly||{},ts=h.time||[];if(!ts.length)throw new Error("No hourly forecast returned.");const target=new Date(`${date}T${teeTime||"10:00"}:00`).getTime();let k=0,d=Infinity;ts.forEach((t,i)=>{const x=Math.abs(new Date(t).getTime()-target);if(x<d){d=x;k=i;}});const v=x=>Number((x||[])[k]);return{forecastTime:ts[k],tempC:v(h.temperature_2m),rainMm:v(h.precipitation),windMph:v(h.wind_speed_10m),windDirection:v(h.wind_direction_10m),gustMph:v(h.wind_gusts_10m),timezone:j.timezone};}
 function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, setView, runSeasonAnalysis, manualPlayers=[] }) {
   const historicCourses = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
   const [dbCourses,setDbCourses]=React.useState([]);
   const [dbTees,setDbTees]=React.useState([]);
+  const [courseGeometry,setCourseGeometry]=React.useState([]);
   const [selectedTeeId,setSelectedTeeId]=React.useState("");
   const [courseLibraryLoading,setCourseLibraryLoading]=React.useState(false);
   const [courseLibraryError,setCourseLibraryError]=React.useState("");
@@ -17904,7 +18058,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
         const {data,error}=await supabase
           .from("courses")
-          .select("id,name")
+          .select("*")
           .order("name",{ascending:true});
         if(error) throw error;
 
@@ -17931,6 +18085,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       if(!matchKey) continue;
       map.set(matchKey,{
         key:matchKey,label,dbId:c.id,source:"supabase",
+        latitude:Number(c.latitude??c.lat),longitude:Number(c.longitude??c.lng??c.lon),
         rounds:0,lastMs:0,aliases:[label]
       });
     }
@@ -17968,6 +18123,13 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   }); // winning | stableford | gross | live
   const [customPoints, setCustomPoints] = React.useState(40);
   const [customGross, setCustomGross] = React.useState(85);
+  const [weatherEnabled,setWeatherEnabled]=React.useState(false);
+  const [weatherDate,setWeatherDate]=React.useState(()=>new Date().toISOString().slice(0,10));
+  const [weatherTeeTime,setWeatherTeeTime]=React.useState("10:00");
+  const [weatherBusy,setWeatherBusy]=React.useState(false);
+  const [weatherError,setWeatherError]=React.useState("");
+  const [courseWeather,setCourseWeather]=React.useState(null);
+  const [weatherLocation,setWeatherLocation]=React.useState(null);
   const [liveScores, setLiveScores] = React.useState(()=>Array(18).fill(""));
   const [onCourseMode, setOnCourseMode] = React.useState(false);
   const [liveScoringMode, setLiveScoringMode] = React.useState("stableford"); // stableford | gross
@@ -18055,10 +18217,29 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     return ()=>{cancelled=true;};
   },[selectedCourse?.dbId,selectedCourse?.label]);
 
+  // Load optional KML geometry. App remains usable if the migration has not been run yet.
+  React.useEffect(()=>{
+    let cancelled=false; setCourseGeometry([]);
+    (async()=>{if(!selectedCourse?.dbId)return;try{
+      const supabase=(typeof window!=="undefined"&&window.__supabase_client__)?window.__supabase_client__:createClient(SUPA_URL,SUPA_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+      const r=await supabase.from('course_geometry').select('*').eq('course_id',selectedCourse.dbId).order('hole_number',{ascending:true});
+      if(r.error)throw r.error;if(!cancelled)setCourseGeometry(Array.isArray(r.data)?r.data:[]);
+    }catch(e){console.info('No course geometry loaded:',e?.message||e);}})();
+    return()=>{cancelled=true;};
+  },[selectedCourse?.dbId,courseLibraryRevision]);
+
+  const geometryByHole=React.useMemo(()=>{
+    const m={};(courseGeometry||[]).forEach(g=>{m[Number(g.hole_number)]=g;});return m;
+  },[courseGeometry]);
+
   const selectedDbTee=React.useMemo(
     ()=>dbTees.find(t=>String(t.id)===String(selectedTeeId))||null,
     [dbTees,selectedTeeId]
   );
+  const loadWeatherForPlan=React.useCallback(async()=>{if(!selectedCourse)return;setWeatherBusy(true);setWeatherError("");try{let lat=Number(selectedCourse.latitude),lon=Number(selectedCourse.longitude),label=selectedCourse.label;if(!Number.isFinite(lat)||!Number.isFinite(lon)){const g=await WP_geocodeCourse(selectedCourse.label);lat=g.latitude;lon=g.longitude;label=g.label;}const w=await WP_fetchCourseWeather({latitude:lat,longitude:lon,date:weatherDate,teeTime:weatherTeeTime});setWeatherLocation({latitude:lat,longitude:lon,label});setCourseWeather(w);setWeatherEnabled(true);}catch(e){setCourseWeather(null);setWeatherError(e?.message||"Could not load weather.");}finally{setWeatherBusy(false);}},[selectedCourse,weatherDate,weatherTeeTime]);
+  React.useEffect(()=>{setCourseWeather(null);setWeatherError("");},[courseKey,selectedTeeId,weatherDate,weatherTeeTime]);
+  const weatherSummary=React.useMemo(()=>weatherEnabled&&courseWeather?WP_holeWeather(courseWeather,NaN):null,[weatherEnabled,courseWeather]);
+
 
   const event = React.useMemo(
     () => WP_findLatestEventAtCourse(seasonModel, selectedCourse?.label||courseKey),
@@ -18299,6 +18480,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       const r = WP_generateWinningPlanHTML({
         model:seasonModel,courseKey,playerNames:selectedPlayers,handicapMap,
         mode:planMode,customTarget:target,tempHandicaps,tempHandicapModes,
+        weatherContext:(weatherEnabled&&courseWeather)?{...courseWeather,date:weatherDate,teeTime:weatherTeeTime,location:weatherLocation,geometryByHole}:null,
         eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null
       });
       if (!r?.ok) { alert(r?.error || "Could not build winning plan."); return; }
@@ -18395,6 +18577,13 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
                       ? `${dbCourses.length} Supabase course${dbCourses.length===1?"":"s"} loaded · ${courses.length} total available.`
                       : `No Supabase courses loaded · ${courses.length} history course${courses.length===1?"":"s"} available.`}
                   {courseLibraryError?<span className="block mt-1 font-bold text-rose-600">Supabase: {courseLibraryError}</span>:null}
+                </div>
+                <div className="mt-4 rounded-2xl border border-sky-200 bg-sky-50 p-3">
+                  <div className="flex justify-between gap-2"><div><div className="text-[9px] font-black uppercase tracking-widest text-sky-700">Weather-adjusted plan</div><div className="text-sm font-black">Conditions at tee time</div></div><label className="text-[10px] font-black text-sky-800"><input type="checkbox" checked={weatherEnabled} onChange={e=>setWeatherEnabled(e.target.checked)}/> ON</label></div>
+                  <div className="mt-3 grid grid-cols-2 gap-2"><input type="date" value={weatherDate} onChange={e=>setWeatherDate(e.target.value)} className="rounded-xl border border-sky-200 bg-white px-2 py-2 text-xs font-bold"/><input type="time" value={weatherTeeTime} onChange={e=>setWeatherTeeTime(e.target.value)} className="rounded-xl border border-sky-200 bg-white px-2 py-2 text-xs font-bold"/></div>
+                  <button type="button" onClick={loadWeatherForPlan} disabled={weatherBusy||!selectedCourse} className="mt-2 w-full rounded-xl bg-sky-700 px-3 py-2 text-xs font-black text-white disabled:opacity-40">{weatherBusy?"Loading forecast…":"☁️ Load Course Weather"}</button>
+                  {weatherSummary?<div className="mt-2 rounded-xl border border-sky-200 bg-white p-2"><div className="text-xs font-black">{WP_weatherLabel(weatherSummary)}</div><div className="mt-1 text-[9px] text-slate-500">{weatherLocation?.label||selectedCourse?.label} · near {weatherTeeTime}. {courseGeometry.length?`${courseGeometry.length}/18 mapped holes · doglegs enabled.`:'No KML geometry yet · course-wide weather only.'} Baseline player history remains unchanged.</div></div>:null}
+                  {weatherError?<div className="mt-2 text-[10px] font-bold text-rose-600">{weatherError}</div>:null}
                 </div>
               </div>
 
