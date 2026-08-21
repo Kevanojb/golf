@@ -2636,8 +2636,31 @@ function parseGenericScorecardCSV(csvText) {
     return Number.isFinite(n) ? n : NaN;
   };
 
-  // 1) Metadata: Course name
+  // 1) Metadata: course/date/round classification.
+  // "Individual Historical Round" is deliberately isolated from Den competition
+  // standings, eclectic, winners and field benchmarks while remaining available
+  // to the named player's personal history and course-learning model.
   let courseName = "";
+  let roundType = "den";
+  let dateMs = NaN;
+  let roundNote = "";
+
+  for (const r of rows.slice(0, 12)) {
+    if (!r || !r.length) continue;
+    const key = norm(r[0]);
+    const value = String(r.slice(1).find(v=>String(v||"").trim()) || "").trim();
+    if ((key === "round type" || key === "round_type" || key === "type") && value) {
+      const rt = norm(value);
+      roundType = (rt.includes("individual") || rt.includes("private") || rt.includes("historical"))
+        ? "individual"
+        : "den";
+    }
+    if ((key === "date" || key === "round date" || key === "played on") && value) {
+      const d = new Date(value);
+      if (!Number.isNaN(d.getTime())) dateMs = d.getTime();
+    }
+    if (key === "note" && value) roundNote = value;
+  }
   for (const r of rows.slice(0, 10)) {
     if (!r || !r.length) continue;
     const a0 = norm(r[0]);
@@ -2852,7 +2875,19 @@ function parseGenericScorecardCSV(csvText) {
     si: (sis && sis.length === holesCount) ? sis.slice() : [],
   }));
 
-  return { players: finalPlayers, courseTees, courseName };
+  // Stamp the classification onto players too so a locally loaded individual
+  // card cannot accidentally masquerade as a Den competition event.
+  for (const p of finalPlayers) p.roundType = roundType;
+
+  return {
+    players: finalPlayers,
+    courseTees,
+    courseName,
+    roundType,
+    isIndividualHistorical: roundType === "individual",
+    dateMs: Number.isFinite(dateMs) ? dateMs : undefined,
+    note: roundNote
+  };
 }
 
 // Parses either Squabbit CSV (preferred) or a generic scorecard CSV as a fallback.
@@ -15982,6 +16017,7 @@ function WP_findLatestEventAtCourse(model, courseKey){
   const events=new Map();
   for(const p of (Array.isArray(model?.players)?model.players:[])){
     for(const r of WP_series(p)){
+      if(r?.isIndividualHistorical || r?.roundType==="individual") continue;
       if(WP_courseMatchKey(WP_course(r))!==key) continue;
       const ek=WP_eventKey(r);
       const e=events.get(ek)||{key:ek,courseName:WP_course(r),dateMs:0,dateLabel:WP_dateLabel(r),entries:[]};
@@ -22239,6 +22275,8 @@ const [tenantTick, setTenantTick] = useState(0);
 
 // CSV import metadata (persist event_date to Supabase)
 const [loadedEventDateMs, setLoadedEventDateMs] = useState(null);
+        const [loadedEventRoundType,setLoadedEventRoundType] = useState("den");
+        const [loadedEventNote,setLoadedEventNote] = useState("");
 const [loadedEventFileName, setLoadedEventFileName] = useState("");
 // Restore last-resolved tenant (GitHub Pages refresh-safe)
 try {
@@ -22853,6 +22891,12 @@ function _pushUnique(arr, val) {
     const roundPtsTotals = [];
     const roundGrossTotals = [];
     const parsed = r.parsed || {};
+    const isIndividualRound = !!(
+      r?.isIndividualHistorical ||
+      r?.roundType === "individual" ||
+      parsed?.isIndividualHistorical ||
+      parsed?.roundType === "individual"
+    );
     const dateMs = (Number.isFinite(parsed.dateMs) && Number(parsed.dateMs) > 0) ? Number(parsed.dateMs) : _extractDateMsFromPath(fileKey);
     const players = parsed.players || [];
     const courseTees = parsed.courseTees || [];
@@ -22860,6 +22904,7 @@ function _pushUnique(arr, val) {
     // Determine winner(s) for this round (same logic as Event leaderboard: points then countback).
     // Used ONLY for Den preview in Progress/Report/Q&A (winner bonus cut).
     const winnerNameSet = (() => {
+      if (isIndividualRound) return new Set();
       try {
         const baseRows = (players || [])
           .filter(pp => !isTeamLike(pp?.name))
@@ -23051,7 +23096,9 @@ function _pushUnique(arr, val) {
               }
               (rec.series ||= []).push({
                 file: fileKey,
-                isWinner: winnerNameSet.has(String(name || "").trim()),
+                roundType:isIndividualRound?"individual":"den",
+                isIndividualHistorical:isIndividualRound,
+                isWinner:!isIndividualRound && winnerNameSet.has(String(name || "").trim()),
                 idx: roundIdx,
                 dateMs: dateMs,
                 courseName: (parsed?.courseName || parsed?.internalCourseName || parsed?.course || "").toString(),
@@ -23099,7 +23146,7 @@ for (let i = 0; i < holes; i++) {
 
         if (Number.isFinite(pts)) {
           _addAgg(rec.totals, pts);
-          _addAgg(field.totals, pts);
+          if (!isIndividualRound) _addAgg(field.totals, pts);
         }
 
         const par = _safeNum(pars[i], NaN);
@@ -23121,12 +23168,12 @@ for (let i = 0; i < holes; i++) {
         // STRICT: never derive gross from Stableford / handicap.
 const gOverPar = (Number.isFinite(gFilled) && Number.isFinite(par)) ? (gFilled - par) : NaN;
         _addAggGross(rec.totalsGross, gOverPar);
-        _addAggGross(field.totalsGross, gOverPar);
+        if (!isIndividualRound) _addAggGross(field.totalsGross, gOverPar);
 
         // Net strokes-over-par (Stableford context): subtract strokes received on the hole
         const netOverPar = Number.isFinite(gOverPar) ? (gOverPar - strokesRec) : NaN;
         _addAggGross(rec.totalsNet, netOverPar);
-        _addAggGross(field.totalsNet, netOverPar);
+        if (!isIndividualRound) _addAggGross(field.totalsNet, netOverPar);
 
         const parKey = par === 3 ? "Par 3" : par === 4 ? "Par 4" : par === 5 ? "Par 5" : "Unknown";
         if (!Number.isFinite(par) || !(par === 3 || par === 4 || par === 5)) {
@@ -23137,12 +23184,12 @@ const gOverPar = (Number.isFinite(gFilled) && Number.isFinite(par)) ? (gFilled -
 
         if (Number.isFinite(pts)) {
           _addAgg(rec.byPar[parKey], pts);
-          _addAgg(field.byPar[parKey], pts);
+          if (!isIndividualRound) _addAgg(field.byPar[parKey], pts);
         }
         (rec.byParGross[parKey] ||= _makeAggGross());
         (field.byParGross[parKey] ||= _makeAggGross());
         _addAggGross(rec.byParGross[parKey], gOverPar);
-        _addAggGross(field.byParGross[parKey], gOverPar);
+        if (!isIndividualRound) _addAggGross(field.byParGross[parKey], gOverPar);
         const yKey = _yardBand(_safeNum(yards[i], NaN));
         const ydVal = _safeNum(yards[i], NaN);
         if (!Number.isFinite(ydVal)) {
@@ -23158,25 +23205,25 @@ const gOverPar = (Number.isFinite(gFilled) && Number.isFinite(par)) ? (gFilled -
         (field.byParYards[parKey][yKey] ||= _makeAgg());
         if (Number.isFinite(pts)) {
           _addAgg(rec.byParYards[parKey][yKey], pts);
-          _addAgg(field.byParYards[parKey][yKey], pts);
+          if (!isIndividualRound) _addAgg(field.byParYards[parKey][yKey], pts);
         }
         (rec.byParYardsGross[parKey] ||= {});
         (field.byParYardsGross[parKey] ||= {});
         (rec.byParYardsGross[parKey][yKey] ||= _makeAggGross());
         (field.byParYardsGross[parKey][yKey] ||= _makeAggGross());
         _addAggGross(rec.byParYardsGross[parKey][yKey], gOverPar);
-        _addAggGross(field.byParYardsGross[parKey][yKey], gOverPar);
+        if (!isIndividualRound) _addAggGross(field.byParYardsGross[parKey][yKey], gOverPar);
 
         rec.byYards[yKey] ||= _makeAgg();
         field.byYards[yKey] ||= _makeAgg();
         if (Number.isFinite(pts)) {
           _addAgg(rec.byYards[yKey], pts);
-          _addAgg(field.byYards[yKey], pts);
+          if (!isIndividualRound) _addAgg(field.byYards[yKey], pts);
         }
         (rec.byYardsGross[yKey] ||= _makeAggGross());
         (field.byYardsGross[yKey] ||= _makeAggGross());
         _addAggGross(rec.byYardsGross[yKey], gOverPar);
-        _addAggGross(field.byYardsGross[yKey], gOverPar);
+        if (!isIndividualRound) _addAggGross(field.byYardsGross[yKey], gOverPar);
 
         const sKey = _siBand(_safeNum(siArr[i], NaN));
         const siVal = _safeNum(siArr[i], NaN);
@@ -23189,11 +23236,11 @@ const gOverPar = (Number.isFinite(gFilled) && Number.isFinite(par)) ? (gFilled -
         rec.bySI[sKey] ||= _makeAgg();
         field.bySI[sKey] ||= _makeAgg();
         _addAgg(rec.bySI[sKey], pts);
-        _addAgg(field.bySI[sKey], pts);
+        if (!isIndividualRound) _addAgg(field.bySI[sKey], pts);
         (rec.bySIGross[sKey] ||= _makeAggGross());
         (field.bySIGross[sKey] ||= _makeAggGross());
         _addAggGross(rec.bySIGross[sKey], gOverPar);
-        _addAggGross(field.bySIGross[sKey], gOverPar);
+        if (!isIndividualRound) _addAggGross(field.bySIGross[sKey], gOverPar);
       }
     // --- per-round field stats for contextual scoring ---
     if (roundPtsTotals.length) {
@@ -23642,7 +23689,13 @@ async function getTeesForCourseName(courseName) {
           skipped.push({ file: f.path, reason: "parse/empty" });
         } else {
           if (!Number.isFinite(parsed.dateMs) && Number.isFinite(extractedDateMs)) parsed.dateMs = extractedDateMs;
-          rounds.push({ file: f.path, parsed, dateMs: (Number.isFinite(parsed.dateMs) ? parsed.dateMs : extractedDateMs) });
+          rounds.push({
+            file:f.path,
+            parsed,
+            roundType:(parsed?.isIndividualHistorical || parsed?.roundType==="individual") ? "individual" : "den",
+            isIndividualHistorical:!!(parsed?.isIndividualHistorical || parsed?.roundType==="individual"),
+            dateMs:(Number.isFinite(parsed.dateMs) ? parsed.dateMs : extractedDateMs)
+          });
           processed.push(f.path);
         }
       }
@@ -24471,6 +24524,8 @@ async function refreshShared(c) {
               : (_extractDateMsFromCsvText(text) || null)
           );
           setLoadedEventFileName(filename || "");
+          setLoadedEventRoundType(parsed?.isIndividualHistorical || parsed?.roundType==="individual" ? "individual" : "den");
+          setLoadedEventNote(String(parsed?.note||""));
 if(fileObj) setCurrentFile(fileObj);
           
           autoDetectAndLoadCourse(parsed.courseName || filename).then(found => {
@@ -24523,6 +24578,8 @@ if(fileObj) setCurrentFile(fileObj);
              }
 return {
                 idx: i,
+                roundType:loadedEventRoundType,
+                isIndividualHistorical:loadedEventRoundType==="individual",
                 name: p.name,
                 gender: p.gender,
                 teeLabel: p.teeLabel,
@@ -24847,6 +24904,10 @@ async function ensureSeasonExists(client) {
 }
 
 async function addEventToSeason() {
+          if (loadedEventRoundType === "individual") {
+            alert("This is an Individual Historical Round. It is protected from Den Society League, Eclectic, competition winners and Den event standings. It remains available for the player's own performance history and course analysis.");
+            return;
+          }
           if (!computed.length) { toast("Load an event first"); return; }
           if (!user) { alert("Please log in as admin first."); return; }
           
