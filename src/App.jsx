@@ -3480,97 +3480,113 @@ function Home({
             }
           `}</style>
 
-          {/* PLAN YOUR ROUND & PLAY LIVE — SINGLE ENTRY */}
-          <button
-            className="hm-card heroish"
-            onClick={() => setView("pre_round")}
-            style={{
-              textAlign:"left",
-              cursor:"pointer",
-              color:"#0f172a",
-              border:"1px solid rgba(16,185,129,.28)",
-              background:"linear-gradient(135deg,#f0fdf4 0%,#ffffff 58%,#f8fafc 100%)",
-              boxShadow:"0 14px 34px rgba(15,23,42,.08)"
-            }}
-          >
-            <div className="hm-card-inner" style={{alignItems:"stretch"}}>
-              <div style={{minWidth:0,flex:1}}>
-                <div
-                  style={{
-                    display:"inline-flex",alignItems:"center",gap:7,
-                    padding:"5px 9px",borderRadius:999,
-                    background:"rgba(16,185,129,.10)",color:"#047857",
-                    fontSize:10,fontWeight:900,letterSpacing:".08em",
-                    textTransform:"uppercase",marginBottom:8
-                  }}
-                >
-                  ⛳ Round Intelligence
-                </div>
-
-                <h3 style={{color:"#0f172a",marginBottom:4}}>Plan Your Round &amp; Play Live</h3>
-                <div className="hm-desc" style={{color:"#475569",maxWidth:820}}>
-                  One place for everything before and during your round.
-                </div>
-
-                <div className="wp-home-plan-live-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:13}}>
-                  <div style={{border:"1px solid #bbf7d0",background:"#f7fef9",borderRadius:15,padding:"12px 13px"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <span style={{fontSize:20}}>🏆</span>
-                      <div style={{fontSize:12,fontWeight:950,color:"#14532d"}}>BEFORE YOU PLAY</div>
-                    </div>
-                    <div style={{fontSize:10,color:"#475569",marginTop:6,lineHeight:1.45}}>
-                      Build your personalised 18-hole game plan using your target, handicap, course and previous performance.
-                    </div>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:9}}>
-                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>WIN THE COMPETITION</span>
-                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>TARGET STABLEFORD</span>
-                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>TARGET GROSS</span>
-                    </div>
-                  </div>
-
-                  <div style={{border:"1px solid #d1fae5",background:"#fbfffd",borderRadius:15,padding:"12px 13px"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <span style={{fontSize:20}}>🔄</span>
-                      <div style={{fontSize:12,fontWeight:950,color:"#14532d"}}>ON THE COURSE</div>
-                    </div>
-                    <div style={{fontSize:10,color:"#475569",marginTop:6,lineHeight:1.45}}>
-                      Enter scores as you play. See the next three holes, track your target and automatically replan after every hole.
-                    </div>
-                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:9}}>
-                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>LIVE REPLAN</span>
-                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>NEXT 3 HOLES</span>
-                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>SHOTGUN STARTS</span>
-                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>AUTOSAVE</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div style={{marginTop:9,fontSize:9,color:"#64748b",fontWeight:700}}>
-                  Build the plan first, or go straight into Live Replan from the same menu.
-                </div>
-              </div>
-
-              <div className="hm-card-action" style={{alignSelf:"center"}}>
-                <button
-                  className="hm-linkbtn"
-                  onClick={(e)=>{e.stopPropagation();setView("pre_round");}}
-                  style={{
-                    background:"linear-gradient(180deg,#f6d46b,#e8b83e)",
-                    color:"#0f172a",
-                    minWidth:185,
-                    border:"1px solid rgba(146,100,12,.18)"
-                  }}
-                >
-                  <span>→ Game Plan &amp; Live Mode</span>
-                </button>
-                <div className="hm-pill">ONE MENU</div>
+          {/* ROUND MODES — PRE-ROUND + ON-COURSE */}
+          <div className="hm-round-modes">
+            <div className="hm-round-modes-head">
+              <div>
+                <div className="hm-round-eyebrow">⛳ Round Modes</div>
+                <h3 className="hm-round-title">Before you play or while you're on the course</h3>
+                <div className="hm-round-sub">Two clear routes. Pre-Round builds the plan; On-Course keeps you on it.</div>
               </div>
             </div>
-          </button>
+
+            <div className="hm-round-mode-grid">
+              <button
+                type="button"
+                className="hm-mode-card hm-mode-pre"
+                onClick={() => {
+                  try { window.__WP_START_MODE=""; } catch {}
+                  setView("pre_round");
+                }}
+              >
+                <div className="hm-mode-icon">🧠</div>
+                <div className="hm-mode-copy">
+                  <div className="hm-mode-kicker">PRE-ROUND MODE</div>
+                  <div className="hm-mode-name">Plan My Round</div>
+                  <div className="hm-mode-desc">Choose course, tee, golfer and target. Add weather and build the safest scoring route before you tee off.</div>
+                  <div className="hm-mode-tags">
+                    <span>Target score</span><span>Weather</span><span>Hole plan</span>
+                  </div>
+                </div>
+                <div className="hm-mode-arrow">→</div>
+              </button>
+
+              <button
+                type="button"
+                className="hm-mode-card hm-mode-live"
+                onClick={() => {
+                  try { window.__WP_START_MODE="live"; } catch {}
+                  setView("pre_round");
+                }}
+              >
+                <div className="hm-mode-icon">📱</div>
+                <div className="hm-mode-copy">
+                  <div className="hm-mode-kicker">ON-COURSE MODE</div>
+                  <div className="hm-mode-name">Start / Resume Live Caddie</div>
+                  <div className="hm-mode-desc">Big-button scoring for the course. Enter each gross score, replan instantly and see whether to push, protect or wait.</div>
+                  <div className="hm-mode-tags">
+                    <span>Large controls</span><span>Autosave</span><span>Live caddie</span>
+                  </div>
+                </div>
+                <div className="hm-mode-arrow">→</div>
+              </button>
+            </div>
+          </div>
 
           <style>{`
-            @media (max-width:760px){
-              .wp-home-plan-live-grid{grid-template-columns:1fr !important;}
+            .hm-round-modes{
+              margin-top:14px;border:1px solid #dbe5ee;border-radius:24px;padding:16px;
+              background:linear-gradient(145deg,#ffffff 0%,#f8fafc 100%);
+              box-shadow:0 14px 34px rgba(15,23,42,.07);
+            }
+            .hm-round-modes-head{display:flex;align-items:end;justify-content:space-between;gap:14px;margin-bottom:12px}
+            .hm-round-eyebrow{font-size:9px;font-weight:950;letter-spacing:.15em;text-transform:uppercase;color:#64748b}
+            .hm-round-title{font-size:20px!important;line-height:1.1!important;margin:4px 0 0!important;color:#0f172a!important}
+            .hm-round-sub{font-size:11px;color:#64748b;margin-top:5px}
+            .hm-round-mode-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+            .hm-mode-card{
+              width:100%;border-radius:20px;padding:16px;text-align:left;display:grid;
+              grid-template-columns:auto 1fr auto;gap:13px;align-items:center;cursor:pointer;
+              transition:transform .15s ease,box-shadow .15s ease,border-color .15s ease;
+              min-height:126px;
+            }
+            .hm-mode-card:hover{transform:translateY(-1px);box-shadow:0 13px 28px rgba(15,23,42,.10)}
+            .hm-mode-card:active{transform:translateY(0) scale(.995)}
+            .hm-mode-pre{border:1px solid #bfdbfe;background:linear-gradient(145deg,#eff6ff,#ffffff)}
+            .hm-mode-live{border:2px solid #86efac;background:linear-gradient(145deg,#ecfdf5,#ffffff);box-shadow:0 10px 24px rgba(5,150,105,.10)}
+            .hm-mode-icon{width:48px;height:48px;border-radius:15px;display:flex;align-items:center;justify-content:center;font-size:25px;background:#fff;border:1px solid rgba(148,163,184,.25);box-shadow:0 6px 14px rgba(15,23,42,.06)}
+            .hm-mode-copy{min-width:0}
+            .hm-mode-kicker{font-size:9px;font-weight:950;letter-spacing:.13em;text-transform:uppercase;color:#64748b}
+            .hm-mode-live .hm-mode-kicker{color:#047857}
+            .hm-mode-name{font-size:18px;font-weight:950;color:#0f172a;line-height:1.1;margin-top:3px}
+            .hm-mode-desc{font-size:10px;color:#475569;line-height:1.4;margin-top:6px}
+            .hm-mode-tags{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}
+            .hm-mode-tags span{font-size:8px;font-weight:900;border-radius:999px;padding:4px 7px;background:#fff;border:1px solid #dbe5ee;color:#475569}
+            .hm-mode-arrow{font-size:24px;font-weight:950;color:#64748b}
+            .hm-mode-live .hm-mode-arrow{color:#047857}
+
+            @media(max-width:760px){
+              .hm-round-modes{padding:12px;border-radius:22px}
+              .hm-round-mode-grid{grid-template-columns:1fr;gap:11px}
+              .hm-round-title{font-size:18px!important}
+              .hm-mode-card{
+                min-height:112px;padding:15px 14px;grid-template-columns:auto 1fr auto;gap:11px;
+                touch-action:manipulation;-webkit-tap-highlight-color:transparent;
+              }
+              .hm-mode-live{
+                min-height:138px;border-width:2px;
+                box-shadow:0 12px 28px rgba(5,150,105,.14);
+              }
+              .hm-mode-icon{width:52px;height:52px;font-size:27px}
+              .hm-mode-name{font-size:19px}
+              .hm-mode-desc{font-size:11px}
+              .hm-mode-arrow{font-size:28px}
+            }
+            @media(max-width:390px){
+              .hm-mode-card{grid-template-columns:44px 1fr auto;padding:13px 11px;gap:9px}
+              .hm-mode-icon{width:44px;height:44px;border-radius:13px;font-size:23px}
+              .hm-mode-name{font-size:17px}
+              .hm-mode-tags{display:none}
             }
           `}</style>
 
