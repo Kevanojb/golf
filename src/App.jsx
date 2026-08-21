@@ -766,7 +766,33 @@ function isFuzzyMatch(a, b) {
           if (!open) { setEmail(""); setPassword(""); setErr(""); }
         }, [open]);
 
-        if (!open) return null;
+      
+  async function submitManualPlayer(){
+    const name=String(newName||"").trim();
+    if(!name){ setAddMsg("Enter the player's name."); return; }
+    const den=newDenHcap===""?null:Number(newDenHcap);
+    const whs=newWHS===""?null:Number(newWHS);
+    if(den!=null && (!Number.isFinite(den)||den<0||den>54)){ setAddMsg("Enter a valid Den handicap."); return; }
+    if(whs!=null && (!Number.isFinite(whs)||whs<0||whs>54)){ setAddMsg("Enter a valid WHS Handicap Index."); return; }
+    setAddBusy(true); setAddMsg("");
+    try{
+      const result=await onAddPlayer?.({
+        name,
+        den_handicap:den,
+        handicap_index:whs,
+        gender:String(newGender||"M"),
+        source:"manual"
+      });
+      if(result?.ok===false) throw new Error(result.error||"Could not add player.");
+      setNewName(""); setNewDenHcap(""); setNewWHS(""); setNewGender("M");
+      setAddOpen(false);
+      setAddMsg("");
+    }catch(e){
+      setAddMsg(e?.message||String(e));
+    }finally{ setAddBusy(false); }
+  }
+
+  if (!open) return null;
 
         const submit = async (e) => {
           e.preventDefault();
@@ -889,15 +915,24 @@ function AdminPasswordModal({ open, onClose, onSubmit }) {
   );
 }
 
-function PlayerVisibilitySheet({ open, onClose, isAdmin, players, hiddenKeys, onSave }) {
+function PlayerVisibilitySheet({ open, onClose, isAdmin, players, hiddenKeys, onSave, manualPlayers=[], onAddPlayer, onDeleteManualPlayer }) {
   const [q, setQ] = React.useState("");
   const [draftHidden, setDraftHidden] = React.useState([]);
+  const [addOpen,setAddOpen] = React.useState(false);
+  const [newName,setNewName] = React.useState("");
+  const [newDenHcap,setNewDenHcap] = React.useState("");
+  const [newWHS,setNewWHS] = React.useState("");
+  const [newGender,setNewGender] = React.useState("M");
+  const [addBusy,setAddBusy] = React.useState(false);
+  const [addMsg,setAddMsg] = React.useState("");
   const fileRef = React.useRef(null);
 
   React.useEffect(() => {
     if (!open) return;
     setQ("");
     setDraftHidden(Array.isArray(hiddenKeys) ? hiddenKeys.slice() : []);
+    setAddOpen(false);
+    setAddMsg("");
   }, [open, hiddenKeys]);
 
   React.useEffect(() => {
@@ -915,19 +950,34 @@ function PlayerVisibilitySheet({ open, onClose, isAdmin, players, hiddenKeys, on
       .map(p => {
         const name = String(p?.name || "").trim();
         const key = normalizeName(name);
-        return { name, key };
+        return {
+          name,key,
+          source:String(p?.source||"history"),
+          denHandicap:Number.isFinite(Number(p?.den_handicap))?Number(p.den_handicap):NaN,
+          handicapIndex:Number.isFinite(Number(p?.handicap_index))?Number(p.handicap_index):NaN,
+          gender:String(p?.gender||""),
+          manualId:p?.manual_id||p?.id||null
+        };
       })
       .filter(r => r.name && r.key);
 
     // de-dup by key (merge near-identical names)
-    const seen = new Set();
-    const uniq = [];
-    for (const r of out.sort((a,b)=>a.name.localeCompare(b.name))) {
-      if (seen.has(r.key)) continue;
-      seen.add(r.key);
-      uniq.push(r);
+    const merged=new Map();
+    for(const r of out){
+      const prev=merged.get(r.key);
+      if(!prev){ merged.set(r.key,r); continue; }
+      const manual=(r.source==="manual"||r.source==="both")?r:((prev.source==="manual"||prev.source==="both")?prev:null);
+      merged.set(r.key,{
+        ...prev,...(manual||{}),
+        name:(manual?.name||prev.name||r.name),
+        source:(prev.source!==r.source?"both":prev.source),
+        denHandicap:Number.isFinite(r.denHandicap)?r.denHandicap:prev.denHandicap,
+        handicapIndex:Number.isFinite(r.handicapIndex)?r.handicapIndex:prev.handicapIndex,
+        gender:r.gender||prev.gender,
+        manualId:r.manualId||prev.manualId
+      });
     }
-    return uniq;
+    return Array.from(merged.values()).sort((a,b)=>a.name.localeCompare(b.name));
   }, [players]);
 
   const ql = (q || "").toLowerCase().trim();
@@ -989,9 +1039,9 @@ async function onImportFile(e) {
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0">
               <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Admin</div>
-              <div className="text-xl font-black text-neutral-900">Player filter</div>
+              <div className="text-xl font-black text-neutral-900">Manage Players</div>
               <div className="text-xs text-neutral-600 mt-1">
-                Show only the players you want in leaderboards & reports. You can re‑add anyone anytime.
+                Add golfers who are not in Squabbit, and control who appears in leaderboards and reports.
               </div>
             </div>
             <button className="chip border-neutral-200 bg-white text-neutral-700 hover:opacity-90" onClick={onClose}>Close</button>
@@ -1002,6 +1052,7 @@ async function onImportFile(e) {
               Showing <span className="font-black">{includedCount}</span> / <span className="font-black">{rows.length}</span> players
             </div>
             <div className="flex gap-2 flex-wrap justify-end">
+              <button className="chip border-emerald-300 bg-emerald-50 text-emerald-800 font-black" onClick={()=>setAddOpen(v=>!v)}>+ Add Player</button>
               <button className="chip border-neutral-200 bg-white text-neutral-700" onClick={includeAll}>Include all</button>
               <button className="chip border-neutral-200 bg-white text-neutral-700" onClick={excludeAll}>Exclude all</button>
               <button className="chip border-neutral-200 bg-white text-neutral-700" onClick={doExport} title="Download current visibility list">Export</button>
@@ -1020,25 +1071,56 @@ async function onImportFile(e) {
           </div>
         </div>
 
+
+        {addOpen?<div className="border-b border-emerald-200 bg-emerald-50/70 p-4">
+          <div className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Add golfer to Den Golf</div>
+          <div className="mt-1 text-xs text-emerald-900">This creates a persistent Supabase roster entry. The golfer can use Game Plan and Live Replan before ever appearing in Squabbit.</div>
+          <div className="mt-3 grid grid-cols-1 sm:grid-cols-4 gap-2">
+            <input value={newName} onChange={e=>setNewName(e.target.value)} placeholder="Player name *" className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-bold"/>
+            <input value={newDenHcap} onChange={e=>setNewDenHcap(e.target.value)} inputMode="decimal" type="number" step="0.1" min="0" max="54" placeholder="Den handicap" className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-bold"/>
+            <input value={newWHS} onChange={e=>setNewWHS(e.target.value)} inputMode="decimal" type="number" step="0.1" min="0" max="54" placeholder="WHS HI (optional)" className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-bold"/>
+            <select value={newGender} onChange={e=>setNewGender(e.target.value)} className="rounded-xl border border-emerald-200 bg-white px-3 py-2 text-sm font-bold">
+              <option value="M">Male</option><option value="F">Female</option><option value="">Not specified</option>
+            </select>
+          </div>
+          {addMsg?<div className="mt-2 text-xs font-bold text-rose-600">{addMsg}</div>:null}
+          <div className="mt-3 flex justify-end gap-2">
+            <button className="btn-secondary" onClick={()=>{setAddOpen(false);setAddMsg("");}}>Cancel</button>
+            <button className="btn-primary" disabled={addBusy} onClick={submitManualPlayer}>{addBusy?"Saving…":"Save Player to Supabase"}</button>
+          </div>
+        </div>:null}
+
         <div className="p-4 overflow-y-auto flex-1 min-h-0">
           {!rows.length ? (
-            <div className="text-sm text-neutral-600">No players yet — scan/import some games first.</div>
+            <div className="text-sm text-neutral-600">No players yet. Use <b>+ Add Player</b> to create the first golfer without needing a Squabbit round.</div>
           ) : (
             <div className="space-y-2">
               {filtered.map((r) => {
                 const included = !hiddenSet.has(r.key);
                 return (
                   <label key={r.key} className="flex items-center justify-between gap-3 rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-3">
-                    <div className="min-w-0">
-                      <div className="font-extrabold text-neutral-900 truncate">{r.name}</div>
-                      <div className="text-xs text-neutral-600">{included ? "Included" : "Excluded"}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <div className="font-extrabold text-neutral-900 truncate">{r.name}</div>
+                        <span className={`text-[8px] font-black uppercase tracking-wider rounded-full px-2 py-0.5 ${r.source==="manual"?"bg-emerald-100 text-emerald-800":r.source==="both"?"bg-blue-100 text-blue-800":"bg-neutral-200 text-neutral-600"}`}>
+                          {r.source==="manual"?"Supabase":r.source==="both"?"Supabase + History":"History"}
+                        </span>
+                      </div>
+                      <div className="text-xs text-neutral-600 mt-0.5">
+                        {included ? "Included" : "Excluded"}
+                        {Number.isFinite(r.denHandicap)?` · Den ${r.denHandicap.toFixed(1)}`:""}
+                        {Number.isFinite(r.handicapIndex)?` · WHS ${r.handicapIndex.toFixed(1)}`:""}
+                      </div>
                     </div>
-                    <input
-                      type="checkbox"
-                      checked={included}
-                      onChange={(e) => toggleInclude(r.key, e.target.checked)}
-                      className="h-5 w-5"
-                    />
+                    <div className="flex items-center gap-3">
+                      {(r.source==="manual"||r.source==="both")&&r.manualId?<button type="button" className="text-[10px] font-black text-rose-600 underline" onClick={async(e)=>{e.preventDefault();e.stopPropagation();if(window.confirm(`Remove ${r.name} from the manual Supabase roster? Historical rounds will remain.`)) await onDeleteManualPlayer?.(r.manualId);}}>Remove</button>:null}
+                      <input
+                        type="checkbox"
+                        checked={included}
+                        onChange={(e) => toggleInclude(r.key, e.target.checked)}
+                        className="h-5 w-5"
+                      />
+                    </div>
                   </label>
                 );
               })}
@@ -17271,7 +17353,7 @@ function WP_OnCourseMode({
   );
 }
 
-function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, setView, runSeasonAnalysis }) {
+function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, setView, runSeasonAnalysis, manualPlayers=[] }) {
   const historicCourses = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
   const [dbCourses,setDbCourses]=React.useState([]);
   const [dbTees,setDbTees]=React.useState([]);
@@ -17356,7 +17438,24 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
   const [tempHandicaps, setTempHandicaps] = React.useState({});
   const [tempHandicapModes, setTempHandicapModes] = React.useState({}); // player -> "whs" | "fixed"
-  const handicapMap = React.useMemo(() => WP_currentYearHandicapMap(seasonRoundsAllYears, currentYear), [seasonRoundsAllYears, currentYear]);
+  const handicapMap = React.useMemo(() => {
+    const map=WP_currentYearHandicapMap(seasonRoundsAllYears,currentYear);
+    for(const mp of (manualPlayers||[])){
+      const key=WP_norm(mp?.name);
+      if(!key||map.has(key)) continue; // current-year Squabbit/export remains authoritative once history exists
+      const den=Number(mp?.den_handicap);
+      const whs=Number(mp?.handicap_index);
+      const h=Number.isFinite(den)?den:(Number.isFinite(whs)?whs:NaN);
+      if(Number.isFinite(h)){
+        map.set(key,{
+          name:String(mp?.name||""),
+          previousHI:h,newHI:h,dateMs:0,points:NaN,
+          source:Number.isFinite(den)?"Manual Supabase Den handicap":"Manual Supabase WHS index"
+        });
+      }
+    }
+    return map;
+  }, [seasonRoundsAllYears,currentYear,manualPlayers]);
 
   React.useEffect(() => {
     if (!courseKey && courses.length) setCourseKey(courses[0].key);
@@ -21594,6 +21693,8 @@ const ADMIN_PASSWORD = (typeof window !== "undefined" && window.DEN_ADMIN_PASSWO
   : "Den Society League";
 const VIS_LS_KEY = "den_hidden_players_v1";   // changed (optional but recommended)
 const ADMIN_VIS_PATH = PREFIX ? `${PREFIX}/admin/player_visibility.json` : "admin/player_visibility.json";
+const MANUAL_PLAYERS_LS_KEY = `den_manual_players_${SOCIETY_ID||"default"}_v1`;
+const MANUAL_PLAYERS_PATH = PREFIX ? `${PREFIX}/admin/manual_players.json` : "admin/manual_players.json";
 
 
 
@@ -21621,6 +21722,13 @@ React.useEffect(() => {
 // "All" or number as string (e.g. "5")
 
 const [seasonModelAll, setSeasonModelAll] = useState(null); // unfiltered (for admin player list)
+const [manualPlayers,setManualPlayers] = useState(()=>{
+  try{
+    const raw=localStorage.getItem(MANUAL_PLAYERS_LS_KEY);
+    const arr=raw?JSON.parse(raw):[];
+    return Array.isArray(arr)?arr:[];
+  }catch{return [];}
+});
 const [hiddenPlayerKeys, setHiddenPlayerKeys] = useState(() => {
   try {
     const raw = localStorage.getItem(VIS_LS_KEY);
@@ -21768,6 +21876,38 @@ const handleAdminPassword = React.useCallback((pw) => {
             return buildSeasonPlayerModel(all, { hiddenKeys: hiddenKeySet });
           } catch (e) { return null; }
         }, [seasonRounds, hiddenPlayerKeys]);
+
+        const preRoundModelWithManualPlayers = React.useMemo(()=>{
+          const base=preRoundModelAllYears
+            ? {...preRoundModelAllYears,players:Array.isArray(preRoundModelAllYears.players)?preRoundModelAllYears.players.slice():[]}
+            : {players:[]};
+          const byKey=new Map((base.players||[]).map(p=>[normalizeName(p?.name),p]));
+          for(const mp of (manualPlayers||[])){
+            const name=String(mp?.name||"").trim(),key=normalizeName(name);
+            if(!name||!key||hiddenKeySet.has(key)) continue;
+            if(byKey.has(key)){
+              const p=byKey.get(key);
+              if(!Number.isFinite(Number(p?.hcap)) && Number.isFinite(Number(mp?.den_handicap))) p.hcap=Number(mp.den_handicap);
+              if(!Number.isFinite(Number(p?.handicapIndex)) && Number.isFinite(Number(mp?.handicap_index))) p.handicapIndex=Number(mp.handicap_index);
+              p.manualRoster=true;
+              continue;
+            }
+            const p={
+              name,
+              series:[],
+              roundSeries:[],
+              hcap:Number.isFinite(Number(mp?.den_handicap))?Number(mp.den_handicap):NaN,
+              handicapIndex:Number.isFinite(Number(mp?.handicap_index))?Number(mp.handicap_index):NaN,
+              gender:String(mp?.gender||""),
+              manualRoster:true,
+              noHistory:true,
+              metrics:{avgHcap:Number.isFinite(Number(mp?.den_handicap))?Number(mp.den_handicap):NaN}
+            };
+            base.players.push(p); byKey.set(key,p);
+          }
+          base.players.sort((a,b)=>String(a?.name||"").localeCompare(String(b?.name||"")));
+          return base;
+        },[preRoundModelAllYears,manualPlayers,hiddenPlayerKeys]);
 
         // All rounds in the selected season (ignores seasonLimit)
         // Used by Winner Odds so the model can use the full in-season history.
@@ -22972,6 +23112,7 @@ setSeasonRounds(rounds);
                 await fetchOddsExclusions(c);
                 await fetchAvailableCourses(c);
                 await fetchPlayerVisibility(c);
+                await fetchManualPlayers(c);
               }
             } catch (err) { if (!cancelled) setStatusMsg("Error: " + (err?.message || err)); }
           }
@@ -23040,6 +23181,107 @@ setSeasonRounds(rounds);
           setUser(null);
           try { window.location.reload(); } catch (e) { alert("Logged out"); }
         }
+
+
+async function fetchManualPlayers(c){
+  try{
+    c=c||client;
+    if(!c) return;
+    const folder=`${PREFIX}/admin`;
+    const listing=await c.storage.from(BUCKET).list(folder,{search:"manual_players.json",limit:1});
+    if(!listing||listing.error||!Array.isArray(listing.data)||listing.data.length===0) return;
+    const dl=await c.storage.from(BUCKET).download(MANUAL_PLAYERS_PATH);
+    if(!dl?.data) return;
+    const j=JSON.parse(await dl.data.text());
+    const rows=Array.isArray(j?.players)?j.players:(Array.isArray(j)?j:[]);
+    const cleaned=rows.map((p,i)=>{
+      const name=String(p?.name||"").trim();
+      if(!name)return null;
+      return {
+        manual_id:String(p?.manual_id||p?.id||`manual-${normalizeName(name)}-${i}`),
+        name,
+        normalized_name:normalizeName(name),
+        den_handicap:(p?.den_handicap==null||p?.den_handicap==="")?null:Number(p.den_handicap),
+        handicap_index:(p?.handicap_index==null||p?.handicap_index==="")?null:Number(p.handicap_index),
+        gender:String(p?.gender||""),
+        source:"manual",
+        created_at:p?.created_at||null
+      };
+    }).filter(Boolean);
+    setManualPlayers(cleaned);
+    try{localStorage.setItem(MANUAL_PLAYERS_LS_KEY,JSON.stringify(cleaned));}catch{}
+  }catch(e){
+    console.warn("Manual player roster load failed",e);
+  }
+}
+
+async function persistManualPlayers(nextPlayers,c){
+  c=c||client;
+  const cleaned=(Array.isArray(nextPlayers)?nextPlayers:[]).map(p=>({
+    manual_id:String(p?.manual_id||p?.id||`manual-${Date.now()}`),
+    name:String(p?.name||"").trim(),
+    normalized_name:normalizeName(p?.name||""),
+    den_handicap:(p?.den_handicap==null||p?.den_handicap==="")?null:Number(p.den_handicap),
+    handicap_index:(p?.handicap_index==null||p?.handicap_index==="")?null:Number(p.handicap_index),
+    gender:String(p?.gender||""),
+    source:"manual",
+    created_at:p?.created_at||new Date().toISOString()
+  })).filter(p=>p.name&&p.normalized_name);
+
+  setManualPlayers(cleaned);
+  try{localStorage.setItem(MANUAL_PLAYERS_LS_KEY,JSON.stringify(cleaned));}catch{}
+  if(!c) return {ok:false,error:"Supabase is not connected."};
+  if(!user) return {ok:false,error:"Sign in as admin to save players to Supabase."};
+
+  try{
+    const payload=JSON.stringify({
+      version:1,
+      society_id:SOCIETY_ID,
+      updatedAt:new Date().toISOString(),
+      updatedBy:user?.email||"",
+      players:cleaned
+    },null,2);
+    const blob=new Blob([payload],{type:"application/json"});
+    const up=await c.storage.from(BUCKET).upload(MANUAL_PLAYERS_PATH,blob,{upsert:true,contentType:"application/json"});
+    if(up?.error) throw up.error;
+    return {ok:true};
+  }catch(e){
+    return {ok:false,error:e?.message||String(e)};
+  }
+}
+
+async function addManualPlayer(input){
+  const name=String(input?.name||"").trim();
+  const key=normalizeName(name);
+  if(!name||!key) return {ok:false,error:"Enter a valid player name."};
+  const existing=(manualPlayers||[]).find(p=>normalizeName(p?.name)===key);
+  if(existing) return {ok:false,error:`${name} is already in the manual roster.`};
+
+  const next=[...(manualPlayers||[]),{
+    manual_id:(typeof crypto!=="undefined"&&crypto.randomUUID)?crypto.randomUUID():`manual-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+    name,
+    normalized_name:key,
+    den_handicap:input?.den_handicap==null?null:Number(input.den_handicap),
+    handicap_index:input?.handicap_index==null?null:Number(input.handicap_index),
+    gender:String(input?.gender||""),
+    source:"manual",
+    created_at:new Date().toISOString()
+  }].sort((a,b)=>a.name.localeCompare(b.name));
+
+  const res=await persistManualPlayers(next,client);
+  if(res.ok) toast(`${name} added to Supabase roster ✓`);
+  else toast("Player save failed: "+res.error);
+  return res;
+}
+
+async function deleteManualPlayer(manualId){
+  const row=(manualPlayers||[]).find(p=>String(p?.manual_id)===String(manualId));
+  const next=(manualPlayers||[]).filter(p=>String(p?.manual_id)!==String(manualId));
+  const res=await persistManualPlayers(next,client);
+  if(res.ok) toast(`${row?.name||"Player"} removed from manual roster`);
+  else toast("Remove failed: "+res.error);
+  return res;
+}
 
 async function fetchPlayerVisibility(c) {
   try {
@@ -24128,9 +24370,30 @@ if (res.error) toast("Error: " + res.error.message);
           try { (seasonModelAll?.players || []).forEach(p => pushName(p?.name)); } catch {}
           try { (computed || []).forEach(r => pushName(r?.name)); } catch {}
 
+          const manualByKey=new Map();
+          try{
+            (manualPlayers||[]).forEach(p=>{
+              const name=String(p?.name||"").trim(),key=normalizeName(name);
+              if(!key)return;
+              manualByKey.set(key,p);
+              pushName(name);
+            });
+          }catch{}
+
           const names = Array.from(map.values()).sort((a,b)=>a.localeCompare(b));
-          return names.map(name => ({ name }));
-        }, [season, seasonModelAll, computed]);
+          return names.map(name => {
+            const key=normalizeName(name);
+            const mp=manualByKey.get(key);
+            const hasHistory=!!(
+              (seasonModelAll?.players||[]).some(p=>normalizeName(p?.name)===key) ||
+              (computed||[]).some(p=>normalizeName(p?.name)===key) ||
+              Object.values(season||{}).some(p=>normalizeName(p?.name)===key)
+            );
+            return mp
+              ? {...mp,name,source:hasHistory?"both":"manual"}
+              : {name,source:"history"};
+          });
+        }, [season, seasonModelAll, computed, manualPlayers]);
 
         // Build League/Eclectic standings directly from scanned CSV rounds when a calendar year
         // like "2026" is selected. This prevents a spanning DB season such as "2025-2026"
@@ -24295,7 +24558,17 @@ if (res.error) toast("Error: " + res.error.message);
               <Header leagueHeaderTitle={LEAGUE_HEADER_TITLE} eventName={eventName} statusMsg={statusMsg} courseName={courseName} view={view} setView={setView} />
               <LoginModal open={loginOpen} busy={loginBusy} onClose={() => setLoginOpen(false)} onSubmit={handleLogin} />
               <AdminPasswordModal open={adminPwOpen} onClose={() => setAdminPwOpen(false)} onSubmit={handleAdminPassword} />
-              <PlayerVisibilitySheet open={playersAdminOpen} onClose={() => setPlayersAdminOpen(false)} isAdmin={!!user} players={adminPlayerRoster} hiddenKeys={hiddenPlayerKeys} onSave={savePlayerVisibility} />
+              <PlayerVisibilitySheet
+                open={playersAdminOpen}
+                onClose={() => setPlayersAdminOpen(false)}
+                isAdmin={!!user}
+                players={adminPlayerRoster}
+                manualPlayers={manualPlayers}
+                hiddenKeys={hiddenPlayerKeys}
+                onSave={savePlayerVisibility}
+                onAddPlayer={addManualPlayer}
+                onDeleteManualPlayer={deleteManualPlayer}
+              />
               <BottomStatusBar statusMsg={statusMsg} courseName={courseName} />
               <button
                 className="fixed right-3 bottom-3 z-[9999] w-11 h-11 rounded-full bg-neutral-900 text-white flex items-center justify-center shadow-xl border border-white/10 hover:-translate-y-[1px] transition"
@@ -24338,7 +24611,8 @@ if (res.error) toast("Error: " + res.error.message);
 )}
 {view === "pre_round" && (
   <PreRoundPlannerView
-    seasonModel={preRoundModelAllYears}
+    seasonModel={preRoundModelWithManualPlayers}
+    manualPlayers={manualPlayers}
     seasonRoundsAllYears={seasonRounds}
     currentYear={new Date().getFullYear()}
     setView={setView}
