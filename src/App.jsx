@@ -16607,6 +16607,38 @@ function WP_applyWeatherToHoles(holes,ctx){
   }
   return holes;
 }
+
+function WP_weatherFragility(h){
+  if(!h?.weatherActive)return {score:0,label:"LOW",reason:"Conditions close to normal"};
+  const d=Math.max(0,Number(h.weatherStrokeDelta)||0);
+  const head=Math.abs(Number(h.weather?.headwindMph)||0);
+  const cross=Math.abs(Number(h.weather?.crosswindMph)||0);
+  const gust=Math.max(Number(h.weather?.gustMph)||0,Number(h.weather?.windMph)||0);
+  let score=d*1.30 + Math.max(0,head-8)*0.025 + Math.max(0,cross-10)*0.012 + Math.max(0,gust-18)*0.010;
+  if(Number(h.par)===3) score += Math.max(0,head-10)*0.020;
+  score=Math.max(0,Math.min(1,score));
+  const label=score>=.55?"HIGH":score>=.28?"MEDIUM":"LOW";
+  const bits=[];
+  if(head>=12)bits.push(`${Math.round(head)} mph head`);
+  if(cross>=12)bits.push(`${Math.round(cross)} mph cross`);
+  if(gust>=22)bits.push(`gust ${Math.round(gust)}`);
+  if(d>=.25)bits.push(`+${d.toFixed(2)} strokes`);
+  return {score,label,reason:bits.length?bits.join(" · "):"Conditions close to normal"};
+}
+function WP_isWeatherFragileTarget(h,targetGross){
+  const f=WP_weatherFragility(h);
+  const target=Number(targetGross),par=Number(h?.par);
+  const demanding=Number.isFinite(target)&&Number.isFinite(par)&&target<=par;
+  return {fragile:demanding&&f.score>=.42,...f};
+}
+function WP_upsideScore(h){
+  const exact=(h?.exactGrossValues||[]).map(Number).filter(Number.isFinite);
+  const exactGross=exact.map(v=>Number(h.par)+v);
+  const parOrBetter=exactGross.length?exactGross.filter(g=>g<=Number(h.par)).length/exactGross.length:NaN;
+  const birdieOrBetter=exactGross.length?exactGross.filter(g=>g<=Number(h.par)-1).length/exactGross.length:NaN;
+  const base=Number.isFinite(birdieOrBetter)?Math.max(birdieOrBetter,(parOrBetter||0)*0.25):Math.max(0,(parOrBetter||0)*0.20);
+  return Math.max(0,Math.min(1,base-(Number(h.weatherStrokeDelta)||0)*0.15));
+}
 function WP_shiftPmf(pmf,delta,{minIndex=0,maxIndex=null}={}){
   const src=Array.isArray(pmf)?pmf:[];
   const max=Number.isFinite(Number(maxIndex))?Number(maxIndex):Math.max(0,src.length-1);
@@ -16895,6 +16927,8 @@ function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
       for(let g=lo;g<=hi;g++){
         const dev=g-todayExpected;
         let cost=dev*dev*1.25;
+        const frag=WP_isWeatherFragileTarget(h,g);
+        if(frag.fragile) cost += 1.10 + frag.score*1.35;
         if(g<h.par-1) cost+=2.5*(h.par-1-g);
         if(g>h.par+3) cost+=.7*(g-(h.par+3));
         const risk=WP_holeRisk(h,g,'gross');
@@ -16915,31 +16949,67 @@ function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
       h.reason=h.exactGrossN?`Based on ${h.exactGrossN} previous score${h.exactGrossN===1?'':'s'} on this hole`:
         `Built from your Par ${h.par} and SI ${Number.isFinite(h.si)?h.si:'—'} scoring history`;
     });
+    // Weather fragility rule: preserve the same total target, but avoid
+    // demanding par-or-better on an unusually exposed hole if a safer upside
+    // hole can carry that one-shot gain instead.
+    const fragileRequired=holes
+      .filter(h=>WP_isWeatherFragileTarget(h,h.targetGross).fragile)
+      .sort((a,b)=>WP_weatherFragility(b).score-WP_weatherFragility(a).score);
+
+    for(const fragileHole of fragileRequired){
+      const safer=holes
+        .filter(h=>h!==fragileHole && Number(h.targetGross)>Math.max(1,Number(h.par)-1))
+        .map(h=>({h,frag:WP_weatherFragility(h),up:WP_upsideScore(h)}))
+        .filter(x=>x.frag.score<.35 && x.up>.08)
+        .sort((a,b)=>(b.up-b.frag.score)-(a.up-a.frag.score))[0];
+      if(!safer)continue;
+
+      fragileHole.targetGross+=1;
+      safer.h.targetGross-=1;
+      fragileHole.targetPts=Math.max(0,Math.min(6,2+fragileHole.par+fragileHole.strokes-fragileHole.targetGross));
+      safer.h.targetPts=Math.max(0,Math.min(6,2+safer.h.par+safer.h.strokes-safer.h.targetGross));
+
+      fragileHole.weatherFragilityRebalanced=true;
+      fragileHole.rebalancedToHole=safer.h.hole;
+      safer.h.weatherFragilityGain=true;
+      safer.h.rebalancedFromHole=fragileHole.hole;
+      break;
+    }
+
     const totalGross=holes.reduce((s,h)=>s+h.targetGross,0);
     const pointsTotal=holes.reduce((s,h)=>s+h.targetPts,0);
     const frontGross=holes.filter(h=>h.hole<=9).reduce((s,h)=>s+h.targetGross,0), backGross=totalGross-frontGross;
     const frontPts=holes.filter(h=>h.hole<=9).reduce((s,h)=>s+h.targetPts,0), backPts=pointsTotal-frontPts;
-    const attacks=holes.filter(h=>h.strategy==='ATTACK').sort((a,b)=>b.opp-a.opp);
-    attacks.forEach(h=>{
+    holes.forEach(h=>{
+      h.weatherFragility=WP_weatherFragility(h);
+      h.upsideScore=WP_upsideScore(h);
+      h.upsideAvailable=h.upsideScore>=.12 && Number(h.targetGross)>=Number(h.par);
       const risk=WP_holeRisk(h,h.targetGross,'gross');
       const exact=(h.exactGrossValues||[]).map(Number).filter(Number.isFinite);
       const exactGrossScores=exact.map(v=>Number(h.par)+v);
       const hitRate=exactGrossScores.length?exactGrossScores.filter(g=>g<=Number(h.targetGross)).length/exactGrossScores.length:NaN;
       h.grossTargetSuccessProb=Number(risk.successProb);
       h.grossTargetHitRate=hitRate;
-      if((Number.isFinite(hitRate)&&hitRate>=.50)||Number(risk.successProb)>=.48){
-        h.planCue='PRIMARY_ATTACK';h.attackTier='PRIMARY';
+
+      const routeNeedsGain=Number(h.targetGross)<Number(h.par) || Number(h.targetPts)>=3;
+      if(routeNeedsGain){
+        const supported=(Number.isFinite(hitRate)&&hitRate>=.50)||Number(risk.successProb)>=.48;
+        h.planCue=supported?'PRIMARY_ATTACK':'STRETCH_GAIN';
+        h.attackTier=supported?'PRIMARY':'STRETCH';
       }else{
-        h.planCue='STRETCH_GAIN';h.attackTier='STRETCH';
+        h.planCue=h.strategy==='ACCEPT'?'DAMAGE_CONTROL':'PROTECT';
+        h.attackTier=h.upsideAvailable?'UPSIDE_ONLY':'NONE';
       }
     });
-    holes.filter(h=>h.strategy!=='ATTACK').forEach(h=>{
-      if(!h.planCue)h.planCue=h.strategy==='ACCEPT'?'DAMAGE_CONTROL':'PROTECT';
-    });
-    const primaryAttacks=attacks.filter(h=>h.planCue==='PRIMARY_ATTACK');
-    const stretchGains=attacks.filter(h=>h.planCue==='STRETCH_GAIN');
+
+    const attacks=holes.filter(h=>h.planCue==='PRIMARY_ATTACK'||h.planCue==='STRETCH_GAIN');
+    const primaryAttacks=holes.filter(h=>h.planCue==='PRIMARY_ATTACK');
+    const stretchGains=holes.filter(h=>h.planCue==='STRETCH_GAIN');
+    const upsideOnly=holes.filter(h=>h.upsideAvailable && h.planCue==='PROTECT')
+      .sort((a,b)=>Number(b.upsideScore)-Number(a.upsideScore));
+    const fragileRebalanced=holes.filter(h=>h.weatherFragilityRebalanced);
     const dangers=holes.slice().sort((a,b)=>a.opp-b.opp).slice(0,3);
-    return WP_enrichPlanVisuals({player:p,layout,holes,mode,total:totalGross,totalGross,pointsTotal,attacks,primaryAttacks,stretchGains,dangers,front:frontGross,back:backGross,frontPts,backPts,targetRequested:target});
+    return WP_enrichPlanVisuals({player:p,layout,holes,mode,total:totalGross,totalGross,pointsTotal,attacks,primaryAttacks,stretchGains,upsideOnly,fragileRebalanced,dangers,front:frontGross,back:backGross,frontPts,backPts,targetRequested:target});
   }
 
   const desired=Math.max(0,Math.min(72,Math.round(Number(options?.target ?? event?.targetPoints)||37)));
@@ -17752,14 +17822,16 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
         }
 
         const tagLabel=cue==='OPPORTUNITY'
-          ? 'OPPORTUNITY'
+          ? 'UPSIDE OPPORTUNITY'
           : (cue==='PRIMARY_ATTACK'
-              ? 'PRIMARY ATTACK'
-              : (cue==='STRETCH_GAIN' ? 'STRETCH GAIN' : h.strategy));
+              ? 'REQUIRED GAIN'
+              : (cue==='STRETCH_GAIN'
+                  ? 'STRETCH GAIN'
+                  : (cue==='DAMAGE_CONTROL' ? 'DAMAGE CONTROL' : 'ROUTE TARGET')));
         const weatherHoleNote=h.weatherActive
           ? `<div class="WPhit ${Number(h.weatherStrokeDelta)>.18?'bad':Number(h.weatherStrokeDelta)<-.12?'good':'warn'}"><strong>${h.weather?.label||'WEATHER'}</strong> · ${Number(h.weatherStrokeDelta)>=0?'+':''}${Number(h.weatherStrokeDelta).toFixed(2)} modelled strokes · ${Number(h.weather?.headwindMph)>=0?'+':''}${Number(h.weather?.headwindMph||0).toFixed(0)} mph head · ${Number(h.weather?.crosswindMph||0).toFixed(0)} cross</div>`
           : '';
-        return `<div class="WPhole ${String(h.strategy||'protect').toLowerCase()} ${planScoreClass}"><div class="WPhn">HOLE ${h.hole} · PAR ${h.par} · SI ${Number.isFinite(h.si)?h.si:'—'}</div><div class="WPscoreLine"><div><div class="WPscoreLabel">GROSS SCORE TO MAKE</div><div class="WPgrossBig">${h.targetGross}</div></div><div class="WPpointsPill">${h.targetPts} PTS</div></div><div class="WPscoreEq">Make <b>${h.targetGross}</b> gross → <b>${h.targetPts} Stableford point${h.targetPts===1?'':'s'}</b> · ${h.strokes} handicap shot${h.strokes===1?'':'s'}</div>${courseMgmtNote}${weatherHoleNote}<div class="WPtag">${tagLabel}</div><div class="WPliveReason">${conciseReason}</div></div>`;
+        return `<div class="WPhole ${String(h.strategy||'protect').toLowerCase()} ${planScoreClass}"><div class="WPhn">HOLE ${h.hole} · PAR ${h.par} · SI ${Number.isFinite(h.si)?h.si:'—'}</div><div class="WPscoreLine"><div><div class="WPscoreLabel">GROSS SCORE TO MAKE</div><div class="WPgrossBig">${h.targetGross}</div></div><div class="WPpointsPill">${h.targetPts} PTS</div></div><div class="WPscoreEq">Make <b>${h.targetGross}</b> gross → <b>${h.targetPts} Stableford point${h.targetPts===1?'':'s'}</b> · ${h.strokes} handicap shot${h.strokes===1?'':'s'}</div>${courseMgmtNote}${weatherHoleNote}${h.upsideAvailable?`<div class="WPhit good"><strong>UPSIDE AVAILABLE</strong> · Route does not require the extra gain here. Take it if it comes; don't chase it.</div>`:''}${h.weatherFragilityRebalanced?`<div class="WPhit warn"><strong>WEATHER FRAGILITY</strong> · Target relaxed by one here; that gain moved to H${h.rebalancedToHole}.</div>`:''}${h.weatherFragilityGain?`<div class="WPhit good"><strong>WEATHER RE-ROUTE</strong> · One required gain moved here from H${h.rebalancedFromHole}, where conditions were more fragile.</div>`:''}<div class="WPtag">${tagLabel}</div><div class="WPliveReason">${conciseReason}</div></div>`;
       }).join('');
 
       const targetTop=isGross?`${plan.totalGross} GROSS`:`${plan.pointsTotal} PTS`;
@@ -17786,7 +17858,11 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
       const routeStrip=`<div class="WProuteStrip">${plan.holes.map(h=>{const op=Number(h.targetGross)-Number(h.par);const cue=String(h.planCue||'');const genuineBogey=(cue==='SMART_BOGEY'||cue==='BOGEY_ON_PLAN'||cue==='DAMAGE_CONTROL')&&op>=1;const cls=`${String(h.strategy||'protect').toLowerCase()} ${genuineBogey?'bogey':''}`;return `<div class="WPrCell ${cls}"><div class="WPrH">H${h.hole} · P${h.par}</div><div class="WPrGross">${h.targetGross}</div><div class="WPrPts">${h.targetPts} pt${h.targetPts===1?'':'s'}${cue==='OPPORTUNITY'?` · +1 available`:''}</div></div>`;}).join('')}</div>`;
 
       const gainCards=[...(plan.primaryAttacks||[]).map(h=>({...h,__tier:'primary'})),...(plan.stretchGains||[]).map(h=>({...h,__tier:'stretch'}))];
-      const gainSummary=`<div class="WPgainSummary"><div class="WPgainSummaryTitle">Why these gain holes?</div><div class="WPgainSummarySub">Chosen first by actual 3+ point history, then by the gross score needed to earn 3 points.</div><div class="WPgainGrid">${gainCards.map(h=>{const n=Number(h.gain3HitN)||0;const c=Number(h.gain3HitCount)||0;const pct=n?Math.round(c/n*100):NaN;const gg=Number(h.par)+Number(h.strokes)-1;return `<div class="WPgainCard ${h.__tier}"><div class="WPgainCardH"><div class="WPgainCardHole">H${h.hole}</div><div class="WPgainCardTag">${h.__tier==='primary'?'PRIMARY':'STRETCH'}</div></div><div class="WPgainCardV">${Number.isFinite(pct)?pct+'%':'—'} 3+ pts</div><div class="WPgainCardMeta">${c}/${n} previous rounds${Number.isFinite(gg)?` · ${gg} gross for 3 pts`:''}${Number.isFinite(Number(h.holePtsAvg))?` · ${Number(h.holePtsAvg).toFixed(1)} pts avg`:''}</div></div>`;}).join('')}</div></div>`;
+      const gainSummary=`<div class="WPgainSummary"><div class="WPgainSummaryTitle">Where the route actually needs gains</div><div class="WPgainSummarySub">These are required by the target. Upside opportunities are shown separately so you don't chase an extra point the route doesn't need.</div><div class="WPgainGrid">${gainCards.map(h=>{const n=Number(h.gain3HitN)||0;const c=Number(h.gain3HitCount)||0;const pct=n?Math.round(c/n*100):NaN;const gg=Number(h.par)+Number(h.strokes)-1;return `<div class="WPgainCard ${h.__tier}"><div class="WPgainCardH"><div class="WPgainCardHole">H${h.hole}</div><div class="WPgainCardTag">${h.__tier==='primary'?'REQUIRED':'STRETCH'}</div></div><div class="WPgainCardV">${Number.isFinite(pct)?pct+'%':'—'} 3+ pts</div><div class="WPgainCardMeta">${c}/${n} previous rounds${Number.isFinite(gg)?` · ${gg} gross for 3 pts`:''}${Number.isFinite(Number(h.holePtsAvg))?` · ${Number(h.holePtsAvg).toFixed(1)} pts avg`:''}</div></div>`;}).join('')}</div></div>`;
+
+      const upsidePanel=(Array.isArray(plan.upsideOnly)&&plan.upsideOnly.length)
+        ? `<div class="WPgainSummary"><div class="WPgainSummaryTitle">Upside opportunities — bonus, not required</div><div class="WPgainSummarySub">Your route already works without these extra gains. Take one if the hole presents it; don't force it.</div><div class="WPgainGrid">${plan.upsideOnly.slice(0,6).map(h=>`<div class="WPgainCard primary"><div class="WPgainCardH"><div class="WPgainCardHole">H${h.hole}</div><div class="WPgainCardTag">UPSIDE</div></div><div class="WPgainCardV">Route ${h.targetGross} gross</div><div class="WPgainCardMeta">${Math.round((Number(h.upsideScore)||0)*100)}% upside signal · optional extra gain</div></div>`).join('')}</div></div>`
+        : '';
 
       const checkpoints=`<div class="WPcheckpoints">${(plan.checkpoints||[]).map(cp=>`<div class="WPcp"><div class="WPcpH">After ${cp.hole}</div><div class="WPcpV">${Math.round(cp.value)}</div><div style="font-size:7px;color:#64748b">${isGross?'gross':'pts'}</div></div>`).join('')}</div>`;
 
@@ -17814,8 +17890,8 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
       ? `Temporary fixed handicap ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'} · Playing Handicap ${l.ch}`
       : `Temporary HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'} → Course Handicap ${l.ch}`)
   : `Den Handicap ${Number.isFinite(l.denHandicap)?Number(l.denHandicap).toFixed(1):'—'} · Playing Handicap ${l.ch}`}
-  ${l.teeName?'· '+WP_escape(l.teeName):''}</div></div><div style="text-align:right"><div class="WPk">TARGET</div><div class="WPtarget">${targetTop}</div></div></div>${hcapAudit}<div class="WPribbon">${ribbon}</div>${routeSummary}${probabilityPanel}<div class="WPsection"><div class="WPsectionTitle">Route at a glance</div><div class="WPprintNote">The BIG number is the score that keeps your route on pace. Green cells are attack or proven opportunity holes; neutral cells are protect holes; the subtle red underline is used only where your history says accepting bogey or worse is genuinely sensible.</div>${routeStrip}</div><div class="WPsection"><div class="WPsectionTitle">Your checkpoints</div><div class="WPprintNote">Use these as live pace markers. You only need to know whether you are ahead of, on, or behind the planned cumulative total.</div>${checkpoints}</div><div class="WPsection"><div class="WPsectionTitle">Why these holes?</div><div class="WPprintNote">The full 2+/3+ audit still drives the optimiser, but the live report only shows the gain holes you actually need to think about.</div>${gainSummary}</div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route</div><div class="WPprintNote">Use the BIG gross number live on the course. PRIMARY ATTACK = proven gain. STRETCH GAIN = target needs it, but don't force it. OPPORTUNITY = bonus point available. PROTECT = bank the planned score.</div><div class="WPholes">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Round strategy</div><div class="WPrules" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="WPrule"><div class="WPk">1 · FOLLOW THE GROSS NUMBER</div><strong>That is the score to make on each hole.</strong></div><div class="WPrule"><div class="WPk">2 · PRIMARY ATTACKS</div><strong class="WPattack">${WP_escape(primaryAttackText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Chosen first by 3+ achievement rate, then by the gross score needed for 3 points.</div></div><div class="WPrule"><div class="WPk">3 · STRETCH GAINS</div><strong style="color:#b45309">${WP_escape(stretchGainText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Needed by the target, but historically less reliable.</div></div><div class="WPrule"><div class="WPk">4 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong></div></div></div><div class="WPfoot">Route fit is a similarity-to-history score. The separate target-chance figure is a modelled probability estimate from the golfer's historical hole-score distribution, with small samples deliberately shrunk toward broader player history. Optimised from all recorded rounds for ${WP_escape(p?.name||'this player')}: exact-hole history first, then SI, Par, yardage and recent form. Course-management cues compare the planned score with your own historical expectation and exact-hole target-achievement rate, so required gains are placed first by exact-hole target achievement rate, then by the gross score required (par/bogey preferred over birdie when evidence is similar), with exact-hole average, SI, Par, yardage and recent form used as supporting evidence. ${l.temporaryHI
-  ? (l.usedWHSFallback?'Temporary HI used; WHS tee data was incomplete so a stored/fallback Course Handicap was used.':'Temporary HI converted to the tee-specific WHS Course Handicap before SI allocation.')
+  ${l.teeName?'· '+WP_escape(l.teeName):''}</div></div><div style="text-align:right"><div class="WPk">TARGET</div><div class="WPtarget">${targetTop}</div></div></div>${hcapAudit}<div class="WPribbon">${ribbon}</div>${routeSummary}${probabilityPanel}<div class="WPsection"><div class="WPsectionTitle">Route at a glance</div><div class="WPprintNote">The BIG number is the score that keeps your route on pace. Green cells are attack or proven opportunity holes; neutral cells are protect holes; the subtle red underline is used only where your history says accepting bogey or worse is genuinely sensible.</div>${routeStrip}</div><div class="WPsection"><div class="WPsectionTitle">Your checkpoints</div><div class="WPprintNote">Use these as live pace markers. You only need to know whether you are ahead of, on, or behind the planned cumulative total.</div>${checkpoints}</div><div class="WPsection"><div class="WPsectionTitle">Why these holes?</div><div class="WPprintNote">The full 2+/3+ audit still drives the optimiser, but the live report only shows the gain holes you actually need to think about.</div>${gainSummary}${upsidePanel}</div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route</div><div class="WPprintNote">Use the BIG gross number live on the course. PRIMARY ATTACK = proven gain. STRETCH GAIN = target needs it, but don't force it. OPPORTUNITY = bonus point available. PROTECT = bank the planned score.</div><div class="WPholes">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Round strategy</div><div class="WPrules" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="WPrule"><div class="WPk">1 · FOLLOW THE GROSS NUMBER</div><strong>That is the score to make on each hole.</strong></div><div class="WPrule"><div class="WPk">2 · PRIMARY ATTACKS</div><strong class="WPattack">${WP_escape(primaryAttackText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Only holes where the route actually requires an above-baseline gain. Upside-only holes are shown separately.</div></div><div class="WPrule"><div class="WPk">3 · STRETCH GAINS</div><strong style="color:#b45309">${WP_escape(stretchGainText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Required by the route, but less strongly supported by history and/or today's conditions.</div></div><div class="WPrule"><div class="WPk">4 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong></div></div></div><div class="WPfoot">Route fit is a similarity-to-history score. The separate target-chance figure is a modelled probability estimate from the golfer's historical hole-score distribution, with small samples deliberately shrunk toward broader player history. Optimised from all recorded rounds for ${WP_escape(p?.name||'this player')}: exact-hole history first, then SI, Par, yardage and recent form. Course-management cues compare the planned score with your own historical expectation and exact-hole target-achievement rate, so required gains are placed first by exact-hole target achievement rate, then by the gross score required (par/bogey preferred over birdie when evidence is similar), with exact-hole average, SI, Par, yardage and recent form used as supporting evidence. ${l.temporaryHI
+  ? (l.usedWHSFallback?'Temporary HI used; WHS tee data was incomplete so a stored/fallback Course Handicap was used.':'Temporary HI converted to the tee-specific WHS Course Handicap before SI allocation. Weather fragility may move one required gain away from an unusually exposed hole to a safer upside hole while preserving the same total target.')
   : 'Latest current-year Den Society handicap used directly as the fixed playing handicap — no Slope/Rating conversion.'}</div></section>`;
     }).join('');
     return {ok:true,event,plans,htmlFragment:`${head}${body}</div>`};
