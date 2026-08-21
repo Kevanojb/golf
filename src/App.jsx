@@ -17284,15 +17284,33 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   React.useEffect(()=>{
     let cancelled=false;
     (async()=>{
-      if(!client) return;
       setCourseLibraryLoading(true);
       setCourseLibraryError("");
       try{
-        const {data,error}=await client.from("courses").select("id,name").order("name");
+        // PreRoundPlannerView does not receive the App-level `client` state.
+        // Use the shared browser client if ready, otherwise create the same
+        // Supabase client used elsewhere in the app. This also fixes the race
+        // where the planner mounted before window.__supabase_client__ existed.
+        const supabase =
+          (typeof window!=="undefined" && window.__supabase_client__)
+            ? window.__supabase_client__
+            : createClient(SUPA_URL,SUPA_KEY,{
+                auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}
+              });
+        if(typeof window!=="undefined" && !window.__supabase_client__) window.__supabase_client__=supabase;
+
+        const {data,error}=await supabase
+          .from("courses")
+          .select("id,name")
+          .order("name",{ascending:true});
         if(error) throw error;
-        if(!cancelled) setDbCourses(Array.isArray(data)?data:[]);
+
+        const rows=(Array.isArray(data)?data:[])
+          .filter(c=>c?.id!=null && String(c?.name||"").trim());
+        if(!cancelled) setDbCourses(rows);
       }catch(e){
-        if(!cancelled) setCourseLibraryError(e?.message||"Could not load course library.");
+        console.error("Game Plan course library load failed:",e);
+        if(!cancelled) setCourseLibraryError(e?.message||"Could not load Supabase course library.");
       }finally{
         if(!cancelled) setCourseLibraryLoading(false);
       }
@@ -17353,14 +17371,22 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     (async()=>{
       setDbTees([]);
       setSelectedTeeId("");
-      if(!client || !selectedCourse?.dbId) return;
+      if(!selectedCourse?.dbId) return;
       try{
-        const teeRes=await client.from("tees").select("*").eq("course_id",selectedCourse.dbId);
+        const supabase =
+          (typeof window!=="undefined" && window.__supabase_client__)
+            ? window.__supabase_client__
+            : createClient(SUPA_URL,SUPA_KEY,{
+                auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}
+              });
+        if(typeof window!=="undefined" && !window.__supabase_client__) window.__supabase_client__=supabase;
+
+        const teeRes=await supabase.from("tees").select("*").eq("course_id",selectedCourse.dbId);
         if(teeRes.error) throw teeRes.error;
         const tees=Array.isArray(teeRes.data)?teeRes.data:[];
         if(!tees.length) return;
         const ids=tees.map(t=>t.id);
-        const holeRes=await client.from("hole_data").select("*").in("tee_id",ids);
+        const holeRes=await supabase.from("hole_data").select("*").in("tee_id",ids);
         if(holeRes.error) throw holeRes.error;
         const holes=Array.isArray(holeRes.data)?holeRes.data:[];
         const formatted=tees.map(t=>{
@@ -17692,7 +17718,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
               <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
                 <div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white text-sm font-black">1</div><div><div className="text-[10px] font-black tracking-widest uppercase text-slate-400">Next venue</div><div className="font-black text-slate-900">Choose the course</div></div></div>
                 <select value={courseKey} onChange={e=>setCourseKey(e.target.value)} className="mt-5 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3.5 text-sm font-black text-slate-900 shadow-sm">
-                  {courses.map(c=><option key={c.key} value={c.key}>{c.label}{c.source==="supabase"?"":" · history only"}</option>)}
+                  {courses.map(c=><option key={c.key} value={c.key}>{c.label}{dbCourses.length>0 && c.source!=="supabase"?" · history only":""}</option>)}
                 </select>
 
                 {selectedCourse?.dbId ? <>
@@ -17713,8 +17739,12 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
                 </> : null}
 
                 <div className="mt-3 text-xs leading-relaxed text-slate-500">
-                  {courseLibraryLoading?"Loading Supabase course library…":`${dbCourses.length} Supabase course${dbCourses.length===1?"":"s"} · ${courses.length} total available.`}
-                  {courseLibraryError?<span className="block mt-1 text-rose-600">{courseLibraryError}</span>:null}
+                  {courseLibraryLoading
+                    ?"Loading Supabase course library…"
+                    : dbCourses.length
+                      ? `${dbCourses.length} Supabase course${dbCourses.length===1?"":"s"} loaded · ${courses.length} total available.`
+                      : `No Supabase courses loaded · ${courses.length} history course${courses.length===1?"":"s"} available.`}
+                  {courseLibraryError?<span className="block mt-1 font-bold text-rose-600">Supabase: {courseLibraryError}</span>:null}
                 </div>
               </div>
 
