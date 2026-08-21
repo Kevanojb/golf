@@ -3672,11 +3672,242 @@ function AdminView({
   const [societyCompetition, setSocietyCompetition] = React.useState("season");
   const [societyBusy, setSocietyBusy] = React.useState(false);
 
+  // ------------------------------------------------------------
+  // Course Manager
+  // Existing schema already used elsewhere in the app:
+  // courses(id,name)
+  // tees(id,course_id,color,gender,slope,rating)
+  // hole_data(tee_id,hole_number,par,stroke_index,yards)
+  // ------------------------------------------------------------
+  const makeBlankCourseHoles = React.useCallback(() =>
+    Array.from({length:18},(_,i)=>({
+      hole_number:i+1,
+      par:"",
+      stroke_index:"",
+      yards:""
+    })), []);
+
+  const makeBlankTee = React.useCallback((label="") => ({
+    client_id:`tee-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+    color:label,
+    gender:"M",
+    rating:"",
+    slope:"",
+    holes:makeBlankCourseHoles()
+  }), [makeBlankCourseHoles]);
+
+  const [courseManagerOpen,setCourseManagerOpen] = React.useState(false);
+  const [adminCourses,setAdminCourses] = React.useState([]);
+  const [adminCoursesBusy,setAdminCoursesBusy] = React.useState(false);
+  const [courseSaveBusy,setCourseSaveBusy] = React.useState(false);
+  const [courseStatus,setCourseStatus] = React.useState("");
+  const [newCourseName,setNewCourseName] = React.useState("");
+  const [newCourseTees,setNewCourseTees] = React.useState(()=>[{
+    client_id:`tee-${Date.now()}`,
+    color:"",
+    gender:"M",
+    rating:"",
+    slope:"",
+    holes:Array.from({length:18},(_,i)=>({hole_number:i+1,par:"",stroke_index:"",yards:""}))
+  }]);
+
   React.useEffect(() => {
     if (!societyName) return;
     if (societySlug) return;
     setSocietySlug(slugify(societyName));
   }, [societyName, societySlug]);
+
+  async function loadAdminCourses(){
+    const supabase=typeof window!=="undefined"?window.__supabase_client__:null;
+    if(!supabase) return;
+    setAdminCoursesBusy(true);
+    try{
+      const cr=await supabase.from("courses").select("id,name").order("name",{ascending:true});
+      if(cr.error) throw cr.error;
+      const courses=Array.isArray(cr.data)?cr.data:[];
+      if(!courses.length){ setAdminCourses([]); return; }
+
+      const ids=courses.map(c=>c.id);
+      const tr=await supabase.from("tees").select("id,course_id,color,gender,slope,rating").in("course_id",ids);
+      if(tr.error) throw tr.error;
+      const tees=Array.isArray(tr.data)?tr.data:[];
+
+      setAdminCourses(courses.map(c=>({
+        ...c,
+        tees:tees.filter(t=>String(t.course_id)===String(c.id))
+      })));
+    }catch(e){
+      setCourseStatus(`Could not load courses: ${e?.message||e}`);
+    }finally{
+      setAdminCoursesBusy(false);
+    }
+  }
+
+  React.useEffect(()=>{
+    if(!courseManagerOpen || !isAdmin) return;
+    loadAdminCourses();
+  },[courseManagerOpen,isAdmin]);
+
+  function updateNewTee(teeIndex,patch){
+    setNewCourseTees(prev=>prev.map((t,i)=>i===teeIndex?{...t,...patch}:t));
+  }
+
+  function updateNewHole(teeIndex,holeIndex,field,value){
+    setNewCourseTees(prev=>prev.map((t,i)=>{
+      if(i!==teeIndex) return t;
+      return {
+        ...t,
+        holes:(t.holes||[]).map((h,j)=>j===holeIndex?{...h,[field]:value}:h)
+      };
+    }));
+  }
+
+  function addNewCourseTee(copyFromIndex=null){
+    setNewCourseTees(prev=>{
+      if(Number.isInteger(copyFromIndex) && prev[copyFromIndex]){
+        const src=prev[copyFromIndex];
+        return [...prev,{
+          ...src,
+          client_id:`tee-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+          color:"",
+          rating:"",
+          slope:"",
+          holes:(src.holes||[]).map(h=>({...h}))
+        }];
+      }
+      return [...prev,makeBlankTee("")];
+    });
+  }
+
+  function removeNewCourseTee(index){
+    setNewCourseTees(prev=>prev.length<=1?prev:prev.filter((_,i)=>i!==index));
+  }
+
+  function resetNewCourseForm(){
+    setNewCourseName("");
+    setNewCourseTees([makeBlankTee("")]);
+    setCourseStatus("");
+  }
+
+  function validateCourseDraft(){
+    const name=String(newCourseName||"").trim();
+    if(!name) return {ok:false,error:"Enter a course name."};
+    if(!newCourseTees.length) return {ok:false,error:"Add at least one tee."};
+
+    const normalizedName=WP_courseMatchKey(name);
+    const duplicate=(adminCourses||[]).find(c=>WP_courseMatchKey(c?.name)===normalizedName);
+    if(duplicate) return {ok:false,error:`${duplicate.name} already exists in Supabase.`};
+
+    const prepared=[];
+    for(let ti=0;ti<newCourseTees.length;ti++){
+      const t=newCourseTees[ti]||{};
+      const label=String(t.color||"").trim();
+      const rating=Number(t.rating);
+      const slope=Number(t.slope);
+      const holes=Array.isArray(t.holes)?t.holes:[];
+
+      if(!label) return {ok:false,error:`Tee ${ti+1}: enter a tee name / colour.`};
+      if(!Number.isFinite(rating) || rating<50 || rating>90) return {ok:false,error:`${label}: enter a valid Course Rating.`};
+      if(!Number.isFinite(slope) || slope<55 || slope>155) return {ok:false,error:`${label}: enter a valid Slope Rating (55–155).`};
+      if(holes.length!==18) return {ok:false,error:`${label}: exactly 18 holes are required.`};
+
+      const parsed=holes.map((h,i)=>({
+        hole_number:i+1,
+        par:Number(h.par),
+        stroke_index:Number(h.stroke_index),
+        yards:Number(h.yards)
+      }));
+
+      for(const h of parsed){
+        if(!Number.isInteger(h.par) || h.par<3 || h.par>6) return {ok:false,error:`${label} H${h.hole_number}: Par must be 3–6.`};
+        if(!Number.isInteger(h.stroke_index) || h.stroke_index<1 || h.stroke_index>18) return {ok:false,error:`${label} H${h.hole_number}: SI must be 1–18.`};
+        if(!Number.isFinite(h.yards) || h.yards<50 || h.yards>800) return {ok:false,error:`${label} H${h.hole_number}: enter a sensible yardage.`};
+      }
+
+      const sis=parsed.map(h=>h.stroke_index).sort((a,b)=>a-b);
+      if(sis.some((v,i)=>v!==i+1)) return {ok:false,error:`${label}: Stroke Index must contain every number 1–18 exactly once.`};
+
+      prepared.push({
+        color:label,
+        gender:String(t.gender||""),
+        rating,
+        slope,
+        holes:parsed,
+        parTotal:parsed.reduce((s,h)=>s+h.par,0),
+        yardTotal:parsed.reduce((s,h)=>s+h.yards,0)
+      });
+    }
+
+    return {ok:true,name,tees:prepared};
+  }
+
+  async function saveNewCourseToSupabase(){
+    if(!isAdmin) return;
+    const supabase=typeof window!=="undefined"?window.__supabase_client__:null;
+    if(!supabase){ setCourseStatus("Supabase client missing."); return; }
+
+    const check=validateCourseDraft();
+    if(!check.ok){ setCourseStatus(check.error); return; }
+
+    setCourseSaveBusy(true);
+    setCourseStatus("Saving course…");
+    let createdCourseId=null;
+
+    try{
+      // 1) Course
+      const cr=await supabase
+        .from("courses")
+        .insert([{name:check.name}])
+        .select("id,name")
+        .single();
+      if(cr.error) throw cr.error;
+      createdCourseId=cr.data?.id;
+      if(createdCourseId==null) throw new Error("Course saved but no course id was returned.");
+
+      // 2) Tees, one by one because each generated tee id is needed by hole_data.
+      for(const tee of check.tees){
+        const tr=await supabase
+          .from("tees")
+          .insert([{
+            course_id:createdCourseId,
+            color:tee.color,
+            gender:tee.gender||null,
+            slope:tee.slope,
+            rating:tee.rating
+          }])
+          .select("id")
+          .single();
+        if(tr.error) throw tr.error;
+        const teeId=tr.data?.id;
+        if(teeId==null) throw new Error(`${tee.color} tee saved but no tee id was returned.`);
+
+        // 3) Exact 18-hole layout
+        const holeRows=tee.holes.map(h=>({
+          tee_id:teeId,
+          hole_number:h.hole_number,
+          par:h.par,
+          stroke_index:h.stroke_index,
+          yards:h.yards
+        }));
+        const hr=await supabase.from("hole_data").insert(holeRows);
+        if(hr.error) throw hr.error;
+      }
+
+      setCourseStatus(`✅ ${check.name} saved to Supabase with ${check.tees.length} tee${check.tees.length===1?"":"s"}.`);
+      setNewCourseName("");
+      setNewCourseTees([makeBlankTee("")]);
+      await loadAdminCourses();
+
+      // Tell any mounted course consumers to refresh their Supabase library.
+      try{window.dispatchEvent(new CustomEvent("den_courses_changed",{detail:{courseId:createdCourseId}}));}catch{}
+    }catch(e){
+      // We do not silently delete partial data: RLS may allow inserts but deny deletes.
+      // Surface a precise message so the captain can see where Supabase rejected the write.
+      setCourseStatus(`Save failed${createdCourseId?" after creating the course record":""}: ${e?.message||e}`);
+    }finally{
+      setCourseSaveBusy(false);
+    }
+  }
 
   async function handleCreateSeason() {
     if (!isAdmin) return;
@@ -4205,6 +4436,174 @@ function AdminView({
             This society has no slug set — please set a slug so golfers can use a friendly URL.
           </div>
         ) : null}
+      </div>
+
+      {/* Course Manager */}
+      <div className="mt-4 glass-card p-4 border border-neutral-200">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Courses</div>
+            <div className="mt-1 text-sm font-extrabold text-neutral-900">Manage Courses</div>
+            <div className="text-xs text-neutral-500">
+              Add a course and its exact tees, Par, Stroke Index and yardages directly to Supabase.
+              {adminCourses.length?<span className="ml-2 font-black">{adminCourses.length} courses</span>:null}
+            </div>
+          </div>
+          <button
+            type="button"
+            className={"btn-primary " + (!isAdmin ? "opacity-50 cursor-not-allowed" : "")}
+            onClick={()=>isAdmin&&setCourseManagerOpen(v=>!v)}
+            disabled={!isAdmin}
+            title={!isAdmin?"Sign in first":"Add or inspect Supabase courses"}
+          >
+            ⛳ {courseManagerOpen?"Close Course Manager":"Manage Courses"}
+          </button>
+        </div>
+
+        {courseManagerOpen?<div className="mt-4 border-t border-neutral-200 pt-4">
+          <div className="grid grid-cols-1 lg:grid-cols-[.72fr_1.28fr] gap-4">
+
+            {/* Existing library */}
+            <div className="rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-neutral-400">Supabase library</div>
+                  <div className="text-sm font-black text-neutral-900">Existing courses</div>
+                </div>
+                <button type="button" className="chip border-neutral-200 bg-white" onClick={loadAdminCourses} disabled={adminCoursesBusy}>
+                  {adminCoursesBusy?"Loading…":"Refresh"}
+                </button>
+              </div>
+              <div className="mt-3 max-h-72 overflow-y-auto space-y-2">
+                {!adminCourses.length?<div className="text-xs text-neutral-500">{adminCoursesBusy?"Loading courses…":"No courses returned."}</div>:adminCourses.map(c=>
+                  <div key={c.id} className="rounded-xl border border-neutral-200 bg-white px-3 py-2">
+                    <div className="font-black text-sm text-neutral-900">{c.name}</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {(c.tees||[]).length
+                        ? (c.tees||[]).map(t=><span key={t.id} className="rounded-full border border-blue-100 bg-blue-50 px-2 py-0.5 text-[9px] font-bold text-blue-700">
+                            {t.color||"Tee"}{Number.isFinite(Number(t.rating))?` · CR ${Number(t.rating).toFixed(1)}`:""}{Number.isFinite(Number(t.slope))?` · ${Math.round(Number(t.slope))}`:""}
+                          </span>)
+                        : <span className="text-[9px] font-bold text-amber-700">No tees stored</span>}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* New course */}
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-3 md:p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Add course</div>
+                  <div className="text-lg font-black text-neutral-900">New Supabase Course</div>
+                  <div className="mt-1 text-xs text-neutral-600">Enter each tee exactly as it appears on the scorecard. The Game Plan will then use this data even before anyone has played the course.</div>
+                </div>
+                <button type="button" className="chip border-neutral-200 bg-white text-neutral-600" onClick={resetNewCourseForm} disabled={courseSaveBusy}>Reset</button>
+              </div>
+
+              <label className="mt-4 block text-[10px] font-black uppercase tracking-widest text-neutral-500">Course name</label>
+              <input
+                value={newCourseName}
+                onChange={e=>setNewCourseName(e.target.value)}
+                placeholder="e.g. Royal St George's Golf Club"
+                className="mt-1 w-full rounded-xl border border-emerald-200 bg-white px-3 py-2.5 text-sm font-black text-neutral-900"
+              />
+
+              <div className="mt-4 space-y-4">
+                {newCourseTees.map((tee,teeIndex)=>{
+                  const holes=Array.isArray(tee.holes)?tee.holes:[];
+                  const parTotal=holes.reduce((s,h)=>s+(Number(h.par)||0),0);
+                  const frontYards=holes.slice(0,9).reduce((s,h)=>s+(Number(h.yards)||0),0);
+                  const backYards=holes.slice(9,18).reduce((s,h)=>s+(Number(h.yards)||0),0);
+                  const totalYards=frontYards+backYards;
+
+                  return <div key={tee.client_id} className="rounded-2xl border border-neutral-200 bg-white overflow-hidden">
+                    <div className="p-3 border-b border-neutral-200 bg-neutral-50">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-[9px] font-black uppercase tracking-widest text-neutral-400">Tee {teeIndex+1}</div>
+                          <div className="text-sm font-black text-neutral-900">{tee.color||"Unnamed tee"}</div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <button type="button" className="chip border-blue-200 bg-blue-50 text-blue-700" onClick={()=>addNewCourseTee(teeIndex)}>Duplicate tee layout</button>
+                          {newCourseTees.length>1?<button type="button" className="chip border-rose-200 bg-rose-50 text-rose-700" onClick={()=>removeNewCourseTee(teeIndex)}>Remove tee</button>:null}
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-2">
+                        <div>
+                          <label className="text-[9px] font-black uppercase text-neutral-500">Tee name / colour</label>
+                          <input value={tee.color} onChange={e=>updateNewTee(teeIndex,{color:e.target.value})} placeholder="White" className="mt-1 w-full rounded-lg border border-neutral-200 px-2 py-2 text-sm font-bold"/>
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-black uppercase text-neutral-500">Gender</label>
+                          <select value={tee.gender} onChange={e=>updateNewTee(teeIndex,{gender:e.target.value})} className="mt-1 w-full rounded-lg border border-neutral-200 px-2 py-2 text-sm font-bold bg-white">
+                            <option value="M">Male</option><option value="F">Female</option><option value="">Not specified</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-black uppercase text-neutral-500">Course Rating</label>
+                          <input type="number" step="0.1" inputMode="decimal" value={tee.rating} onChange={e=>updateNewTee(teeIndex,{rating:e.target.value})} placeholder="71.4" className="mt-1 w-full rounded-lg border border-neutral-200 px-2 py-2 text-sm font-bold"/>
+                        </div>
+                        <div>
+                          <label className="text-[9px] font-black uppercase text-neutral-500">Slope</label>
+                          <input type="number" step="1" inputMode="numeric" value={tee.slope} onChange={e=>updateNewTee(teeIndex,{slope:e.target.value})} placeholder="128" className="mt-1 w-full rounded-lg border border-neutral-200 px-2 py-2 text-sm font-bold"/>
+                        </div>
+                      </div>
+
+                      <div className="mt-3 grid grid-cols-4 gap-2 text-center">
+                        <div className="rounded-lg bg-white border border-neutral-200 p-2"><div className="text-[8px] font-black uppercase text-neutral-400">Front 9</div><div className="font-black text-neutral-900">{frontYards||"—"}</div></div>
+                        <div className="rounded-lg bg-white border border-neutral-200 p-2"><div className="text-[8px] font-black uppercase text-neutral-400">Back 9</div><div className="font-black text-neutral-900">{backYards||"—"}</div></div>
+                        <div className="rounded-lg bg-white border border-neutral-200 p-2"><div className="text-[8px] font-black uppercase text-neutral-400">Total yds</div><div className="font-black text-neutral-900">{totalYards||"—"}</div></div>
+                        <div className="rounded-lg bg-white border border-neutral-200 p-2"><div className="text-[8px] font-black uppercase text-neutral-400">Par</div><div className="font-black text-neutral-900">{parTotal||"—"}</div></div>
+                      </div>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full min-w-[500px] text-xs">
+                        <thead className="bg-white border-b border-neutral-200">
+                          <tr>
+                            <th className="px-2 py-2 text-left text-[9px] uppercase tracking-widest text-neutral-400">Hole</th>
+                            <th className="px-2 py-2 text-left text-[9px] uppercase tracking-widest text-neutral-400">Par</th>
+                            <th className="px-2 py-2 text-left text-[9px] uppercase tracking-widest text-neutral-400">SI</th>
+                            <th className="px-2 py-2 text-left text-[9px] uppercase tracking-widest text-neutral-400">Yards</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {holes.map((h,holeIndex)=><tr key={h.hole_number} className={holeIndex===8?"border-b-2 border-neutral-300":"border-b border-neutral-100"}>
+                            <td className="px-2 py-1.5 font-black text-neutral-700">{h.hole_number}</td>
+                            <td className="px-2 py-1.5"><input type="number" min="3" max="6" step="1" value={h.par} onChange={e=>updateNewHole(teeIndex,holeIndex,"par",e.target.value)} className="w-16 rounded-lg border border-neutral-200 px-2 py-1.5 font-bold"/></td>
+                            <td className="px-2 py-1.5"><input type="number" min="1" max="18" step="1" value={h.stroke_index} onChange={e=>updateNewHole(teeIndex,holeIndex,"stroke_index",e.target.value)} className="w-16 rounded-lg border border-neutral-200 px-2 py-1.5 font-bold"/></td>
+                            <td className="px-2 py-1.5"><input type="number" min="50" max="800" step="1" value={h.yards} onChange={e=>updateNewHole(teeIndex,holeIndex,"yards",e.target.value)} className="w-24 rounded-lg border border-neutral-200 px-2 py-1.5 font-bold"/></td>
+                          </tr>)}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>;
+                })}
+              </div>
+
+              <button type="button" className="mt-3 w-full rounded-xl border border-dashed border-emerald-300 bg-white px-3 py-2 text-xs font-black text-emerald-700" onClick={()=>addNewCourseTee(null)}>
+                + Add another tee
+              </button>
+
+              {courseStatus?<div className={`mt-3 rounded-xl border px-3 py-2 text-xs font-bold ${courseStatus.startsWith("✅")?"border-emerald-200 bg-emerald-50 text-emerald-800":"border-amber-200 bg-amber-50 text-amber-800"}`}>{courseStatus}</div>:null}
+
+              <div className="mt-4 rounded-xl border border-blue-100 bg-blue-50 px-3 py-2 text-[10px] leading-relaxed text-blue-800">
+                <b>Validation before save:</b> every tee must contain exactly 18 holes, Par 3–6, a unique SI 1–18, yardages, Course Rating and Slope. The saved course will then appear in Game Plan / Live Replan without needing a previous round.
+              </div>
+
+              <button
+                type="button"
+                className="btn-primary mt-3 w-full"
+                onClick={saveNewCourseToSupabase}
+                disabled={courseSaveBusy||!isAdmin}
+              >
+                {courseSaveBusy?"Saving Course…":"Save Course to Supabase"}
+              </button>
+            </div>
+          </div>
+        </div>:null}
       </div>
 
       <div className="mt-4 glass-card p-4 border border-neutral-200">
@@ -17439,6 +17838,13 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   const [selectedTeeId,setSelectedTeeId]=React.useState("");
   const [courseLibraryLoading,setCourseLibraryLoading]=React.useState(false);
   const [courseLibraryError,setCourseLibraryError]=React.useState("");
+  const [courseLibraryRevision,setCourseLibraryRevision]=React.useState(0);
+
+  React.useEffect(()=>{
+    const refresh=()=>setCourseLibraryRevision(v=>v+1);
+    window.addEventListener("den_courses_changed",refresh);
+    return ()=>window.removeEventListener("den_courses_changed",refresh);
+  },[]);
 
   // Supabase is the authoritative course library. Historical rounds are merged
   // in only as a fallback so old imported courses still remain selectable.
@@ -17477,7 +17883,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       }
     })();
     return ()=>{cancelled=true;};
-  },[]);
+  },[courseLibraryRevision]);
 
   const courses = React.useMemo(()=>{
     const map=new Map();
