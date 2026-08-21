@@ -16648,18 +16648,22 @@ function WP_weatherHoleScoring(h,ctx){
   // Crosswind mostly increases dispersion rather than distance, so its coefficient
   // is deliberately smaller. The cap avoids pretending forecast precision is exact.
   const lengthScale=Math.max(.65,Math.min(1.45,yard/360));
+  // App-101: probability-calibrated weather effect.
+  // Moderate weather should move the odds, not overpower recent form.
+  // Headwind is more costly than helping wind is beneficial; crosswind is
+  // mainly a dispersion penalty. Gusts only become meaningful above 16 mph.
   let strokeDelta =
-      Math.max(0,head)*0.020*lengthScale
-    + Math.min(0,head)*0.010*lengthScale
-    + cross*0.0045*lengthScale
-    + Math.max(0,gust-wind)*0.005
-    + rain*0.045
-    + Math.max(0,8-temp)*0.012
-    + Math.max(0,temp-31)*0.008;
+      Math.max(0,head)*0.0125*lengthScale
+    + Math.min(0,head)*0.0070*lengthScale
+    + cross*0.0028*lengthScale
+    + Math.max(0,gust-16)*0.0035
+    + rain*0.035
+    + Math.max(0,7-temp)*0.010
+    + Math.max(0,temp-31)*0.006;
 
-  // The older physical penalty is useful as a stabiliser, but do not double count.
-  strokeDelta = strokeDelta*0.82 + penalty*0.18;
-  strokeDelta=Math.max(-0.42,Math.min(0.70,strokeDelta));
+  // Small stabilising contribution from the older physical estimate.
+  strokeDelta = strokeDelta*0.88 + penalty*0.12;
+  strokeDelta=Math.max(-0.32,Math.min(0.50,strokeDelta));
 
   const label=head>2.5?"INTO":head<-2.5?"HELPING":cross>3?"CROSS":"NEUTRAL";
   return {
@@ -16809,15 +16813,23 @@ function WP_grossPmf(h){
   }
   return baseline;
 }
+// Cumulative Stableford success: target OR BETTER.
 function WP_probAtLeast(pmf,x){
   const t=Math.max(0,Math.ceil(Number(x)||0));
   let s=0; for(let i=t;i<(pmf||[]).length;i++) s+=Number(pmf[i])||0;
   return Math.max(0,Math.min(1,s));
 }
+// Cumulative gross success: target OR BETTER (lower gross is better).
 function WP_probAtMost(pmf,x){
   const t=Math.min((pmf||[]).length-1,Math.floor(Number(x)||0));
   let s=0; for(let i=0;i<=t;i++) s+=Number(pmf[i])||0;
   return Math.max(0,Math.min(1,s));
+}
+// Exact score is retained only as a diagnostic.
+function WP_probExactly(pmf,x){
+  const i=Math.round(Number(x));
+  if(!Array.isArray(pmf)||!Number.isFinite(i)||i<0||i>=pmf.length)return 0;
+  return Math.max(0,Math.min(1,Number(pmf[i])||0));
 }
 function WP_holeRisk(h,target,mode='stableford'){
   if(mode==='gross'){
@@ -16877,14 +16889,18 @@ function WP_probabilitySummary(plan){
   const pmfs=plan.holes.map(h=>isGross?WP_grossPmf(h):WP_stablefordPmf(h));
   const dist=WP_convolvePmfs(pmfs);
   const target=Math.round(Number(plan.targetRequested ?? (isGross?plan.totalGross:plan.pointsTotal))||0);
+  // IMPORTANT: headline target chance is cumulative, not exact-score probability.
   const targetProb=isGross?WP_probAtMost(dist,target):WP_probAtLeast(dist,target);
   const baselineTargetProb=isGross?WP_probAtMost(baselineDist,target):WP_probAtLeast(baselineDist,target);
   const longTermTargetProb=isGross?WP_probAtMost(longTermDist,target):WP_probAtLeast(longTermDist,target);
+  const exactTargetProb=WP_probExactly(dist,target);
+  const baselineExactTargetProb=WP_probExactly(baselineDist,target);
+  const longTermExactTargetProb=WP_probExactly(longTermDist,target);
   let mode=0,best=-1;
   dist.forEach((v,i)=>{ if(v>best){best=v;mode=i;} });
   const q25=WP_distQuantile(dist,.25), q50=WP_distQuantile(dist,.50), q75=WP_distQuantile(dist,.75);
 
-  let riskLabel='LONG SHOT', riskTone='hard';
+  let riskLabel='LOW PROBABILITY', riskTone='hard';
   if(targetProb>=.62){riskLabel='REALISTIC';riskTone='good';}
   else if(targetProb>=.38){riskLabel='ACHIEVABLE';riskTone='mid';}
   else if(targetProb>=.18){riskLabel='AMBITIOUS';riskTone='warn';}
@@ -16900,11 +16916,17 @@ function WP_probabilitySummary(plan){
   return {
     targetProbability:targetProb,
     targetProbabilityText:WP_probPctText(targetProb),
+    exactTargetProbability:exactTargetProb,
+    exactTargetProbabilityText:WP_probPctText(exactTargetProb),
     weatherProbabilityActive:weatherActive,
     longTermTargetProbability:longTermTargetProb,
     longTermTargetProbabilityText:WP_probPctText(longTermTargetProb),
+    longTermExactTargetProbability:longTermExactTargetProb,
+    longTermExactTargetProbabilityText:WP_probPctText(longTermExactTargetProb),
     baselineTargetProbability:baselineTargetProb,
     baselineTargetProbabilityText:WP_probPctText(baselineTargetProb),
+    baselineExactTargetProbability:baselineExactTargetProb,
+    baselineExactTargetProbabilityText:WP_probPctText(baselineExactTargetProb),
     currentFormProbabilityDelta:baselineTargetProb-longTermTargetProb,
     weatherProbabilityDelta:weatherActive?(targetProb-baselineTargetProb):0,
     probabilityLabel:riskLabel,
@@ -17976,12 +17998,13 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
         : '';
       const weatherDifficulty=Number(plan.weatherStrokeTotal)||0;
       const weatherDifficultyText=plan.weatherActive
-        ? `${weatherDifficulty>=0?'+':''}${weatherDifficulty.toFixed(1)} modelled strokes vs normal`
+        ? `${weatherDifficulty>=0?'+':''}${weatherDifficulty.toFixed(1)} calibrated scoring strokes vs normal`
         : '';
-      const probabilityPanel=`<div class="WPprob"><div class="WPprobTop"><div class="WPprobMain ${plan.probabilityTone||'mid'}"><div class="WPk" style="color:rgba(255,255,255,.72)">MODELLED TARGET CHANCE</div><div class="WPprobPct">${WP_escape(plan.targetProbabilityText||'—')}</div><div style="font-size:10px;font-weight:950;margin-top:4px">${WP_escape(plan.probabilityLabel||'')}</div></div><div class="WPprobBox"><div class="WPk">Most likely outcome</div><div class="WPsumV">${Math.round(plan.mostLikelyTotal||0)} ${isGross?'gross':'pts'}</div><div style="font-size:8px;color:#64748b;margin-top:3px">Middle 50%: ${Math.round(plan.probabilityQ25||0)}–${Math.round(plan.probabilityQ75||0)}</div></div><div class="WPprobBox"><div class="WPk">Data confidence</div><div class="WPsumV" style="font-size:18px">${WP_escape(plan.probabilityDataConfidence||'—')}</div><div style="font-size:8px;color:#64748b;margin-top:3px">${Number(plan.probabilityAvgExactRounds||0).toFixed(1)} exact-course rounds/hole avg</div></div></div><div class="WPprobLadder">${(plan.probabilityLadder||[]).map(x=>`<div class="WPprobStep"><span class="WPk">${Math.round(x.target)} ${isGross?'gross':'pts'}</span><b>${WP_probPctText(x.prob)}</b></div>`).join('')}</div><div class="WPprobNote">This estimate now separates long-term ability from current form. Recent rounds are weighted most strongly, with extra weight for recent rounds on this exact course, while older rounds remain the stabilising baseline. <b>Form effect:</b> ${formProbText}.${Number.isFinite(Number(plan.formSummary?.latestGross))?` Latest round: ${Math.round(plan.formSummary.latestGross)} gross.`:''}${plan.weatherProbabilityActive?` <b>Weather-adjusted:</b> ${weatherProbText} · ${weatherDifficultyText}.`:''} It is still a probability estimate, not a guarantee.</div></div>`;
+      const exactScoreDiagnostic=`Exact ${isGross?'gross score':'points'} ${Math.round(Number(plan.targetRequested ?? (isGross?plan.totalGross:plan.pointsTotal))||0)}: ${plan.exactTargetProbabilityText||'—'}`;
+      const probabilityPanel=`<div class="WPprob"><div class="WPprobTop"><div class="WPprobMain ${plan.probabilityTone||'mid'}"><div class="WPk" style="color:rgba(255,255,255,.72)">CHANCE OF TARGET OR BETTER</div><div class="WPprobPct">${WP_escape(plan.targetProbabilityText||'—')}</div><div style="font-size:10px;font-weight:950;margin-top:4px">${WP_escape(plan.probabilityLabel||'')}</div></div><div class="WPprobBox"><div class="WPk">Most likely outcome</div><div class="WPsumV">${Math.round(plan.mostLikelyTotal||0)} ${isGross?'gross':'pts'}</div><div style="font-size:8px;color:#64748b;margin-top:3px">Middle 50%: ${Math.round(plan.probabilityQ25||0)}–${Math.round(plan.probabilityQ75||0)}</div></div><div class="WPprobBox"><div class="WPk">Data confidence</div><div class="WPsumV" style="font-size:18px">${WP_escape(plan.probabilityDataConfidence||'—')}</div><div style="font-size:8px;color:#64748b;margin-top:3px">${Number(plan.probabilityAvgExactRounds||0).toFixed(1)} exact-course rounds/hole avg</div></div></div><div class="WPprobLadder">${(plan.probabilityLadder||[]).map(x=>`<div class="WPprobStep"><span class="WPk">${Math.round(x.target)} ${isGross?'gross or better':'pts or better'}</span><b>${WP_probPctText(x.prob)}</b></div>`).join('')}</div><div class="WPprobNote">This estimate now separates long-term ability from current form. Recent rounds are weighted most strongly, with extra weight for recent rounds on this exact course, while older rounds remain the stabilising baseline. <b>Form effect:</b> ${formProbText}.${Number.isFinite(Number(plan.formSummary?.latestGross))?` Latest round: ${Math.round(plan.formSummary.latestGross)} gross.`:''}${plan.weatherProbabilityActive?` <b>Weather-adjusted:</b> ${weatherProbText} · ${weatherDifficultyText}.`:''} It is still a probability estimate, not a guarantee. <span style="opacity:.72">${exactScoreDiagnostic} — diagnostic only; the headline above is the chance of achieving the target or beating it.</span></div></div>`;
 
 
-      const formPanel=`<div class="WPgainSummary"><div class="WPgainSummaryTitle">Form calibration</div><div class="WPgainSummarySub">Older rounds anchor ability; recent rounds move the prediction faster. Exact-course recent rounds receive extra weight.</div><div class="WPgainAuditRows"><div class="WPgainAuditRow"><div class="WPgainAuditK">Long-term profile</div><div class="WPgainAuditV">${longTermLabel}</div></div><div class="WPgainAuditRow gain"><div class="WPgainAuditK">Current form</div><div class="WPgainAuditV">${currentFormLabel}</div>${Number.isFinite(Number(plan.formSummary?.latestGross))?`<div class="WPgainAuditHint">Latest round ${Math.round(plan.formSummary.latestGross)} gross</div>`:''}</div>${plan.weatherActive?`<div class="WPgainAuditRow"><div class="WPgainAuditK">Today's conditions</div><div class="WPgainAuditV">${todayLabel}</div><div class="WPgainAuditHint">${weatherDifficultyText}</div></div>`:''}<div class="WPgainAuditRow"><div class="WPgainAuditK">Target chance</div><div class="WPgainAuditV">${plan.longTermTargetProbabilityText||'—'} → ${plan.baselineTargetProbabilityText||'—'}${plan.weatherActive?` → ${plan.targetProbabilityText||'—'}`:''}</div><div class="WPgainAuditHint">Long-term → current form${plan.weatherActive?' → today':''}</div></div></div></div>`;
+      const formPanel=`<div class="WPgainSummary"><div class="WPgainSummaryTitle">Form calibration</div><div class="WPgainSummarySub">Older rounds anchor ability; recent rounds move the prediction faster. Exact-course recent rounds receive extra weight.</div><div class="WPgainAuditRows"><div class="WPgainAuditRow"><div class="WPgainAuditK">Long-term profile</div><div class="WPgainAuditV">${longTermLabel}</div></div><div class="WPgainAuditRow gain"><div class="WPgainAuditK">Current form</div><div class="WPgainAuditV">${currentFormLabel}</div>${Number.isFinite(Number(plan.formSummary?.latestGross))?`<div class="WPgainAuditHint">Latest round ${Math.round(plan.formSummary.latestGross)} gross</div>`:''}</div>${plan.weatherActive?`<div class="WPgainAuditRow"><div class="WPgainAuditK">Today's conditions</div><div class="WPgainAuditV">${todayLabel}</div><div class="WPgainAuditHint">${weatherDifficultyText}</div></div>`:''}<div class="WPgainAuditRow"><div class="WPgainAuditK">Target or better</div><div class="WPgainAuditV">${plan.longTermTargetProbabilityText||'—'} → ${plan.baselineTargetProbabilityText||'—'}${plan.weatherActive?` → ${plan.targetProbabilityText||'—'}`:''}</div><div class="WPgainAuditHint">Long-term → current form${plan.weatherActive?' → today':''}</div></div></div></div>`;
 
       const routeStrip=`<div class="WProuteStrip">${plan.holes.map(h=>{const op=Number(h.targetGross)-Number(h.par);const cue=String(h.planCue||'');const genuineBogey=(cue==='SMART_BOGEY'||cue==='BOGEY_ON_PLAN'||cue==='DAMAGE_CONTROL')&&op>=1;const cls=`${String(h.strategy||'protect').toLowerCase()} ${genuineBogey?'bogey':''}`;return `<div class="WPrCell ${cls}"><div class="WPrH">H${h.hole} · P${h.par}</div><div class="WPrGross">${h.targetGross}</div><div class="WPrPts">${h.targetPts} pt${h.targetPts===1?'':'s'}${cue==='OPPORTUNITY'?` · +1 available`:''}</div></div>`;}).join('')}</div>`;
 
@@ -18018,7 +18041,7 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
       ? `Temporary fixed handicap ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'} · Playing Handicap ${l.ch}`
       : `Temporary HI ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'} → Course Handicap ${l.ch}`)
   : `Den Handicap ${Number.isFinite(l.denHandicap)?Number(l.denHandicap).toFixed(1):'—'} · Playing Handicap ${l.ch}`}
-  ${l.teeName?'· '+WP_escape(l.teeName):''}</div></div><div style="text-align:right"><div class="WPk">TARGET</div><div class="WPtarget">${targetTop}</div></div></div>${hcapAudit}<div class="WPribbon">${ribbon}</div>${routeSummary}${probabilityPanel}${formPanel}<div class="WPsection"><div class="WPsectionTitle">Route at a glance</div><div class="WPprintNote">The BIG number is the score that keeps your route on pace. Green cells are attack or proven opportunity holes; neutral cells are protect holes; the subtle red underline is used only where your history says accepting bogey or worse is genuinely sensible.</div>${routeStrip}</div><div class="WPsection"><div class="WPsectionTitle">Your checkpoints</div><div class="WPprintNote">Use these as live pace markers. You only need to know whether you are ahead of, on, or behind the planned cumulative total.</div>${checkpoints}</div><div class="WPsection"><div class="WPsectionTitle">Why these holes?</div><div class="WPprintNote">The full 2+/3+ audit still drives the optimiser, but the live report only shows the gain holes you actually need to think about.</div>${gainSummary}${upsidePanel}</div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route</div><div class="WPprintNote">Use the BIG gross number live on the course. PRIMARY ATTACK = proven gain. STRETCH GAIN = target needs it, but don't force it. OPPORTUNITY = bonus point available. PROTECT = bank the planned score.</div><div class="WPholes">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Round strategy</div><div class="WPrules" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="WPrule"><div class="WPk">1 · FOLLOW THE GROSS NUMBER</div><strong>That is the score to make on each hole.</strong></div><div class="WPrule"><div class="WPk">2 · PRIMARY ATTACKS</div><strong class="WPattack">${WP_escape(primaryAttackText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Only holes where the route actually requires an above-baseline gain. Upside-only holes are shown separately.</div></div><div class="WPrule"><div class="WPk">3 · STRETCH GAINS</div><strong style="color:#b45309">${WP_escape(stretchGainText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Required by the route, but less strongly supported by history and/or today's conditions.</div></div><div class="WPrule"><div class="WPk">4 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong></div></div></div><div class="WPfoot">Route fit is a similarity-to-history score. The separate target-chance figure is a modelled probability estimate from the golfer's historical hole-score distribution, with small samples deliberately shrunk toward broader player history. Long-term ability is anchored by all recorded rounds for ${WP_escape(p?.name||'this player')}: exact-hole history first, then SI, Par, yardage and recent form. Course-management cues compare the planned score with your own historical expectation and exact-hole target-achievement rate, so required gains are placed first by exact-hole target achievement rate, then by the gross score required (par/bogey preferred over birdie when evidence is similar), with exact-hole average, SI, Par, yardage and recent form used as supporting evidence. ${l.temporaryHI
+  ${l.teeName?'· '+WP_escape(l.teeName):''}</div></div><div style="text-align:right"><div class="WPk">TARGET</div><div class="WPtarget">${targetTop}</div><div style="font-size:8px;color:#64748b;margin-top:2px">Success = this score or better</div></div></div>${hcapAudit}<div class="WPribbon">${ribbon}</div>${routeSummary}${probabilityPanel}${formPanel}<div class="WPsection"><div class="WPsectionTitle">Route at a glance</div><div class="WPprintNote">The BIG number is the score that keeps your route on pace. Green cells are attack or proven opportunity holes; neutral cells are protect holes; the subtle red underline is used only where your history says accepting bogey or worse is genuinely sensible.</div>${routeStrip}</div><div class="WPsection"><div class="WPsectionTitle">Your checkpoints</div><div class="WPprintNote">Use these as live pace markers. You only need to know whether you are ahead of, on, or behind the planned cumulative total.</div>${checkpoints}</div><div class="WPsection"><div class="WPsectionTitle">Why these holes?</div><div class="WPprintNote">The full 2+/3+ audit still drives the optimiser, but the live report only shows the gain holes you actually need to think about.</div>${gainSummary}${upsidePanel}</div><div class="WPsection"><div class="WPsectionTitle">Your 18-hole route</div><div class="WPprintNote">Use the BIG gross number live on the course. PRIMARY ATTACK = proven gain. STRETCH GAIN = target needs it, but don't force it. OPPORTUNITY = bonus point available. PROTECT = bank the planned score.</div><div class="WPholes">${holes}</div></div><div class="WPsection"><div class="WPsectionTitle">Round strategy</div><div class="WPrules" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="WPrule"><div class="WPk">1 · FOLLOW THE GROSS NUMBER</div><strong>That is the score to make on each hole.</strong></div><div class="WPrule"><div class="WPk">2 · PRIMARY ATTACKS</div><strong class="WPattack">${WP_escape(primaryAttackText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Only holes where the route actually requires an above-baseline gain. Upside-only holes are shown separately.</div></div><div class="WPrule"><div class="WPk">3 · STRETCH GAINS</div><strong style="color:#b45309">${WP_escape(stretchGainText)}</strong><div style="font-size:8px;color:#64748b;margin-top:4px">Required by the route, but less strongly supported by history and/or today's conditions.</div></div><div class="WPrule"><div class="WPk">4 · DAMAGE CONTROL</div><strong class="WPdanger">Respect ${WP_escape(dangerText)}</strong></div></div></div><div class="WPfoot">Route fit is a similarity-to-history score. The separate target-chance figure is a modelled probability estimate from the golfer's historical hole-score distribution, with small samples deliberately shrunk toward broader player history. Long-term ability is anchored by all recorded rounds for ${WP_escape(p?.name||'this player')}: exact-hole history first, then SI, Par, yardage and recent form. Course-management cues compare the planned score with your own historical expectation and exact-hole target-achievement rate, so required gains are placed first by exact-hole target achievement rate, then by the gross score required (par/bogey preferred over birdie when evidence is similar), with exact-hole average, SI, Par, yardage and recent form used as supporting evidence. ${l.temporaryHI
   ? (l.usedWHSFallback?'Temporary HI used; WHS tee data was incomplete so a stored/fallback Course Handicap was used.':'Temporary HI converted to the tee-specific WHS Course Handicap before SI allocation. Weather fragility may move one required gain away from an unusually exposed hole to a safer upside hole while preserving the same total target.')
   : 'Latest current-year Den Society handicap used directly as the fixed playing handicap — no Slope/Rating conversion.'}</div></section>`;
     }).join('');
