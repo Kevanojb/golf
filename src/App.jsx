@@ -15600,10 +15600,16 @@ function WP_latestPlayerHcap(p, handicapMap){
 function WP_roundHasLayout(r){
   const ps=WP_pars(r), si=WP_si(r); return ps.filter(Number.isFinite).length>=9&&si.filter(Number.isFinite).length>=9;
 }
-function WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,tempMode="whs"){
+function WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,tempMode="whs",layoutOverride=null){
   const mineInEvent=event?.entries?.find(x=>String(x.player?.name||"")===String(p?.name||""))?.round||null;
   const sameCourse=WP_series(p).filter(r=>WP_norm(WP_course(r))===WP_norm(courseKey)).reverse();
-  let base=[mineInEvent,...sameCourse,event?.winnerRound,...(event?.entries||[]).map(x=>x.round)].find(r=>r&&WP_roundHasLayout(r))||mineInEvent||sameCourse[0]||event?.winnerRound||event?.entries?.[0]?.round||null;
+  // If the golfer has explicitly selected a Supabase tee, that tee definition
+  // is the authoritative layout. History is still used for performance signals,
+  // but it must not silently replace today's Par / SI / yardages / Rating / Slope.
+  const overrideRound=layoutOverride?.round||layoutOverride||null;
+  let base=(overrideRound&&WP_roundHasLayout(overrideRound))
+    ? overrideRound
+    : ([mineInEvent,...sameCourse,event?.winnerRound,...(event?.entries||[]).map(x=>x.round)].find(r=>r&&WP_roundHasLayout(r))||mineInEvent||sameCourse[0]||event?.winnerRound||event?.entries?.[0]?.round||null);
   if(!base) return null;
   const ps=WP_pars(base), sis=WP_si(base), ys=WP_yards(base);
   const parTotal=ps.reduce((sum,v)=>sum+(Number.isFinite(v)?v:0),0);
@@ -15660,7 +15666,8 @@ function WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,tempMode=
   return {
     round:base,pars:ps,si:sis,yards:ys,parTotal,
     hi,denHandicap,ch,teeName:WP_tee(base),slope,rating,temporaryHI,temporaryMode,
-    handicapMethod,handicapMethodLabel,usedWHSFallback
+    handicapMethod,handicapMethodLabel,usedWHSFallback,
+    layoutSource:(overrideRound&&WP_roundHasLayout(overrideRound))?"SUPABASE_TEE":"HISTORY"
   };
 }
 function WP_strokesReceived(ch,si){
@@ -16007,7 +16014,7 @@ function WP_enrichPlanVisuals(plan){
 function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
   const mode=String(options?.mode||'winning');
   const tempHI=options?.tempHI;
-  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,options?.tempMode); if(!layout) return null;
+  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,options?.tempMode,options?.layoutOverride); if(!layout) return null;
   const sig=WP_playerHistorySignals(p,courseKey); const holes=[];
   for(let i=0;i<18;i++){
     const par=Number(layout.pars[i]), si=Number(layout.si[i]), yard=Number(layout.yards[i]);
@@ -16461,7 +16468,7 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
     return Number.isFinite(n)&&n>0 ? Math.round(n) : NaN;
   });
 
-  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,tempMode);
+  const layout=WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,tempMode,options?.layoutOverride);
   if(!layout) return null;
   const sig=WP_playerHistorySignals(p,courseKey);
   const holes=[];
@@ -16687,17 +16694,17 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
   return plan;
 }
 
-function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,tempMode="whs",liveMode="stableford",startHole=1,actualGross=[]}){
+function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,tempMode="whs",liveMode="stableford",startHole=1,actualGross=[],eventOverride=null,layoutOverride=null}){
   try{
-    const event=WP_findLatestEventAtCourse(model,courseKey);
-    if(!event) return {ok:false,error:'No previous Stableford event was found for that course.'};
+    const event=eventOverride||WP_findLatestEventAtCourse(model,courseKey);
+    if(!event) return {ok:false,error:'Choose a course and tee before starting Live Replan.'};
     const p=(Array.isArray(model?.players)?model.players:[]).find(x=>String(x?.name||'')===String(playerName||''));
     if(!p) return {ok:false,error:'Choose one player for Live Replan.'};
 
     const scores=(actualGross||[]).map(Number);
     if(!scores.some(x=>Number.isFinite(x)&&x>0)) return {ok:false,error:'Enter at least one completed-hole gross score.'};
 
-    const plan=WP_makeLiveReplan(model,event,p,courseKey,handicapMap,{target,tempHI,tempMode,liveMode,startHole,actualGross});
+    const plan=WP_makeLiveReplan(model,event,p,courseKey,handicapMap,{target,tempHI,tempMode,liveMode,startHole,actualGross,layoutOverride});
     if(!plan) return {ok:false,error:'Could not build the live replan.'};
 
     const c=event.courseName||courseKey;
@@ -16772,14 +16779,19 @@ function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,targe
 }
 
 function WP_escape(s){ return String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
-function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mode='winning',customTarget,tempHandicaps={},tempHandicapModes={}}){
+function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mode='winning',customTarget,tempHandicaps={},tempHandicapModes={},eventOverride=null,layoutOverride=null}){
   try{
-    const event=WP_findLatestEventAtCourse(model,courseKey); if(!event)return{ok:false,error:"No previous Stableford event was found for that course."};
+    const historicEvent=WP_findLatestEventAtCourse(model,courseKey);
+    const event=eventOverride||historicEvent;
+    if(!event)return{ok:false,error:"Choose a course and tee first."};
     const players=(Array.isArray(model?.players)?model.players:[]).filter(p=>(playerNames||[]).includes(String(p?.name||"")));
     if(!players.length)return{ok:false,error:"Choose at least one player."};
-    const target=(mode==='winning')?event.targetPoints:Number(customTarget);
+    if(mode==='winning' && !historicEvent){
+      return {ok:false,error:"This course has no previous Den competition result, so there is no evidence-based winning score yet. Choose Target Stableford Points or Target Gross Score instead."};
+    }
+    const target=(mode==='winning')?historicEvent.targetPoints:Number(customTarget);
     if(!Number.isFinite(target)) return {ok:false,error:'Enter a valid target score.'};
-    const plans=players.map(p=>WP_makePlayerPlan(model,event,p,courseKey,handicapMap,{mode,target,tempHI:tempHandicaps?.[String(p?.name||'')],tempMode:tempHandicapModes?.[String(p?.name||'')]||"whs"})).filter(Boolean);
+    const plans=players.map(p=>WP_makePlayerPlan(model,event,p,courseKey,handicapMap,{mode,target,tempHI:tempHandicaps?.[String(p?.name||'')],tempMode:tempHandicapModes?.[String(p?.name||'')]||"whs",layoutOverride})).filter(Boolean);
     if(!plans.length)return{ok:false,error:"The selected course does not have enough Par / Stroke Index data to build a plan."};
     const c=event.courseName||courseKey;
     const css=`<style>
@@ -16789,7 +16801,7 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
     </style>`;
     const modeTitle=mode==='gross'?'Custom Gross Route':mode==='stableford'?'Custom Stableford Route':'Winning Game Plan';
     const targetLabel=mode==='gross'?`${Math.round(target)} gross`:`${Math.round(target)} pts`;
-    const head=`${css}<div class="WP"><div class="WPhdr"><div class="WPeyebrow">DEN GOLF · PRE-ROUND INTELLIGENCE</div><div class="WPtitle">${WP_escape(modeTitle)}</div><div class="WPsub">${WP_escape(c)} · all-years player history · target ${WP_escape(targetLabel)}</div></div><div class="WPbenchmark"><div class="WPstat"><div class="WPk">Previous winner</div><div class="WPv">${WP_escape(event.winnerName)}</div><div style="font-size:10px;color:#64748b">${event.winningPoints.toFixed(0)} pts</div></div><div class="WPstat"><div class="WPk">Runner-up</div><div class="WPv">${WP_escape(event.runnerUpName)}</div><div style="font-size:10px;color:#64748b">${Number.isFinite(event.runnerUpPoints)?event.runnerUpPoints.toFixed(0)+' pts':'—'}</div></div><div class="WPstat"><div class="WPk">Plan mode</div><div class="WPv" style="font-size:14px">${WP_escape(modeTitle)}</div></div><div class="WPstat"><div class="WPk">Selected target</div><div class="WPv" style="color:#08775f">${WP_escape(targetLabel)}</div></div></div><div class="WPbenchNote">The route is optimised from each golfer's all-years history, giving highest weight to previous scores on the exact hole — including how often the required target was actually achieved — then Stroke Index, Par and yardage patterns. A temporary handicap is used where entered.</div>`;
+    const head=`${css}<div class="WP"><div class="WPhdr"><div class="WPeyebrow">DEN GOLF · PRE-ROUND INTELLIGENCE</div><div class="WPtitle">${WP_escape(modeTitle)}</div><div class="WPsub">${WP_escape(c)} · all-years player history · target ${WP_escape(targetLabel)}</div></div><div class="WPbenchmark"><div class="WPstat"><div class="WPk">Previous winner</div><div class="WPv">${WP_escape(event.winnerName||"No history")}</div><div style="font-size:10px;color:#64748b">${Number.isFinite(Number(event.winningPoints))?Number(event.winningPoints).toFixed(0)+" pts":"New course"}</div></div><div class="WPstat"><div class="WPk">Runner-up</div><div class="WPv">${WP_escape(event.runnerUpName||"—")}</div><div style="font-size:10px;color:#64748b">${Number.isFinite(event.runnerUpPoints)?event.runnerUpPoints.toFixed(0)+' pts':'—'}</div></div><div class="WPstat"><div class="WPk">Plan mode</div><div class="WPv" style="font-size:14px">${WP_escape(modeTitle)}</div></div><div class="WPstat"><div class="WPk">Selected target</div><div class="WPv" style="color:#08775f">${WP_escape(targetLabel)}</div></div></div><div class="WPbenchNote">The route is optimised from each golfer's all-years history, giving highest weight to previous scores on the exact hole — including how often the required target was actually achieved — then Stroke Index, Par and yardage patterns. A temporary handicap is used where entered.</div>`;
     const body=plans.map(plan=>{
       const p=plan.player,l=plan.layout;
       const isGross=plan.mode==='gross';
@@ -16880,7 +16892,7 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
 // Pre-Round planner: if data is not loaded, scan ALL stored games and return to this view.
 
 function WP_OnCourseMode({
-  model, event, courseKey, player, handicapMap, target, liveMode, startHole,
+  model, event, courseKey, player, handicapMap, target, liveMode, startHole, layoutOverride,
   tempHI, tempMode, liveScores, setLiveScores, onExit, onViewFull
 }){
   const [cursorHole,setCursorHole]=React.useState(()=>{
@@ -16895,9 +16907,9 @@ function WP_OnCourseMode({
   const liveResult=React.useMemo(()=>{
     if(!model||!event||!player) return null;
     return WP_makeLiveReplan(model,event,player,courseKey,handicapMap,{
-      target:Number(target),tempHI,tempMode,liveMode,startHole,actualGross:liveScores
+      target:Number(target),tempHI,tempMode,liveMode,startHole,actualGross:liveScores,layoutOverride
     });
-  },[model,event,player,courseKey,handicapMap,target,tempHI,tempMode,liveMode,liveScores]);
+  },[model,event,player,courseKey,handicapMap,target,tempHI,tempMode,liveMode,startHole,layoutOverride,liveScores]);
 
   React.useEffect(()=>{
     const order=WP_liveHoleOrder(startHole);
@@ -17260,7 +17272,49 @@ function WP_OnCourseMode({
 }
 
 function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, setView, runSeasonAnalysis }) {
-  const courses = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
+  const historicCourses = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
+  const [dbCourses,setDbCourses]=React.useState([]);
+  const [dbTees,setDbTees]=React.useState([]);
+  const [selectedTeeId,setSelectedTeeId]=React.useState("");
+  const [courseLibraryLoading,setCourseLibraryLoading]=React.useState(false);
+  const [courseLibraryError,setCourseLibraryError]=React.useState("");
+
+  // Supabase is the authoritative course library. Historical rounds are merged
+  // in only as a fallback so old imported courses still remain selectable.
+  React.useEffect(()=>{
+    let cancelled=false;
+    (async()=>{
+      if(!client) return;
+      setCourseLibraryLoading(true);
+      setCourseLibraryError("");
+      try{
+        const {data,error}=await client.from("courses").select("id,name").order("name");
+        if(error) throw error;
+        if(!cancelled) setDbCourses(Array.isArray(data)?data:[]);
+      }catch(e){
+        if(!cancelled) setCourseLibraryError(e?.message||"Could not load course library.");
+      }finally{
+        if(!cancelled) setCourseLibraryLoading(false);
+      }
+    })();
+    return ()=>{cancelled=true;};
+  },[]);
+
+  const courses = React.useMemo(()=>{
+    const map=new Map();
+    for(const c of dbCourses){
+      const label=String(c?.name||"").trim(); const key=WP_norm(label);
+      if(!key) continue;
+      map.set(key,{key,label,dbId:c.id,source:"supabase",rounds:0,lastMs:0});
+    }
+    for(const c of historicCourses){
+      if(!map.has(c.key)) map.set(c.key,{...c,source:"history"});
+      else {
+        const x=map.get(c.key); x.rounds=c.rounds||0; x.lastMs=c.lastMs||0;
+      }
+    }
+    return Array.from(map.values()).sort((a,b)=>a.label.localeCompare(b.label));
+  },[dbCourses,historicCourses]);
   const players = React.useMemo(() => (Array.isArray(seasonModel?.players) ? seasonModel.players : [])
     .filter(p => p && String(p?.name || "").trim())
     .sort((a,b)=>String(a.name).localeCompare(String(b.name))), [seasonModel]);
@@ -17291,8 +17345,76 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     if (courseKey && courses.length && !courses.some(c => c.key === courseKey)) setCourseKey(courses[0].key);
   }, [courseKey, courses]);
 
-  const event = React.useMemo(() => WP_findLatestEventAtCourse(seasonModel, courseKey), [seasonModel, courseKey]);
   const selectedCourse = courses.find(c => c.key === courseKey) || null;
+
+  // Load every tee and its 18-hole layout for the selected Supabase course.
+  React.useEffect(()=>{
+    let cancelled=false;
+    (async()=>{
+      setDbTees([]);
+      setSelectedTeeId("");
+      if(!client || !selectedCourse?.dbId) return;
+      try{
+        const teeRes=await client.from("tees").select("*").eq("course_id",selectedCourse.dbId);
+        if(teeRes.error) throw teeRes.error;
+        const tees=Array.isArray(teeRes.data)?teeRes.data:[];
+        if(!tees.length) return;
+        const ids=tees.map(t=>t.id);
+        const holeRes=await client.from("hole_data").select("*").in("tee_id",ids);
+        if(holeRes.error) throw holeRes.error;
+        const holes=Array.isArray(holeRes.data)?holeRes.data:[];
+        const formatted=tees.map(t=>{
+          const hs=holes.filter(h=>String(h.tee_id)===String(t.id)).sort((a,b)=>Number(a.hole_number)-Number(b.hole_number));
+          const pars=Array(18).fill(NaN),si=Array(18).fill(NaN),yards=Array(18).fill(NaN);
+          hs.forEach(h=>{
+            const i=Number(h.hole_number)-1;
+            if(i<0||i>17)return;
+            pars[i]=Number(h.par); si[i]=Number(h.stroke_index); yards[i]=Number(h.yards);
+          });
+          const teeName=String(t.color||t.tee_name||t.name||t.label||`Tee ${t.id}`);
+          const round={
+            courseName:selectedCourse.label,course:selectedCourse.label,
+            teeName,teeLabel:teeName,tee:t.color||teeName,
+            teeSlope:Number(t.slope),slope:Number(t.slope),slopeRating:Number(t.slope),
+            teeRating:Number(t.rating),rating:Number(t.rating),courseRating:Number(t.rating),
+            parsArr:pars,siArr:si,yardsArr:yards,pars,si,yards
+          };
+          return {id:t.id,teeName,gender:t.gender||"",slope:Number(t.slope),rating:Number(t.rating),pars,si,yards,round};
+        }).filter(t=>t.pars.filter(Number.isFinite).length>=9&&t.si.filter(Number.isFinite).length>=9);
+        if(cancelled)return;
+        setDbTees(formatted);
+        if(formatted.length)setSelectedTeeId(String(formatted[0].id));
+      }catch(e){
+        if(!cancelled)setCourseLibraryError(e?.message||"Could not load tee data.");
+      }
+    })();
+    return ()=>{cancelled=true;};
+  },[selectedCourse?.dbId,selectedCourse?.label]);
+
+  const selectedDbTee=React.useMemo(
+    ()=>dbTees.find(t=>String(t.id)===String(selectedTeeId))||null,
+    [dbTees,selectedTeeId]
+  );
+
+  const event = React.useMemo(() => WP_findLatestEventAtCourse(seasonModel, courseKey), [seasonModel, courseKey]);
+
+  // New/unplayed courses still need an event-shaped object because the existing
+  // report renderer expects a course container. This contains NO fake result.
+  const planningEvent=React.useMemo(()=>{
+    if(event) return event;
+    if(!selectedCourse||!selectedDbTee) return null;
+    return {
+      key:`supabase:${selectedCourse.dbId||courseKey}:${selectedDbTee.id}`,
+      courseName:selectedCourse.label,
+      dateLabel:"No previous Den event",
+      dateMs:0,entries:[],ranked:[],
+      winner:null,winnerName:"No history",winningPoints:NaN,
+      runnerUpName:"—",runnerUpPoints:NaN,
+      targetPoints:NaN,
+      winnerRound:selectedDbTee.round,
+      isSupabaseOnly:true
+    };
+  },[event,selectedCourse,selectedDbTee,courseKey]);
   const winnerPts = Number(event?.winningPoints);
   const target = planMode === "winning"
     ? Number(event?.targetPoints)
@@ -17308,9 +17430,14 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     return players.find(p=>String(p?.name||"")===String(selectedPlayers[0])) || null;
   },[planMode,selectedPlayers,players]);
   const liveLayout = React.useMemo(()=>{
-    if(!livePlayer || !event) return null;
-    return WP_layoutForPlayer(seasonModel,event,livePlayer,courseKey,handicapMap,tempHandicaps?.[String(livePlayer?.name||"")],tempHandicapModes?.[String(livePlayer?.name||"")]||"whs");
-  },[livePlayer,event,seasonModel,courseKey,handicapMap,tempHandicaps,tempHandicapModes]);
+    if(!livePlayer || !planningEvent) return null;
+    return WP_layoutForPlayer(
+      seasonModel,planningEvent,livePlayer,courseKey,handicapMap,
+      tempHandicaps?.[String(livePlayer?.name||"")],
+      tempHandicapModes?.[String(livePlayer?.name||"")]||"whs",
+      selectedDbTee?.round||null
+    );
+  },[livePlayer,planningEvent,seasonModel,courseKey,handicapMap,tempHandicaps,tempHandicapModes,selectedDbTee]);
 
   const activeLivePlayerName=selectedPlayers.length===1?String(selectedPlayers[0]||""):"";
   const activeLiveTarget=liveScoringMode==="gross"?Number(customGross):Number(customPoints);
@@ -17340,7 +17467,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     const ok=WP_saveLiveRound({
       playerName:activeLivePlayerName,
       courseKey,
-      courseName:event?.courseName||courseKey,
+      courseName:planningEvent?.courseName||courseKey,
       startHole:liveStartHole,
       liveMode:liveScoringMode,
       target:activeLiveTarget,
@@ -17350,7 +17477,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     });
     setLiveSaveStatus(ok?"saved":"error");
   },[
-    planMode,activeLivePlayerName,courseKey,event?.courseName,liveStartHole,liveScoringMode,
+    planMode,activeLivePlayerName,courseKey,planningEvent?.courseName,liveStartHole,liveScoringMode,
     activeLiveTarget,tempHandicaps,tempHandicapModes,liveScores
   ]);
 
@@ -17407,16 +17534,17 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   // IMPORTANT: keep this conditional render AFTER all hooks above.
   // Returning before the courseKey useEffect changes the hook count when
   // entering On-Course Mode and causes React to blank the page.
-  if(onCourseMode && planMode==="live" && selectedPlayers.length===1 && livePlayer && event){
+  if(onCourseMode && planMode==="live" && selectedPlayers.length===1 && livePlayer && planningEvent){
     return <WP_OnCourseMode
       model={seasonModel}
-      event={event}
+      event={planningEvent}
       courseKey={courseKey}
       player={livePlayer}
       handicapMap={handicapMap}
       target={liveScoringMode==="gross"?Number(customGross):Number(customPoints)}
       liveMode={liveScoringMode}
       startHole={liveStartHole}
+      layoutOverride={selectedDbTee?.round||null}
       tempHI={tempHandicaps?.[selectedPlayers[0]]}
       tempMode={tempHandicapModes?.[selectedPlayers[0]]||"whs"}
       liveScores={liveScores}
@@ -17426,7 +17554,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         const r=WP_generateLiveReplanHTML({
           model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
           target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],
-          tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores
+          tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores,eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null
         });
         if(r?.ok){
           window.__dslSeasonReportParams={
@@ -17478,7 +17606,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         if(selectedPlayers.length!==1){ alert("Choose exactly one player for Live Replan."); return; }
         const r=WP_generateLiveReplanHTML({
           model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
-          target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores
+          target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],tempMode:tempHandicapModes?.[selectedPlayers[0]]||"whs",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores,
+          eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null
         });
         if(!r?.ok){ alert(r?.error||"Could not build live replan."); return; }
         window.__dslSeasonReportParams={
@@ -17491,7 +17620,11 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         return;
       }
 
-      const r = WP_generateWinningPlanHTML({ model: seasonModel, courseKey, playerNames: selectedPlayers, handicapMap, mode: planMode, customTarget: target, tempHandicaps, tempHandicapModes });
+      const r = WP_generateWinningPlanHTML({
+        model:seasonModel,courseKey,playerNames:selectedPlayers,handicapMap,
+        mode:planMode,customTarget:target,tempHandicaps,tempHandicapModes,
+        eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null
+      });
       if (!r?.ok) { alert(r?.error || "Could not build winning plan."); return; }
       window.__dslSeasonReportParams = {
         model: seasonModel,
@@ -17521,7 +17654,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
             <div>
               <button type="button" onClick={()=>setView("home")} className="mb-5 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-3 py-1.5 text-xs font-black text-white/90 hover:bg-white/15">← Home</button>
               <div className="text-[10px] font-black tracking-[.2em] uppercase text-emerald-200">Den Golf · Pre-Round Intelligence</div>
-              <div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[10px] font-black text-white">ALL YEARS COURSE HISTORY</span><span className="rounded-full border border-blue-200/30 bg-blue-300/10 px-3 py-1 text-[10px] font-black text-blue-100">FIXED DEN HANDICAPS · TEMP WHS OPTIONAL</span></div>
+              <div className="mt-3 flex flex-wrap gap-2"><span className="rounded-full border border-white/20 bg-white/10 px-3 py-1 text-[10px] font-black text-white">ALL YEARS PLAYER HISTORY + SUPABASE COURSE LIBRARY</span><span className="rounded-full border border-blue-200/30 bg-blue-300/10 px-3 py-1 text-[10px] font-black text-blue-100">FIXED DEN HANDICAPS · TEMP WHS OPTIONAL</span></div>
               <h1 className="mt-2 text-3xl md:text-5xl font-black tracking-[-.04em] leading-none">Build the route to a win.</h1>
               <p className="mt-3 max-w-3xl text-sm md:text-base text-white/75 leading-relaxed">Choose the course and target, or switch to Live Replan once the round starts. Den Society handicaps are fixed by default; a temporary handicap can either be converted as a WHS Index or used directly as a fixed playing handicap. The optimiser builds the route from each golfer's history and can recalculate it after every completed hole.</p>
             </div>
@@ -17537,7 +17670,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       {!hasModel ? (
         <section className="content-card p-5 pb-8 md:p-7">
           <div className="text-xs font-black uppercase tracking-widest text-neutral-400">Season data required</div>
-          <div className="mt-1 text-2xl font-black text-neutral-900">Load all golf history, then plan any course.</div>
+          <div className="mt-1 text-2xl font-black text-neutral-900">Load player history, then plan any Supabase course.</div>
           <div className="mt-2 text-sm text-neutral-600">The planner scans every stored year for courses, previous winners and hole-by-hole history, then returns you straight here. Current-year handicap data is used separately for each player.</div>
           <button
             type="button"
@@ -17559,9 +17692,30 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
               <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
                 <div className="flex items-center gap-3"><div className="flex h-9 w-9 items-center justify-center rounded-full bg-slate-900 text-white text-sm font-black">1</div><div><div className="text-[10px] font-black tracking-widest uppercase text-slate-400">Next venue</div><div className="font-black text-slate-900">Choose the course</div></div></div>
                 <select value={courseKey} onChange={e=>setCourseKey(e.target.value)} className="mt-5 w-full rounded-2xl border border-slate-300 bg-white px-4 py-3.5 text-sm font-black text-slate-900 shadow-sm">
-                  {courses.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+                  {courses.map(c=><option key={c.key} value={c.key}>{c.label}{c.source==="supabase"?"":" · history only"}</option>)}
                 </select>
-                <div className="mt-3 text-xs leading-relaxed text-slate-500">{courses.length} previously recorded course{courses.length===1?"":"s"} available.</div>
+
+                {selectedCourse?.dbId ? <>
+                  <div className="mt-3 text-[9px] font-black uppercase tracking-widest text-slate-400">Tees to play</div>
+                  <select value={selectedTeeId} onChange={e=>setSelectedTeeId(e.target.value)} className="mt-1 w-full rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm font-black text-slate-900">
+                    {dbTees.map(t=><option key={t.id} value={String(t.id)}>{t.teeName}{Number.isFinite(t.rating)?` · CR ${t.rating.toFixed(1)}`:""}{Number.isFinite(t.slope)?` · Slope ${Math.round(t.slope)}`:""}</option>)}
+                  </select>
+                  {selectedDbTee ? <div className="mt-3 rounded-2xl border border-emerald-200 bg-white p-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div><div className="text-[9px] font-black uppercase tracking-widest text-emerald-700">Selected tee layout</div><div className="text-sm font-black text-slate-900">{selectedDbTee.teeName}</div></div>
+                      <div className="text-right text-[10px] font-bold text-slate-500">
+                        {selectedDbTee.yards.filter(Number.isFinite).reduce((s,v)=>s+v,0).toLocaleString()} yds<br/>
+                        Par {selectedDbTee.pars.filter(Number.isFinite).reduce((s,v)=>s+v,0)}
+                      </div>
+                    </div>
+                    <div className="mt-2 text-[10px] leading-relaxed text-slate-500">The planner will use this tee's exact yardage, Stroke Index and Par on every hole. Player history supplies the performance model.</div>
+                  </div>:null}
+                </> : null}
+
+                <div className="mt-3 text-xs leading-relaxed text-slate-500">
+                  {courseLibraryLoading?"Loading Supabase course library…":`${dbCourses.length} Supabase course${dbCourses.length===1?"":"s"} · ${courses.length} total available.`}
+                  {courseLibraryError?<span className="block mt-1 text-rose-600">{courseLibraryError}</span>:null}
+                </div>
               </div>
 
               <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
@@ -17573,7 +17727,10 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
                   </div>
                   <div className={`mt-3 rounded-2xl border px-4 py-3 ${event.benchmarkStatus==="LIKELY ANOMALY"?"border-amber-200 bg-amber-50":"border-emerald-200 bg-emerald-50"}`}><div className="flex items-center justify-between gap-3"><div><div className={`text-[9px] font-black uppercase tracking-widest ${event.benchmarkStatus==="LIKELY ANOMALY"?"text-amber-700":"text-emerald-700"}`}>Winning-score check</div><div className="mt-1 text-sm font-black text-slate-900">{event.benchmarkStatus}</div></div><div className="text-right"><div className="text-[9px] font-black uppercase tracking-widest text-slate-400">Gap to 2nd</div><div className="text-2xl font-black text-slate-900">{Number.isFinite(event.winnerGapToSecond)?event.winnerGapToSecond.toFixed(0):"—"}</div></div></div><div className="mt-2 text-[11px] leading-relaxed text-slate-600">{event.benchmarkHeadline}. {Number.isFinite(event.historicWinningMedian)?`Historic winning median: ${event.historicWinningMedian.toFixed(1)} pts.`:"No earlier winning-score history at this course."}</div></div>
                   <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 py-3 flex items-center justify-between"><div><div className="text-[9px] font-black uppercase tracking-widest text-emerald-600">Recommended target</div><div className="text-xs font-semibold text-emerald-800">{event.targetAdjusted?`Adjusted from ${Math.round(event.winningPoints+1)} because the last win looks anomalous`:`One point above the credible winning benchmark`}</div></div><div className="text-3xl font-black text-emerald-700">{event.targetPoints.toFixed(0)}</div></div>
-                </> : <div className="mt-5 rounded-2xl border border-rose-200 bg-rose-50 p-4 text-sm font-bold text-rose-700">No previous Stableford winner found for {selectedCourse?.label || "this course"}.</div>}
+                </> : <div className="mt-5 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+                  <div className="text-sm font-black text-blue-900">New / unplayed Den course</div>
+                  <div className="mt-1 text-[11px] leading-relaxed text-blue-800">There is no previous Den winning score here yet. You can still build a personalised <b>Stableford target</b>, <b>Gross target</b> or use <b>Live Replan</b> from the selected Supabase tee. “Win the competition” becomes available once a Den result exists.</div>
+                </div>}
               </div>
 
               <div className="rounded-3xl border border-slate-200 bg-gradient-to-b from-white to-slate-50 p-5 shadow-sm">
