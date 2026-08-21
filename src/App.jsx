@@ -16502,6 +16502,128 @@ function WP_exactPriorStrength(n){
   if(N>=1) return 3.4;
   return 5.0;
 }
+
+// =========================================================
+// WEATHER → SCORING MODEL (App-98)
+// Weather never rewrites historical ability. It creates a temporary
+// "today" distribution used by probability + route optimisation.
+// =========================================================
+function WP_weatherAtHole(ctx,holeNo){
+  if(!ctx) return null;
+  const rows=Array.isArray(ctx.hourlySeries)?ctx.hourlySeries:[];
+  if(!rows.length) return ctx;
+
+  // Approximate 13 minutes/hole (~3h54m round). This is intentionally
+  // transparent and can later be replaced by actual pace data.
+  const date=String(ctx.date||"").trim();
+  const tee=String(ctx.teeTime||"10:00");
+  const teeMs=date?new Date(`${date}T${tee}:00`).getTime():new Date(ctx.forecastTime||0).getTime();
+  const holeMs=teeMs+(Math.max(1,Math.min(18,Number(holeNo)||1))-1)*13*60*1000;
+
+  let best=rows[0],bestD=Infinity;
+  for(const r of rows){
+    const t=new Date(r?.time||0).getTime();
+    const d=Math.abs(t-holeMs);
+    if(Number.isFinite(t)&&d<bestD){bestD=d;best=r;}
+  }
+  return {...ctx,...best,forecastTime:best?.time||ctx.forecastTime};
+}
+function WP_weatherHoleScoring(h,ctx){
+  if(!ctx||!h) return null;
+  const current=WP_weatherAtHole(ctx,h.hole);
+  const geo=ctx?.geometryByHole?.[Number(h.hole)];
+  const legs=Array.isArray(geo?.legs)?geo.legs:[];
+  const directional=legs.length
+    ? legs.map(l=>WP_holeWeather(current,Number(l?.bearing_deg))).filter(Boolean)
+    : [WP_holeWeather(current,NaN)].filter(Boolean);
+  if(!directional.length)return null;
+
+  // Weight legs by distance where the KML provides it. If not, equal weight.
+  let totalW=0,head=0,cross=0,penalty=0;
+  directional.forEach((w,i)=>{
+    const raw=Number(legs?.[i]?.distance_yards ?? legs?.[i]?.distance_yds ?? legs?.[i]?.distance_m);
+    const weight=Number.isFinite(raw)&&raw>0?raw:1;
+    totalW+=weight;
+    head+=Number(w.headwindMph||0)*weight;
+    cross+=Math.abs(Number(w.crosswindMph||0))*weight;
+    penalty+=Number(w.strokePenalty||0)*weight;
+  });
+  totalW=Math.max(1,totalW);
+  head/=totalW;cross/=totalW;penalty/=totalW;
+
+  const yard=Math.max(80,Number(h.yard)||Number(h.par)*100);
+  const wind=Number(current?.windMph)||0;
+  const gust=Math.max(wind,Number(current?.gustMph)||0);
+  const rain=Math.max(0,Number(current?.rainMm)||0);
+  const temp=Number.isFinite(Number(current?.tempC))?Number(current.tempC):15;
+
+  // Translate conditions into a conservative scoring-stroke delta.
+  // Long holes amplify head/tail wind because the ball is exposed for longer.
+  // Crosswind mostly increases dispersion rather than distance, so its coefficient
+  // is deliberately smaller. The cap avoids pretending forecast precision is exact.
+  const lengthScale=Math.max(.65,Math.min(1.45,yard/360));
+  let strokeDelta =
+      Math.max(0,head)*0.020*lengthScale
+    + Math.min(0,head)*0.010*lengthScale
+    + cross*0.0045*lengthScale
+    + Math.max(0,gust-wind)*0.005
+    + rain*0.045
+    + Math.max(0,8-temp)*0.012
+    + Math.max(0,temp-31)*0.008;
+
+  // The older physical penalty is useful as a stabiliser, but do not double count.
+  strokeDelta = strokeDelta*0.82 + penalty*0.18;
+  strokeDelta=Math.max(-0.42,Math.min(0.70,strokeDelta));
+
+  const label=head>2.5?"INTO":head<-2.5?"HELPING":cross>3?"CROSS":"NEUTRAL";
+  return {
+    forecastTime:current?.forecastTime,
+    windMph:wind,gustMph:gust,rainMm:rain,tempC:temp,
+    headwindMph:head,crosswindMph:cross,
+    strokeDelta,label,
+    baselineExpectedGross:Number(h.expectedGross),
+    weatherExpectedGross:Number(h.expectedGross)+strokeDelta,
+    baselineExpectedPts:Number(h.expectedPts),
+    weatherExpectedPts:Math.max(0,Math.min(6,Number(h.expectedPts)-strokeDelta*0.86))
+  };
+}
+function WP_applyWeatherToHoles(holes,ctx){
+  for(const h of (holes||[])){
+    h.baselineExpectedGross=Number(h.expectedGross);
+    h.baselineExpectedPts=Number(h.expectedPts);
+    const w=WP_weatherHoleScoring(h,ctx);
+    if(!w){
+      h.weatherActive=false;
+      h.weatherStrokeDelta=0;
+      h.weatherExpectedGross=Number(h.expectedGross);
+      h.weatherExpectedPts=Number(h.expectedPts);
+      continue;
+    }
+    h.weatherActive=true;
+    h.weather=w;
+    h.weatherStrokeDelta=Number(w.strokeDelta)||0;
+    h.weatherExpectedGross=Number(w.weatherExpectedGross);
+    h.weatherExpectedPts=Number(w.weatherExpectedPts);
+  }
+  return holes;
+}
+function WP_shiftPmf(pmf,delta,{minIndex=0,maxIndex=null}={}){
+  const src=Array.isArray(pmf)?pmf:[];
+  const max=Number.isFinite(Number(maxIndex))?Number(maxIndex):Math.max(0,src.length-1);
+  const out=Array(max+1).fill(0);
+  for(let i=0;i<src.length;i++){
+    const p=Number(src[i])||0;if(!p)continue;
+    const x=Math.max(minIndex,Math.min(max,i+Number(delta||0)));
+    const lo=Math.floor(x),hi=Math.ceil(x),frac=x-lo;
+    if(lo>=0&&lo<out.length)out[lo]+=p*(1-frac);
+    if(hi!==lo&&hi>=0&&hi<out.length)out[hi]+=p*frac;
+  }
+  const t=out.reduce((s,v)=>s+v,0)||1;
+  return out.map(v=>v/t);
+}
+function WP_baselineHoleClone(h){
+  return {...h,weatherActive:false,weatherStrokeDelta:0,weather:null};
+}
 function WP_stablefordPmf(h){
   if(h?.played && Number.isFinite(Number(h.actualPts))){
     const pmf=Array(7).fill(0); pmf[Math.max(0,Math.min(6,Math.round(Number(h.actualPts))))]=1; return pmf;
@@ -16518,7 +16640,12 @@ function WP_stablefordPmf(h){
   vals.forEach(v=>counts[v]+=1);
   prior.forEach(([x,p])=>counts[x]+=p*priorStrength);
   const total=counts.reduce((s,v)=>s+v,0)||1;
-  return counts.map(v=>v/total);
+  const baseline=counts.map(v=>v/total);
+  if(h?.weatherActive && Number.isFinite(Number(h?.weatherStrokeDelta)) && Math.abs(Number(h.weatherStrokeDelta))>.001){
+    // Roughly one Stableford point per stroke around the scoring range.
+    return WP_shiftPmf(baseline,-Number(h.weatherStrokeDelta)*0.90,{minIndex:0,maxIndex:6});
+  }
+  return baseline;
 }
 function WP_grossPmf(h){
   if(h?.played && Number.isFinite(Number(h.actualGross))){
@@ -16539,7 +16666,13 @@ function WP_grossPmf(h){
   vals.forEach(v=>{ if(v<=max) counts[v]+=1; });
   prior.forEach(([x,p])=>counts[x]+=p*priorStrength);
   const total=counts.reduce((s,v)=>s+v,0)||1;
-  return counts.map(v=>v/total);
+  const baseline=counts.map(v=>v/total);
+  if(h?.weatherActive && Number.isFinite(Number(h?.weatherStrokeDelta)) && Math.abs(Number(h.weatherStrokeDelta))>.001){
+    const extra=Math.ceil(Math.max(0,Number(h.weatherStrokeDelta)))+2;
+    const padded=[...baseline,...Array(extra).fill(0)];
+    return WP_shiftPmf(padded,Number(h.weatherStrokeDelta),{minIndex:1,maxIndex:padded.length-1});
+  }
+  return baseline;
 }
 function WP_probAtLeast(pmf,x){
   const t=Math.max(0,Math.ceil(Number(x)||0));
@@ -16595,10 +16728,17 @@ function WP_probPctText(prob){
 function WP_probabilitySummary(plan){
   if(!plan||!Array.isArray(plan.holes)||!plan.holes.length) return {};
   const isGross=plan.mode==='gross';
+  const weatherActive=plan.holes.some(h=>h?.weatherActive);
+  const baselinePmfs=plan.holes.map(h=>{
+    const b=WP_baselineHoleClone(h);
+    return isGross?WP_grossPmf(b):WP_stablefordPmf(b);
+  });
+  const baselineDist=WP_convolvePmfs(baselinePmfs);
   const pmfs=plan.holes.map(h=>isGross?WP_grossPmf(h):WP_stablefordPmf(h));
   const dist=WP_convolvePmfs(pmfs);
   const target=Math.round(Number(plan.targetRequested ?? (isGross?plan.totalGross:plan.pointsTotal))||0);
   const targetProb=isGross?WP_probAtMost(dist,target):WP_probAtLeast(dist,target);
+  const baselineTargetProb=isGross?WP_probAtMost(baselineDist,target):WP_probAtLeast(baselineDist,target);
   let mode=0,best=-1;
   dist.forEach((v,i)=>{ if(v>best){best=v;mode=i;} });
   const q25=WP_distQuantile(dist,.25), q50=WP_distQuantile(dist,.50), q75=WP_distQuantile(dist,.75);
@@ -16619,6 +16759,10 @@ function WP_probabilitySummary(plan){
   return {
     targetProbability:targetProb,
     targetProbabilityText:WP_probPctText(targetProb),
+    weatherProbabilityActive:weatherActive,
+    baselineTargetProbability:baselineTargetProb,
+    baselineTargetProbabilityText:WP_probPctText(baselineTargetProb),
+    weatherProbabilityDelta:weatherActive?(targetProb-baselineTargetProb):0,
     probabilityLabel:riskLabel,
     probabilityTone:riskTone,
     mostLikelyTotal:mode,
@@ -16659,8 +16803,12 @@ function WP_enrichPlanVisuals(plan){
   if(!plan || !Array.isArray(plan.holes) || !plan.holes.length) return plan;
   const holes=plan.holes;
   const isGross=plan.mode==='gross';
-  const typicalPts=holes.reduce((sum,h)=>sum+(Number.isFinite(Number(h.expectedPts))?Number(h.expectedPts):2),0);
-  const typicalGross=holes.reduce((sum,h)=>sum+(Number.isFinite(Number(h.expectedGross))?Number(h.expectedGross):(Number(h.par)||0)+(Number(h.strokes)||0)),0);
+  const baselineTypicalPts=holes.reduce((sum,h)=>sum+(Number.isFinite(Number(h.expectedPts))?Number(h.expectedPts):2),0);
+  const baselineTypicalGross=holes.reduce((sum,h)=>sum+(Number.isFinite(Number(h.expectedGross))?Number(h.expectedGross):(Number(h.par)||0)+(Number(h.strokes)||0)),0);
+  const weatherActive=holes.some(h=>h?.weatherActive);
+  const weatherStrokeTotal=holes.reduce((s,h)=>s+(Number(h.weatherStrokeDelta)||0),0);
+  const typicalPts=holes.reduce((sum,h)=>sum+(Number.isFinite(Number(h.weatherExpectedPts))?Number(h.weatherExpectedPts):(Number.isFinite(Number(h.expectedPts))?Number(h.expectedPts):2)),0);
+  const typicalGross=holes.reduce((sum,h)=>sum+(Number.isFinite(Number(h.weatherExpectedGross))?Number(h.weatherExpectedGross):(Number.isFinite(Number(h.expectedGross))?Number(h.expectedGross):(Number(h.par)||0)+(Number(h.strokes)||0))),0);
   const targetValue=isGross?Number(plan.totalGross):Number(plan.pointsTotal);
   const typicalValue=isGross?typicalGross:typicalPts;
   const delta=isGross?(typicalGross-targetValue):(targetValue-typicalPts); // positive = improvement required
@@ -16670,7 +16818,7 @@ function WP_enrichPlanVisuals(plan){
   // player's own expected scoring profile, with a small evidence-quality penalty.
   let dev=0, evidence=0;
   holes.forEach(h=>{
-    dev += isGross ? Math.abs(Number(h.targetGross)-Number(h.expectedGross)) : Math.abs(Number(h.targetPts)-Number(h.expectedPts));
+    dev += isGross ? Math.abs(Number(h.targetGross)-Number(h.expectedGross)) : Math.abs(Number(h.targetPts)-Number(h.expectedPts)); // history-fit, intentionally NOT weather-fit
     evidence += Number(h.evidenceScore)||35;
   });
   const avgDev=dev/holes.length;
@@ -16697,8 +16845,12 @@ function WP_enrichPlanVisuals(plan){
   const onPlanBogeys=holes.filter(h=>Number(h.targetGross)-Number(h.par)===1).map(h=>h.hole);
   const onPlanDoubles=holes.filter(h=>Number(h.targetGross)-Number(h.par)>=2).map(h=>h.hole);
 
+  plan.baselineTypicalPts=baselineTypicalPts;
+  plan.baselineTypicalGross=baselineTypicalGross;
   plan.typicalPts=typicalPts;
   plan.typicalGross=typicalGross;
+  plan.weatherActive=weatherActive;
+  plan.weatherStrokeTotal=weatherStrokeTotal;
   plan.improvementRequired=delta;
   plan.routeFitScore=fitScore;
   plan.routeFitLabel=fitLabel;
@@ -16730,13 +16882,18 @@ function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
   }
   if(holes.length<9) return null;
 
+  // Apply today's weather as a temporary layer before optimisation.
+  // Historical expectedGross/expectedPts remain intact for audit/reporting.
+  WP_applyWeatherToHoles(holes,options?.weatherContext||null);
+
   if(mode==='gross'){
     const target=Math.max(holes.length,Math.min(200,Math.round(Number(options?.target)||layout.parTotal||90)));
     const solved=WP_dpExact(holes,target,h=>{
-      const lo=Math.max(1,h.par-2), hi=Math.max(lo+3,Math.ceil(h.expectedGross+4),h.par+5);
+      const todayExpected=Number.isFinite(Number(h.weatherExpectedGross))?Number(h.weatherExpectedGross):Number(h.expectedGross);
+      const lo=Math.max(1,h.par-2), hi=Math.max(lo+3,Math.ceil(todayExpected+4),h.par+5);
       const arr=[];
       for(let g=lo;g<=hi;g++){
-        const dev=g-h.expectedGross;
+        const dev=g-todayExpected;
         let cost=dev*dev*1.25;
         if(g<h.par-1) cost+=2.5*(h.par-1-g);
         if(g>h.par+3) cost+=.7*(g-(h.par+3));
@@ -16751,7 +16908,8 @@ function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
     holes.forEach((h,i)=>{
       const c=solved.choices[i]; h.targetGross=c.gross;
       h.targetPts=Math.max(0,Math.min(6,2+h.par+h.strokes-h.targetGross));
-      const diff=h.targetGross-h.expectedGross;
+      const todayExpected=Number.isFinite(Number(h.weatherExpectedGross))?Number(h.weatherExpectedGross):Number(h.expectedGross);
+      const diff=h.targetGross-todayExpected;
       h.strategy=diff<=-.65?'ATTACK':(diff<=.65?'PROTECT':(diff<=1.6?'ACCEPT':'RESET'));
       h.opp=-diff;
       h.reason=h.exactGrossN?`Based on ${h.exactGrossN} previous score${h.exactGrossN===1?'':'s'} on this hole`:
@@ -16762,8 +16920,26 @@ function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
     const frontGross=holes.filter(h=>h.hole<=9).reduce((s,h)=>s+h.targetGross,0), backGross=totalGross-frontGross;
     const frontPts=holes.filter(h=>h.hole<=9).reduce((s,h)=>s+h.targetPts,0), backPts=pointsTotal-frontPts;
     const attacks=holes.filter(h=>h.strategy==='ATTACK').sort((a,b)=>b.opp-a.opp);
+    attacks.forEach(h=>{
+      const risk=WP_holeRisk(h,h.targetGross,'gross');
+      const exact=(h.exactGrossValues||[]).map(Number).filter(Number.isFinite);
+      const exactGrossScores=exact.map(v=>Number(h.par)+v);
+      const hitRate=exactGrossScores.length?exactGrossScores.filter(g=>g<=Number(h.targetGross)).length/exactGrossScores.length:NaN;
+      h.grossTargetSuccessProb=Number(risk.successProb);
+      h.grossTargetHitRate=hitRate;
+      if((Number.isFinite(hitRate)&&hitRate>=.50)||Number(risk.successProb)>=.48){
+        h.planCue='PRIMARY_ATTACK';h.attackTier='PRIMARY';
+      }else{
+        h.planCue='STRETCH_GAIN';h.attackTier='STRETCH';
+      }
+    });
+    holes.filter(h=>h.strategy!=='ATTACK').forEach(h=>{
+      if(!h.planCue)h.planCue=h.strategy==='ACCEPT'?'DAMAGE_CONTROL':'PROTECT';
+    });
+    const primaryAttacks=attacks.filter(h=>h.planCue==='PRIMARY_ATTACK');
+    const stretchGains=attacks.filter(h=>h.planCue==='STRETCH_GAIN');
     const dangers=holes.slice().sort((a,b)=>a.opp-b.opp).slice(0,3);
-    return WP_enrichPlanVisuals({player:p,layout,holes,mode,total:totalGross,totalGross,pointsTotal,attacks,dangers,front:frontGross,back:backGross,frontPts,backPts,targetRequested:target});
+    return WP_enrichPlanVisuals({player:p,layout,holes,mode,total:totalGross,totalGross,pointsTotal,attacks,primaryAttacks,stretchGains,dangers,front:frontGross,back:backGross,frontPts,backPts,targetRequested:target});
   }
 
   const desired=Math.max(0,Math.min(72,Math.round(Number(options?.target ?? event?.targetPoints)||37)));
@@ -16775,7 +16951,9 @@ function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
     const exactAvg=Number(h.holePtsAvg);
     const exactValues=(h.exactPtsValues||[]).map(Number).filter(Number.isFinite);
     const exactN=exactValues.length || Number(h.exactPtsN)||0;
-    const personalExpected=(exactN>=2&&Number.isFinite(exactAvg)) ? exactAvg : Number(h.expectedPts);
+    const historicalExpected=(exactN>=2&&Number.isFinite(exactAvg)) ? exactAvg : Number(h.expectedPts);
+    const weatherShift=Number(h.weatherExpectedPts)-Number(h.expectedPts);
+    const personalExpected=Math.max(0,Math.min(6,historicalExpected+(Number.isFinite(weatherShift)?weatherShift:0)));
     const evidenceStrength=Math.min(1,exactN/3);
     for(let pts=0;pts<=5;pts++){
       const dev=pts-personalExpected;
@@ -16853,7 +17031,10 @@ function WP_makePlayerPlan(model,event,p,courseKey,handicapMap,options={}){
     const exactAvg=Number(h.holePtsAvg);
     const exactValues=(h.exactPtsValues||[]).map(Number).filter(Number.isFinite);
     const exactN=exactValues.length || Number(h.exactPtsN)||0;
-    h.personalExpectedPts=(exactN>=2&&Number.isFinite(exactAvg))?exactAvg:Number(h.expectedPts);
+    const historicalExpected=(exactN>=2&&Number.isFinite(exactAvg))?exactAvg:Number(h.expectedPts);
+    const weatherShift=Number(h.weatherExpectedPts)-Number(h.expectedPts);
+    h.personalExpectedPts=Math.max(0,Math.min(6,historicalExpected+(Number.isFinite(weatherShift)?weatherShift:0)));
+    h.historicalExpectedPts=historicalExpected;
     const gain=pts-h.personalExpectedPts;
     h.opp=gain;
 
@@ -17488,16 +17669,18 @@ function WP_weatherGeometryHTML(ctx){
   const geo=ctx?.geometryByHole||{}; const rows=[];
   for(let h=1;h<=18;h++){
     const g=geo[h]; if(!g)continue;
+    const current=WP_weatherAtHole(ctx,h);
     const legs=Array.isArray(g.legs)?g.legs:[];
-    const ws=legs.map(l=>WP_holeWeather(ctx,Number(l.bearing_deg))).filter(Boolean);
+    const ws=legs.map(l=>WP_holeWeather(current,Number(l.bearing_deg))).filter(Boolean);
     if(!ws.length)continue;
     const head=ws.reduce((a,w)=>a+Number(w.headwindMph||0),0)/ws.length;
     const cross=ws.reduce((a,w)=>a+Math.abs(Number(w.crosswindMph||0)),0)/ws.length;
     const label=head>2.5?'Into':head<-2.5?'Helping':cross>3?'Cross':'Neutral';
-    rows.push(`<div style="border:1px solid #e2e8f0;border-radius:10px;padding:7px;text-align:center;background:#fff"><div style="font-size:8px;font-weight:900;color:#94a3b8">H${h}</div><div style="font-size:10px;font-weight:950;color:#0f172a">${label}</div><div style="font-size:8px;color:#64748b">${head>=0?'+':''}${head.toFixed(0)} mph head · ${cross.toFixed(0)} cross</div></div>`);
+    const hh=String(new Date(current?.forecastTime||0).getHours()).padStart(2,'0');
+    rows.push(`<div style="border:1px solid #e2e8f0;border-radius:10px;padding:7px;text-align:center;background:#fff"><div style="font-size:8px;font-weight:900;color:#94a3b8">H${h} · ~${hh}:00</div><div style="font-size:10px;font-weight:950;color:#0f172a">${label}</div><div style="font-size:8px;color:#64748b">${head>=0?'+':''}${head.toFixed(0)} mph head · ${cross.toFixed(0)} cross</div></div>`);
   }
   if(!rows.length)return '';
-  return `<div style="margin-top:9px"><div style="font-size:8px;font-weight:950;color:#0369a1;text-transform:uppercase;letter-spacing:.08em">Hole-by-hole wind geometry</div><div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin-top:5px">${rows.join('')}</div></div>`;
+  return `<div style="margin-top:9px"><div style="font-size:8px;font-weight:950;color:#0369a1;text-transform:uppercase;letter-spacing:.08em">Hole-by-hole wind geometry · forecast follows expected round time</div><div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin-top:5px">${rows.join('')}</div></div>`;
 }
 function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mode='winning',customTarget,tempHandicaps={},tempHandicapModes={},weatherContext=null,eventOverride=null,layoutOverride=null}){
   try{
@@ -17511,7 +17694,7 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
     }
     const target=(mode==='winning')?historicEvent.targetPoints:Number(customTarget);
     if(!Number.isFinite(target)) return {ok:false,error:'Enter a valid target score.'};
-    const plans=players.map(p=>WP_makePlayerPlan(model,event,p,courseKey,handicapMap,{mode,target,tempHI:tempHandicaps?.[String(p?.name||'')],tempMode:tempHandicapModes?.[String(p?.name||'')]||"den",layoutOverride})).filter(Boolean);
+    const plans=players.map(p=>WP_makePlayerPlan(model,event,p,courseKey,handicapMap,{mode,target,tempHI:tempHandicaps?.[String(p?.name||'')],tempMode:tempHandicapModes?.[String(p?.name||'')]||"den",weatherContext,layoutOverride})).filter(Boolean);
     if(!plans.length)return{ok:false,error:"The selected course does not have enough Par / Stroke Index data to build a plan."};
     const c=event.courseName||courseKey;
     const css=`<style>
@@ -17573,7 +17756,10 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
           : (cue==='PRIMARY_ATTACK'
               ? 'PRIMARY ATTACK'
               : (cue==='STRETCH_GAIN' ? 'STRETCH GAIN' : h.strategy));
-        return `<div class="WPhole ${String(h.strategy||'protect').toLowerCase()} ${planScoreClass}"><div class="WPhn">HOLE ${h.hole} · PAR ${h.par} · SI ${Number.isFinite(h.si)?h.si:'—'}</div><div class="WPscoreLine"><div><div class="WPscoreLabel">GROSS SCORE TO MAKE</div><div class="WPgrossBig">${h.targetGross}</div></div><div class="WPpointsPill">${h.targetPts} PTS</div></div><div class="WPscoreEq">Make <b>${h.targetGross}</b> gross → <b>${h.targetPts} Stableford point${h.targetPts===1?'':'s'}</b> · ${h.strokes} handicap shot${h.strokes===1?'':'s'}</div>${courseMgmtNote}<div class="WPtag">${tagLabel}</div><div class="WPliveReason">${conciseReason}</div></div>`;
+        const weatherHoleNote=h.weatherActive
+          ? `<div class="WPhit ${Number(h.weatherStrokeDelta)>.18?'bad':Number(h.weatherStrokeDelta)<-.12?'good':'warn'}"><strong>${h.weather?.label||'WEATHER'}</strong> · ${Number(h.weatherStrokeDelta)>=0?'+':''}${Number(h.weatherStrokeDelta).toFixed(2)} modelled strokes · ${Number(h.weather?.headwindMph)>=0?'+':''}${Number(h.weather?.headwindMph||0).toFixed(0)} mph head · ${Number(h.weather?.crosswindMph||0).toFixed(0)} cross</div>`
+          : '';
+        return `<div class="WPhole ${String(h.strategy||'protect').toLowerCase()} ${planScoreClass}"><div class="WPhn">HOLE ${h.hole} · PAR ${h.par} · SI ${Number.isFinite(h.si)?h.si:'—'}</div><div class="WPscoreLine"><div><div class="WPscoreLabel">GROSS SCORE TO MAKE</div><div class="WPgrossBig">${h.targetGross}</div></div><div class="WPpointsPill">${h.targetPts} PTS</div></div><div class="WPscoreEq">Make <b>${h.targetGross}</b> gross → <b>${h.targetPts} Stableford point${h.targetPts===1?'':'s'}</b> · ${h.strokes} handicap shot${h.strokes===1?'':'s'}</div>${courseMgmtNote}${weatherHoleNote}<div class="WPtag">${tagLabel}</div><div class="WPliveReason">${conciseReason}</div></div>`;
       }).join('');
 
       const targetTop=isGross?`${plan.totalGross} GROSS`:`${plan.pointsTotal} PTS`;
@@ -17586,7 +17772,15 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
         ? `${Math.max(0,plan.improvementRequired).toFixed(1)} strokes`
         : `+${Math.max(0,plan.improvementRequired).toFixed(1)} pts`;
       const routeSummary=`<div class="WProuteSummary"><div class="WPsum hero"><div class="WPk">Your mission</div><div class="WPsumV">${targetTop}</div><div style="font-size:9px;opacity:.72;margin-top:4px">Normal profile: ${normalLabel}</div></div><div class="WPsum"><div class="WPk">Improvement needed</div><div class="WPsumV">${improvementLabel}</div></div><div class="WPsum"><div class="WPk">Attack / upside</div><div class="WPsumV">${(plan.strategyCounts?.ATTACK||0)+(plan.strategyCounts?.OPPORTUNITY||0)}</div><div style="font-size:8px;color:#64748b">${plan.strategyCounts?.OPPORTUNITY||0} opportunity holes</div></div><div class="WPsum"><div class="WPk">Protect</div><div class="WPsumV">${plan.strategyCounts?.PROTECT||0}</div><div style="font-size:8px;color:#64748b">holes · damage ${(plan.strategyCounts?.ACCEPT||0)+(plan.strategyCounts?.RESET||0)}</div></div><div class="WPsum WPfit ${plan.routeFitTone||'mid'}"><div class="WPk">Route fit</div><div class="WPsumV">${plan.routeFitScore}/100</div><div style="font-size:8px;font-weight:900;margin-top:3px">${WP_escape(plan.routeFitLabel||'')}</div></div></div>`;
-      const probabilityPanel=`<div class="WPprob"><div class="WPprobTop"><div class="WPprobMain ${plan.probabilityTone||'mid'}"><div class="WPk" style="color:rgba(255,255,255,.72)">MODELLED TARGET CHANCE</div><div class="WPprobPct">${WP_escape(plan.targetProbabilityText||'—')}</div><div style="font-size:10px;font-weight:950;margin-top:4px">${WP_escape(plan.probabilityLabel||'')}</div></div><div class="WPprobBox"><div class="WPk">Most likely outcome</div><div class="WPsumV">${Math.round(plan.mostLikelyTotal||0)} ${isGross?'gross':'pts'}</div><div style="font-size:8px;color:#64748b;margin-top:3px">Middle 50%: ${Math.round(plan.probabilityQ25||0)}–${Math.round(plan.probabilityQ75||0)}</div></div><div class="WPprobBox"><div class="WPk">Data confidence</div><div class="WPsumV" style="font-size:18px">${WP_escape(plan.probabilityDataConfidence||'—')}</div><div style="font-size:8px;color:#64748b;margin-top:3px">${Number(plan.probabilityAvgExactRounds||0).toFixed(1)} exact-course rounds/hole avg</div></div></div><div class="WPprobLadder">${(plan.probabilityLadder||[]).map(x=>`<div class="WPprobStep"><span class="WPk">${Math.round(x.target)} ${isGross?'gross':'pts'}</span><b>${WP_probPctText(x.prob)}</b></div>`).join('')}</div><div class="WPprobNote">This is a modelled estimate from your historical scoring distribution, with small exact-hole samples shrunk toward your wider Par / SI / yardage profile. It is not a guarantee. Route Fit remains a separate measure of how closely the requested route resembles your normal scoring.</div></div>`;
+      const weatherProbDelta=Number(plan.weatherProbabilityDelta);
+      const weatherProbText=plan.weatherProbabilityActive
+        ? `${plan.baselineTargetProbabilityText} normal → ${plan.targetProbabilityText} today`
+        : '';
+      const weatherDifficulty=Number(plan.weatherStrokeTotal)||0;
+      const weatherDifficultyText=plan.weatherActive
+        ? `${weatherDifficulty>=0?'+':''}${weatherDifficulty.toFixed(1)} modelled strokes vs normal`
+        : '';
+      const probabilityPanel=`<div class="WPprob"><div class="WPprobTop"><div class="WPprobMain ${plan.probabilityTone||'mid'}"><div class="WPk" style="color:rgba(255,255,255,.72)">MODELLED TARGET CHANCE</div><div class="WPprobPct">${WP_escape(plan.targetProbabilityText||'—')}</div><div style="font-size:10px;font-weight:950;margin-top:4px">${WP_escape(plan.probabilityLabel||'')}</div></div><div class="WPprobBox"><div class="WPk">Most likely outcome</div><div class="WPsumV">${Math.round(plan.mostLikelyTotal||0)} ${isGross?'gross':'pts'}</div><div style="font-size:8px;color:#64748b;margin-top:3px">Middle 50%: ${Math.round(plan.probabilityQ25||0)}–${Math.round(plan.probabilityQ75||0)}</div></div><div class="WPprobBox"><div class="WPk">Data confidence</div><div class="WPsumV" style="font-size:18px">${WP_escape(plan.probabilityDataConfidence||'—')}</div><div style="font-size:8px;color:#64748b;margin-top:3px">${Number(plan.probabilityAvgExactRounds||0).toFixed(1)} exact-course rounds/hole avg</div></div></div><div class="WPprobLadder">${(plan.probabilityLadder||[]).map(x=>`<div class="WPprobStep"><span class="WPk">${Math.round(x.target)} ${isGross?'gross':'pts'}</span><b>${WP_probPctText(x.prob)}</b></div>`).join('')}</div><div class="WPprobNote">This is a modelled estimate from your historical scoring distribution, with small exact-hole samples shrunk toward your wider Par / SI / yardage profile. It is not a guarantee. Route Fit remains a separate measure of how closely the requested route resembles your normal scoring.${plan.weatherProbabilityActive?` <b>Weather-adjusted:</b> ${weatherProbText} · ${weatherDifficultyText}.`:''}</div></div>`;
 
 
       const routeStrip=`<div class="WProuteStrip">${plan.holes.map(h=>{const op=Number(h.targetGross)-Number(h.par);const cue=String(h.planCue||'');const genuineBogey=(cue==='SMART_BOGEY'||cue==='BOGEY_ON_PLAN'||cue==='DAMAGE_CONTROL')&&op>=1;const cls=`${String(h.strategy||'protect').toLowerCase()} ${genuineBogey?'bogey':''}`;return `<div class="WPrCell ${cls}"><div class="WPrH">H${h.hole} · P${h.par}</div><div class="WPrGross">${h.targetGross}</div><div class="WPrPts">${h.targetPts} pt${h.targetPts===1?'':'s'}${cue==='OPPORTUNITY'?` · +1 available`:''}</div></div>`;}).join('')}</div>`;
@@ -17614,7 +17808,7 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
         <div><div class="WPhcapAuditK">Slope</div><div class="WPhcapAuditV">${Number.isFinite(Number(l.slope))?Math.round(Number(l.slope)):'—'}</div><div class="WPhcapAuditS">${l.handicapMethod==='TEMP_WHS'?'Used in WHS conversion':'Reference only'}</div></div>
       </div>`;
 
-      const weatherBanner=weatherContext?`<div style="margin:12px 0 16px;border:1px solid #bae6fd;background:#f0f9ff;border-radius:16px;padding:12px 14px"><div style="font-size:9px;font-weight:950;letter-spacing:.1em;text-transform:uppercase;color:#0369a1">☁ WEATHER AT TEE TIME</div><div style="font-size:16px;font-weight:950;color:#0f172a;margin-top:3px">${WP_escape(WP_weatherLabel(WP_holeWeather(weatherContext,NaN)))}</div><div style="font-size:9px;color:#64748b;margin-top:3px">Baseline targets remain based on player history. Weather is a separate current-conditions overlay and does not alter historical ability.</div>${WP_weatherGeometryHTML(weatherContext)}</div>`:"";
+      const weatherBanner=weatherContext?`<div style="margin:12px 0 16px;border:1px solid #bae6fd;background:#f0f9ff;border-radius:16px;padding:12px 14px"><div style="font-size:9px;font-weight:950;letter-spacing:.1em;text-transform:uppercase;color:#0369a1">☁ WEATHER AT TEE TIME</div><div style="font-size:16px;font-weight:950;color:#0f172a;margin-top:3px">${WP_escape(WP_weatherLabel(WP_holeWeather(weatherContext,NaN)))}</div><div style="font-size:9px;color:#64748b;margin-top:3px">Historical ability remains the baseline, but today's forecast now adjusts each hole's scoring distribution and the optimiser is allowed to move gains/protect holes accordingly. Approximate hole times use 13 minutes per hole.</div>${WP_weatherGeometryHTML(weatherContext)}</div>`:"";
       return `<section class="WPplayer">${weatherBanner}<div class="WPplayerHead"><div><div class="WPeyebrow" style="color:#0b7a6e;opacity:1">PERSONALISED ROUTE</div><div class="WPname">${WP_escape(p?.name||'Player')}</div><div class="WPmeta">${l.temporaryHI
   ? (l.handicapMethod==='TEMP_FIXED'
       ? `Temporary fixed handicap ${Number.isFinite(l.hi)?l.hi.toFixed(1):'—'} · Playing Handicap ${l.ch}`
@@ -18061,7 +18255,47 @@ async function WP_geocodeCourse(name){
   }
   throw new Error("Course location not found automatically. If you have a KML, import and save it in Admin → Manage Courses; the weather engine will use that GPS geometry directly.");
 }
-async function WP_fetchCourseWeather({latitude,longitude,date,teeTime}){const p=new URLSearchParams({latitude:String(latitude),longitude:String(longitude),hourly:"temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m",wind_speed_unit:"mph",timezone:"auto",start_date:date,end_date:date});const r=await fetch(`https://api.open-meteo.com/v1/forecast?${p}`);if(!r.ok)throw new Error("Forecast unavailable for that date.");const j=await r.json(),h=j.hourly||{},ts=h.time||[];if(!ts.length)throw new Error("No hourly forecast returned.");const target=new Date(`${date}T${teeTime||"10:00"}:00`).getTime();let k=0,d=Infinity;ts.forEach((t,i)=>{const x=Math.abs(new Date(t).getTime()-target);if(x<d){d=x;k=i;}});const v=x=>Number((x||[])[k]);return{forecastTime:ts[k],tempC:v(h.temperature_2m),rainMm:v(h.precipitation),windMph:v(h.wind_speed_10m),windDirection:v(h.wind_direction_10m),gustMph:v(h.wind_gusts_10m),timezone:j.timezone};}
+async function WP_fetchCourseWeather({latitude,longitude,date,teeTime}){
+  const p=new URLSearchParams({
+    latitude:String(latitude),longitude:String(longitude),
+    hourly:"temperature_2m,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m",
+    wind_speed_unit:"mph",timezone:"auto",start_date:date,end_date:date
+  });
+  const r=await fetch(`https://api.open-meteo.com/v1/forecast?${p}`);
+  if(!r.ok)throw new Error("Forecast unavailable for that date.");
+  const j=await r.json(),h=j.hourly||{},ts=Array.isArray(h.time)?h.time:[];
+  if(!ts.length)throw new Error("No hourly forecast returned.");
+
+  const teeMs=new Date(`${date}T${teeTime||"10:00"}:00`).getTime();
+  let k=0,d=Infinity;
+  ts.forEach((t,i)=>{
+    const x=Math.abs(new Date(t).getTime()-teeMs);
+    if(x<d){d=x;k=i;}
+  });
+  const v=(arr,i=k)=>Number((Array.isArray(arr)?arr:[])[i]);
+
+  const hourlySeries=ts.map((time,i)=>({
+    time,
+    tempC:v(h.temperature_2m,i),
+    rainMm:v(h.precipitation,i),
+    windMph:v(h.wind_speed_10m,i),
+    windDirection:v(h.wind_direction_10m,i),
+    gustMph:v(h.wind_gusts_10m,i)
+  }));
+
+  return{
+    forecastTime:ts[k],
+    tempC:v(h.temperature_2m),
+    rainMm:v(h.precipitation),
+    windMph:v(h.wind_speed_10m),
+    windDirection:v(h.wind_direction_10m),
+    gustMph:v(h.wind_gusts_10m),
+    timezone:j.timezone,
+    date,
+    teeTime:teeTime||"10:00",
+    hourlySeries
+  };
+}
 function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, setView, runSeasonAnalysis, manualPlayers=[] }) {
   const historicCourses = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
   const [dbCourses,setDbCourses]=React.useState([]);
