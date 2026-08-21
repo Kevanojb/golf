@@ -13529,7 +13529,21 @@ const scorecardIntel = (() => {
     .PRseasonTopGrid>.PRchartBox:nth-child(3){display:block}
     .PRseasonTopGrid .PRchartSvg{max-height:210px}
     .PRconfidenceLegend{margin-top:7px;font-size:9px;line-height:1.4;color:#64748b}
-    @media print{.PRr{-webkit-print-color-adjust:exact;print-color-adjust:exact}.PRvisualHero,.PRpriorityBanner,.PRopportunity,.PRstory,.PRpatternCallout{box-shadow:none}}
+    @media print{
+      .PRr{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+      .PRvisualHero,.PRpriorityBanner,.PRopportunity,.PRstory,.PRpatternCallout{box-shadow:none}
+      .PRgamePlan{
+        break-before:page!important;
+        page-break-before:always!important;
+        break-inside:avoid!important;
+        page-break-inside:avoid!important;
+        overflow:visible!important;
+      }
+      .PRgamePlan .PRplanGrid,.PRgamePlan .PRplanCard{
+        break-inside:avoid!important;
+        page-break-inside:avoid!important;
+      }
+    }
     @media(max-width:700px){.WPgainGrid{grid-template-columns:1fr 1fr}.PRintelGrid,.PRscoreGrid,.PRvisualGrid,.PRactions,.PRtriples,.PRlatestGrid,.PRgeneralGrid,.PRquickGrid,.PRseasonTopGrid{grid-template-columns:1fr}.PRcostAudit{padding-left:0}.PRholeStrip{grid-template-columns:repeat(9,minmax(0,1fr))}.PRdnaGrid,.PRplanGrid{grid-template-columns:1fr}.PRfingerprint{grid-template-columns:repeat(9,minmax(0,1fr))}.PRcompareGrid{grid-template-columns:1fr}}
     /* PDF export: lock to a safe A4 desktop composition on every device. */
     .PRpdfExportRoot,.PRpdfExportRoot *{box-sizing:border-box}
@@ -13539,6 +13553,23 @@ const scorecardIntel = (() => {
     .PRpdfExportRoot .PRquickGrid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
     .PRpdfExportRoot .PRvisualGrid{grid-template-columns:minmax(0,1.02fr) minmax(0,.98fr)!important}
     .PRpdfExportRoot .PRstory{break-before:page!important;page-break-before:always!important;break-inside:avoid!important;page-break-inside:avoid!important}
+    /* Keep the complete Next Round Game Plan together.
+       It was previously starting in the final few mm of a page and being clipped. */
+    .PRpdfExportRoot .PRgamePlan{
+      break-before:page!important;
+      page-break-before:always!important;
+      break-inside:avoid!important;
+      page-break-inside:avoid!important;
+      overflow:visible!important;
+      max-height:none!important;
+    }
+    .PRpdfExportRoot .PRgamePlan .PRplanGrid,
+    .PRpdfExportRoot .PRgamePlan .PRplanCard{
+      break-inside:avoid!important;
+      page-break-inside:avoid!important;
+      overflow:visible!important;
+      max-height:none!important;
+    }
     .PRpdfExportRoot .PRactions{grid-template-columns:repeat(4,minmax(0,1fr))!important}
     .PRpdfExportRoot .PRtriples{grid-template-columns:repeat(3,minmax(0,1fr))!important}
     .PRpdfExportRoot .PRlatestGrid{grid-template-columns:1.3fr .7fr!important}
@@ -14505,7 +14536,7 @@ ${postRoundIntel.exactCategories?.courseDNA ? (() => {
       </div>
     </div>
 
-    <div class="PRgamePlan">
+    <div class="PRgamePlan PRnextRoundPlan">
       <div class="PRvizTitle">Next Round Game Plan</div>
       <div class="PRvizSub">Three things to remember on the first tee — no technical swing diagnosis required.</div>
       <div class="PRplanGrid">
