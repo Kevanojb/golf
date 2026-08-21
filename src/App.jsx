@@ -3523,9 +3523,9 @@ function Home({
                 <div className="hm-mode-copy">
                   <div className="hm-mode-kicker">ON-COURSE MODE</div>
                   <div className="hm-mode-name">Start / Resume Live Caddie</div>
-                  <div className="hm-mode-desc">Big-button scoring for the course. Enter each gross score, replan instantly and see whether to push, protect or wait.</div>
+                  <div className="hm-mode-desc">Quick iPhone setup, then big-button scoring. Reuse today's plan or choose only player, course, tee and target.</div>
                   <div className="hm-mode-tags">
-                    <span>Large controls</span><span>Autosave</span><span>Live caddie</span>
+                    <span>Quick setup</span><span>Large controls</span><span>Autosave</span>
                   </div>
                 </div>
                 <div className="hm-mode-arrow">→</div>
@@ -17477,6 +17477,65 @@ function WP_applyLiveHoleStrategy(h){
 
 
 
+
+function WP_preRoundSnapshotKey(){ return "den-pre-round-plan:v1:latest"; }
+function WP_savePreRoundPlanSnapshot(payload){
+  try{
+    if(typeof window==='undefined'||!window.localStorage)return false;
+    const rec={
+      version:1,
+      savedAt:new Date().toISOString(),
+      date:new Date().toISOString().slice(0,10),
+      playerName:String(payload?.playerName||''),
+      courseKey:String(payload?.courseKey||''),
+      courseName:String(payload?.courseName||''),
+      teeId:payload?.teeId==null?'':String(payload.teeId),
+      teeName:String(payload?.teeName||''),
+      liveMode:String(payload?.liveMode||'stableford')==='gross'?'gross':'stableford',
+      planMode:String(payload?.planMode||''),
+      target:Number(payload?.target),
+      tempHI:payload?.tempHI===''||payload?.tempHI==null?null:Number(payload.tempHI),
+      tempMode:String(payload?.tempMode||'den'),
+      weatherEnabled:!!payload?.weatherEnabled,
+      weatherDate:String(payload?.weatherDate||''),
+      weatherTeeTime:String(payload?.weatherTeeTime||'')
+    };
+    window.localStorage.setItem(WP_preRoundSnapshotKey(),JSON.stringify(rec));
+    return true;
+  }catch(e){
+    console.warn("Pre-round plan snapshot save failed",e);
+    return false;
+  }
+}
+function WP_loadLatestPreRoundPlanSnapshot(){
+  try{
+    if(typeof window==='undefined'||!window.localStorage)return null;
+    const raw=window.localStorage.getItem(WP_preRoundSnapshotKey());
+    if(!raw)return null;
+    const r=JSON.parse(raw);
+    return r&&r.version===1?r:null;
+  }catch(e){ return null; }
+}
+function WP_findLatestLiveRound(){
+  try{
+    if(typeof window==='undefined'||!window.localStorage)return null;
+    let best=null,bestMs=-1;
+    for(let i=0;i<window.localStorage.length;i++){
+      const key=window.localStorage.key(i);
+      if(!String(key||'').startsWith("den-live-round:v1:"))continue;
+      try{
+        const r=JSON.parse(window.localStorage.getItem(key));
+        const ms=new Date(r?.savedAt||0).getTime();
+        const completed=(r?.scores||[]).filter(v=>Number(v)>0).length;
+        if(r?.version===1&&completed>0&&completed<18&&Number.isFinite(ms)&&ms>bestMs){
+          best={...r,__completed:completed,__storageKey:key};bestMs=ms;
+        }
+      }catch{}
+    }
+    return best;
+  }catch(e){ return null; }
+}
+
 function WP_liveStorageKey({playerName,courseKey,startHole=1,liveMode='stableford'}){
   const p=String(playerName||'player').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-');
   const c=String(courseKey||'course').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-');
@@ -17499,6 +17558,8 @@ function WP_saveLiveRound(payload){
       target:Number(payload?.target),
       tempHI:payload?.tempHI===''||payload?.tempHI==null?null:Number(payload?.tempHI),
       tempMode:String(payload?.tempMode||'whs'),
+      teeId:payload?.teeId==null?'':String(payload.teeId),
+      teeName:String(payload?.teeName||''),
       scores:Array.from({length:18},(_,i)=>{
         const n=Number(payload?.scores?.[i]);
         return Number.isFinite(n)&&n>0?Math.round(n):null;
@@ -18656,6 +18717,157 @@ async function WP_fetchCourseWeather({latitude,longitude,date,teeTime}){
     hourlySeries
   };
 }
+
+function WP_MobileOnCourseSetup({
+  players,courses,dbTees,selectedPlayers,setSelectedPlayers,
+  courseKey,setCourseKey,selectedTeeId,setSelectedTeeId,
+  liveScoringMode,setLiveScoringMode,customGross,setCustomGross,customPoints,setCustomPoints,
+  liveStartHole,setLiveStartHole,tempHandicaps,setTempHandicaps,tempHandicapModes,setTempHandicapModes,
+  liveScores,setLiveScores,planningEvent,selectedDbTee,onStart,onAdvanced,onHome,onPendingTee
+}){
+  const [step,setStep]=React.useState(0);
+  const [latestPlan,setLatestPlan]=React.useState(()=>WP_loadLatestPreRoundPlanSnapshot());
+  const [latestLive,setLatestLive]=React.useState(()=>WP_findLatestLiveRound());
+
+  const playerName=selectedPlayers.length===1?String(selectedPlayers[0]||""):"";
+  const course=courses.find(c=>String(c.key)===String(courseKey))||null;
+  const target=liveScoringMode==='gross'?Number(customGross):Number(customPoints);
+  const canStart=!!playerName&&!!courseKey&&!!selectedDbTee&&!!planningEvent&&Number.isFinite(target);
+
+  const applyPlan=(r)=>{
+    if(!r)return;
+    if(r.playerName)setSelectedPlayers([String(r.playerName)]);
+    if(r.courseKey)setCourseKey(String(r.courseKey));
+    if(r.teeId)onPendingTee?.(String(r.teeId));
+    const lm=String(r.liveMode||'stableford')==='gross'?'gross':'stableford';
+    setLiveScoringMode(lm);
+    if(Number.isFinite(Number(r.target))){
+      if(lm==='gross')setCustomGross(Number(r.target)); else setCustomPoints(Number(r.target));
+    }
+    if(r.tempHI!=null&&r.playerName){
+      setTempHandicaps(prev=>({...prev,[String(r.playerName)]:String(r.tempHI)}));
+      setTempHandicapModes(prev=>({...prev,[String(r.playerName)]:String(r.tempMode||'den')}));
+    }
+    setLiveStartHole(Number(r.startHole)||1);
+    if(Array.isArray(r.scores))setLiveScores(Array.from({length:18},(_,i)=>{
+      const n=Number(r.scores?.[i]); return Number.isFinite(n)&&n>0?String(Math.round(n)):"";
+    }));
+    else setLiveScores(Array(18).fill(""));
+    setStep(3);
+  };
+
+  const newRound=()=>{
+    setLiveScores(Array(18).fill(""));
+    setStep(1);
+  };
+
+  const recentPlanToday=latestPlan&&latestPlan.date===new Date().toISOString().slice(0,10);
+  const stepTitle=step===0?"Ready to play?"
+    :step===1?"Who is playing?"
+    :step===2?"Where are you playing?"
+    :"Check and start";
+
+  return <div className="mq-shell">
+    <style>{`
+      .mq-shell{position:fixed;inset:0;z-index:9999;background:#f8fafc;color:#0f172a;overflow:auto;-webkit-overflow-scrolling:touch}
+      .mq-wrap{max-width:560px;margin:0 auto;min-height:100%;padding:calc(14px + env(safe-area-inset-top)) 12px calc(22px + env(safe-area-inset-bottom))}
+      .mq-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}
+      .mq-back,.mq-adv{min-height:44px;border-radius:999px;padding:0 13px;font-size:10px;font-weight:950;border:1px solid #cbd5e1;background:#fff;color:#334155}
+      .mq-brand{text-align:center}.mq-brand-k{font-size:8px;font-weight:950;letter-spacing:.16em;text-transform:uppercase;color:#047857}.mq-brand-v{font-size:16px;font-weight:950;margin-top:2px}
+      .mq-card{border:1px solid #dbe5ee;background:#fff;border-radius:25px;padding:16px;box-shadow:0 14px 34px rgba(15,23,42,.08)}
+      .mq-progress{display:flex;gap:5px;margin-bottom:14px}.mq-dot{height:5px;flex:1;border-radius:999px;background:#e2e8f0}.mq-dot.on{background:#10b981}
+      .mq-k{font-size:9px;font-weight:950;letter-spacing:.13em;text-transform:uppercase;color:#64748b}.mq-title{font-size:29px;font-weight:950;line-height:1.02;letter-spacing:-.035em;margin-top:4px}.mq-sub{font-size:12px;color:#64748b;line-height:1.4;margin-top:6px}
+      .mq-stack{display:flex;flex-direction:column;gap:10px;margin-top:15px}.mq-big{width:100%;min-height:68px;border-radius:19px;border:1px solid #cbd5e1;background:#fff;padding:13px 14px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:950;touch-action:manipulation}.mq-big.primary{border:2px solid #6ee7b7;background:linear-gradient(145deg,#ecfdf5,#fff)}.mq-big.resume{border:2px solid #c4b5fd;background:linear-gradient(145deg,#f5f3ff,#fff)}.mq-big-title{font-size:17px;font-weight:950}.mq-big-sub{font-size:10px;font-weight:700;color:#64748b;margin-top:3px;line-height:1.3}.mq-arrow{font-size:25px;color:#64748b}
+      .mq-label{font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.1em;color:#64748b;margin:14px 0 5px}.mq-select,.mq-number{width:100%;min-height:56px;border:2px solid #cbd5e1;border-radius:16px;background:#fff;padding:0 14px;font-size:17px;font-weight:950;color:#0f172a}.mq-two{display:grid;grid-template-columns:1fr 1fr;gap:9px}.mq-choice{min-height:58px;border-radius:16px;border:2px solid #dbe5ee;background:#fff;font-size:13px;font-weight:950}.mq-choice.on{border-color:#6ee7b7;background:#ecfdf5;color:#065f46}
+      .mq-summary{display:flex;flex-direction:column;gap:8px;margin-top:14px}.mq-row{display:flex;align-items:center;justify-content:space-between;gap:10px;border:1px solid #e2e8f0;background:#f8fafc;border-radius:14px;padding:10px 12px}.mq-row-k{font-size:9px;font-weight:900;color:#64748b;text-transform:uppercase}.mq-row-v{font-size:14px;font-weight:950;text-align:right}
+      .mq-start{width:100%;min-height:64px;border:0;border-radius:20px;margin-top:14px;background:linear-gradient(90deg,#047857,#059669);color:#fff;font-size:18px;font-weight:950;box-shadow:0 12px 28px rgba(5,150,105,.24)}.mq-start:disabled{opacity:.35;box-shadow:none}.mq-next{width:100%;min-height:58px;border:0;border-radius:18px;margin-top:14px;background:#0f172a;color:#fff;font-size:16px;font-weight:950}.mq-note{text-align:center;font-size:9px;color:#64748b;margin-top:8px}
+      .mq-edit{border:0;background:transparent;color:#047857;font-size:10px;font-weight:950;text-decoration:underline}
+      @media(max-width:390px){.mq-title{font-size:26px}.mq-card{padding:14px}.mq-big{min-height:65px}.mq-big-title{font-size:16px}}
+    `}</style>
+    <div className="mq-wrap">
+      <div className="mq-top">
+        <button className="mq-back" onClick={step>0?()=>setStep(step-1):onHome}>{step>0?"← BACK":"← HOME"}</button>
+        <div className="mq-brand"><div className="mq-brand-k">DEN GOLF</div><div className="mq-brand-v">On-Course Mode</div></div>
+        <button className="mq-adv" onClick={onAdvanced}>ADVANCED</button>
+      </div>
+
+      <div className="mq-card">
+        <div className="mq-progress">{[0,1,2,3].map(n=><div key={n} className={`mq-dot ${n<=step?'on':''}`}/>)}</div>
+        <div className="mq-k">QUICK SETUP · {step+1} OF 4</div>
+        <div className="mq-title">{stepTitle}</div>
+
+        {step===0?<>
+          <div className="mq-sub">Use information the app already knows. You should only need a few taps before scoring.</div>
+          <div className="mq-stack">
+            {latestLive?<button className="mq-big resume" onClick={()=>applyPlan(latestLive)}>
+              <div><div className="mq-big-title">▶ Resume saved round</div><div className="mq-big-sub">{latestLive.playerName} · {latestLive.courseName||latestLive.courseKey} · {latestLive.__completed}/18 holes completed</div></div><div className="mq-arrow">→</div>
+            </button>:null}
+            {latestPlan?<button className="mq-big primary" onClick={()=>applyPlan(latestPlan)}>
+              <div><div className="mq-big-title">{recentPlanToday?"✓ Use today's pre-round plan":"Use latest pre-round plan"}</div><div className="mq-big-sub">{latestPlan.playerName} · {latestPlan.courseName||latestPlan.courseKey} · {latestPlan.target} {latestPlan.liveMode==='gross'?'gross':'pts'}{latestPlan.teeName?` · ${latestPlan.teeName}`:''}</div></div><div className="mq-arrow">→</div>
+            </button>:null}
+            <button className="mq-big" onClick={newRound}>
+              <div><div className="mq-big-title">＋ Start a different round</div><div className="mq-big-sub">Quickly choose player, course, tee and target.</div></div><div className="mq-arrow">→</div>
+            </button>
+          </div>
+        </>:null}
+
+        {step===1?<>
+          <div className="mq-sub">Choose one golfer. Handicap details stay automatic unless you change them in Advanced.</div>
+          <div className="mq-label">Golfer</div>
+          <select className="mq-select" value={playerName} onChange={e=>setSelectedPlayers(e.target.value?[e.target.value]:[])}>
+            <option value="">Choose golfer…</option>
+            {players.map(p=><option key={p.name} value={p.name}>{p.name}</option>)}
+          </select>
+          <button className="mq-next" disabled={!playerName} onClick={()=>setStep(2)}>NEXT · COURSE & TEE →</button>
+        </>:null}
+
+        {step===2?<>
+          <div className="mq-sub">The app supplies Par, SI and yardages from the tee. Native iPhone pickers keep this quick.</div>
+          <div className="mq-label">Course</div>
+          <select className="mq-select" value={courseKey} onChange={e=>setCourseKey(e.target.value)}>
+            <option value="">Choose course…</option>
+            {courses.map(c=><option key={c.key} value={c.key}>{c.label}</option>)}
+          </select>
+          <div className="mq-label">Tee</div>
+          <select className="mq-select" value={selectedTeeId} onChange={e=>setSelectedTeeId(e.target.value)} disabled={!dbTees.length}>
+            {!dbTees.length?<option value="">Loading tees…</option>:null}
+            {dbTees.map(t=><option key={t.id} value={String(t.id)}>{t.teeName}{Number.isFinite(t.rating)?` · CR ${t.rating.toFixed(1)}`:''}{Number.isFinite(t.slope)?` · Slope ${Math.round(t.slope)}`:''}</option>)}
+          </select>
+
+          <div className="mq-label">Scoring target</div>
+          <div className="mq-two">
+            <button className={`mq-choice ${liveScoringMode==='gross'?'on':''}`} onClick={()=>setLiveScoringMode('gross')}>GROSS</button>
+            <button className={`mq-choice ${liveScoringMode==='stableford'?'on':''}`} onClick={()=>setLiveScoringMode('stableford')}>STABLEFORD</button>
+          </div>
+          <div className="mq-label">{liveScoringMode==='gross'?'Gross target':'Stableford target'}</div>
+          <input className="mq-number" inputMode="numeric" type="number"
+            value={liveScoringMode==='gross'?customGross:customPoints}
+            onChange={e=>liveScoringMode==='gross'?setCustomGross(e.target.value):setCustomPoints(e.target.value)}
+          />
+          <div className="mq-label">Starting hole</div>
+          <select className="mq-select" value={liveStartHole} onChange={e=>setLiveStartHole(Number(e.target.value)||1)}>
+            {Array.from({length:18},(_,i)=><option key={i+1} value={i+1}>Hole {i+1}{i===0?' · normal start':''}</option>)}
+          </select>
+          <button className="mq-next" disabled={!courseKey||!selectedTeeId||!Number.isFinite(target)} onClick={()=>setStep(3)}>REVIEW & START →</button>
+        </>:null}
+
+        {step===3?<>
+          <div className="mq-sub">No duplicate setup. These are the only details the live caddie needs.</div>
+          <div className="mq-summary">
+            <div className="mq-row"><div><div className="mq-row-k">Golfer</div><div className="mq-row-v">{playerName||'—'}</div></div><button className="mq-edit" onClick={()=>setStep(1)}>CHANGE</button></div>
+            <div className="mq-row"><div><div className="mq-row-k">Course</div><div className="mq-row-v">{course?.label||'—'}</div></div><button className="mq-edit" onClick={()=>setStep(2)}>CHANGE</button></div>
+            <div className="mq-row"><div><div className="mq-row-k">Tee</div><div className="mq-row-v">{selectedDbTee?.teeName||'Loading…'}</div></div></div>
+            <div className="mq-row"><div><div className="mq-row-k">Target</div><div className="mq-row-v">{Number.isFinite(target)?Math.round(target):'—'} {liveScoringMode==='gross'?'gross':'pts'}</div></div></div>
+            <div className="mq-row"><div><div className="mq-row-k">Start</div><div className="mq-row-v">Hole {liveStartHole}</div></div></div>
+          </div>
+          <button className="mq-start" disabled={!canStart} onClick={onStart}>⛳ START LIVE CADDIE</button>
+          <div className="mq-note">{canStart?"Scores autosave after every hole.":"Waiting for course/tee data to finish loading…"}</div>
+        </>:null}
+      </div>
+    </div>
+  </div>;
+}
+
 function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, setView, runSeasonAnalysis, manualPlayers=[] }) {
   const historicCourses = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
   const [dbCourses,setDbCourses]=React.useState([]);
@@ -18753,10 +18965,14 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   const [planMode, setPlanMode] = React.useState(() => {
     try {
       const requested=String(window.__WP_START_MODE||"").trim();
-      if(requested==="live"){ window.__WP_START_MODE=""; return "live"; }
+      if(requested==="live"){ window.__WP_MOBILE_SETUP=true; window.__WP_START_MODE=""; return "live"; }
     } catch {}
     return "winning";
   }); // winning | stableford | gross | live
+  const [mobileQuickSetup,setMobileQuickSetup]=React.useState(()=>{
+    try{const v=!!window.__WP_MOBILE_SETUP;window.__WP_MOBILE_SETUP=false;return v;}catch{return false;}
+  });
+  const [mobilePendingTeeId,setMobilePendingTeeId]=React.useState("");
   const [customPoints, setCustomPoints] = React.useState(40);
   const [customGross, setCustomGross] = React.useState(85);
   const [weatherEnabled,setWeatherEnabled]=React.useState(false);
@@ -18872,6 +19088,14 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     ()=>dbTees.find(t=>String(t.id)===String(selectedTeeId))||null,
     [dbTees,selectedTeeId]
   );
+  React.useEffect(()=>{
+    if(!mobilePendingTeeId||!dbTees.length)return;
+    if(dbTees.some(t=>String(t.id)===String(mobilePendingTeeId))){
+      setSelectedTeeId(String(mobilePendingTeeId));
+      setMobilePendingTeeId("");
+    }
+  },[dbTees,mobilePendingTeeId]);
+
   const loadWeatherForPlan=React.useCallback(async()=>{
     if(!selectedCourse)return;
     setWeatherBusy(true);setWeatherError("");
@@ -19006,12 +19230,14 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       target:activeLiveTarget,
       tempHI:tempHandicaps?.[activeLivePlayerName],
       tempMode:tempHandicapModes?.[activeLivePlayerName]||"den",
+      teeId:selectedTeeId,
+      teeName:selectedDbTee?.teeName||"",
       scores:liveScores
     });
     setLiveSaveStatus(ok?"saved":"error");
   },[
     planMode,activeLivePlayerName,courseKey,planningEvent?.courseName,liveStartHole,liveScoringMode,
-    activeLiveTarget,tempHandicaps,tempHandicapModes,liveScores
+    activeLiveTarget,tempHandicaps,tempHandicapModes,selectedTeeId,selectedDbTee?.teeName,liveScores
   ]);
 
   const livePreview = React.useMemo(()=>{
@@ -19064,7 +19290,41 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   },[courseKey]);
 
 
-  // IMPORTANT: keep this conditional render AFTER all hooks above.
+  // IMPORTANT: keep conditional renders AFTER all hooks above.
+  if(mobileQuickSetup && planMode==="live"){
+    return <WP_MobileOnCourseSetup
+      players={players}
+      courses={courses}
+      dbTees={dbTees}
+      selectedPlayers={selectedPlayers}
+      setSelectedPlayers={setSelectedPlayers}
+      courseKey={courseKey}
+      setCourseKey={setCourseKey}
+      selectedTeeId={selectedTeeId}
+      setSelectedTeeId={setSelectedTeeId}
+      liveScoringMode={liveScoringMode}
+      setLiveScoringMode={setLiveScoringMode}
+      customGross={customGross}
+      setCustomGross={setCustomGross}
+      customPoints={customPoints}
+      setCustomPoints={setCustomPoints}
+      liveStartHole={liveStartHole}
+      setLiveStartHole={setLiveStartHole}
+      tempHandicaps={tempHandicaps}
+      setTempHandicaps={setTempHandicaps}
+      tempHandicapModes={tempHandicapModes}
+      setTempHandicapModes={setTempHandicapModes}
+      liveScores={liveScores}
+      setLiveScores={setLiveScores}
+      planningEvent={planningEvent}
+      selectedDbTee={selectedDbTee}
+      onPendingTee={setMobilePendingTeeId}
+      onStart={()=>{setMobileQuickSetup(false);setOnCourseMode(true);}}
+      onAdvanced={()=>setMobileQuickSetup(false)}
+      onHome={()=>setView("home")}
+    />;
+  }
+
   // Returning before the courseKey useEffect changes the hook count when
   // entering On-Course Mode and causes React to blank the page.
   if(onCourseMode && planMode==="live" && selectedPlayers.length===1 && livePlayer && planningEvent){
@@ -19160,6 +19420,22 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null
       });
       if (!r?.ok) { alert(r?.error || "Could not build winning plan."); return; }
+      if(selectedPlayers.length===1){
+        const nm=String(selectedPlayers[0]||"");
+        WP_savePreRoundPlanSnapshot({
+          playerName:nm,
+          courseKey,
+          courseName:planningEvent?.courseName||selectedCourse?.label||courseKey,
+          teeId:selectedTeeId,
+          teeName:selectedDbTee?.teeName||"",
+          liveMode:planMode==="gross"?"gross":"stableford",
+          planMode,
+          target,
+          tempHI:tempHandicaps?.[nm],
+          tempMode:tempHandicapModes?.[nm]||"den",
+          weatherEnabled,weatherDate,weatherTeeTime
+        });
+      }
       window.__dslSeasonReportParams = {
         model: seasonModel,
         playerName: `Winning-Plan-${r.event.courseName || "course"}`,
