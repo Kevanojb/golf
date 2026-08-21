@@ -3303,7 +3303,7 @@ function Home({
               </div>
 
               <div className="hm-card-action">
-                <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("player_progress"); }}>
+                <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("player_progress"); }} style={{background:"linear-gradient(180deg,#f6d46b,#e8b83e)",color:"#0f172a",border:"1px solid rgba(146,100,12,.18)"}}>
                   <span>→ Review Performance</span>
                 </button>
                 <div className="hm-pill">⋯</div>
@@ -3318,7 +3318,7 @@ function Home({
             }
           `}</style>
 
-          {/* PRE-ROUND INTELLIGENCE */}
+          {/* PLAN YOUR ROUND & PLAY LIVE — SINGLE ENTRY */}
           <button
             className="hm-card heroish"
             onClick={() => setView("pre_round")}
@@ -3326,100 +3326,91 @@ function Home({
               textAlign:"left",
               cursor:"pointer",
               color:"#0f172a",
-              border:"1px solid rgba(5,150,105,.35)",
-              background:"linear-gradient(135deg,#ecfdf5 0%,#ffffff 48%,#eff6ff 100%)",
-              boxShadow:"0 16px 38px rgba(15,23,42,.10)"
+              border:"1px solid rgba(16,185,129,.28)",
+              background:"linear-gradient(135deg,#f0fdf4 0%,#ffffff 58%,#f8fafc 100%)",
+              boxShadow:"0 14px 34px rgba(15,23,42,.08)"
             }}
           >
             <div className="hm-card-inner" style={{alignItems:"stretch"}}>
-              <div style={{ minWidth:0, flex:1 }}>
-                <div style={{display:"inline-flex",alignItems:"center",gap:7,padding:"5px 9px",borderRadius:999,background:"rgba(5,150,105,.10)",color:"#047857",fontSize:10,fontWeight:900,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8}}>⛳ Pre-Round Intelligence</div>
-                <h3 style={{color:"#0f172a",marginBottom:4}}>Winning Game Plan</h3>
-                <div className="hm-desc" style={{color:"#475569",maxWidth:760}}>
-                  Build the smartest 18-hole route for the score you actually want to achieve — using your handicap, the course and your own playing history.
+              <div style={{minWidth:0,flex:1}}>
+                <div
+                  style={{
+                    display:"inline-flex",alignItems:"center",gap:7,
+                    padding:"5px 9px",borderRadius:999,
+                    background:"rgba(16,185,129,.10)",color:"#047857",
+                    fontSize:10,fontWeight:900,letterSpacing:".08em",
+                    textTransform:"uppercase",marginBottom:8
+                  }}
+                >
+                  ⛳ Round Intelligence
                 </div>
 
-                <div style={{display:"grid",gridTemplateColumns:"repeat(4,minmax(0,1fr))",gap:8,marginTop:14}} className="wp-home-mode-grid">
-                  <div style={{border:"1px solid #bbf7d0",background:"#f0fdf4",borderRadius:14,padding:"10px 11px"}}>
-                    <div style={{fontSize:18,lineHeight:1}}>🏆</div>
-                    <div style={{fontSize:12,fontWeight:900,color:"#14532d",marginTop:5}}>WIN THE COMPETITION</div>
-                    <div style={{fontSize:10,color:"#475569",marginTop:3,lineHeight:1.35}}>Estimate the score likely to win, then build your safest route to beat it.</div>
+                <h3 style={{color:"#0f172a",marginBottom:4}}>Plan Your Round &amp; Play Live</h3>
+                <div className="hm-desc" style={{color:"#475569",maxWidth:820}}>
+                  One place for everything before and during your round.
+                </div>
+
+                <div className="wp-home-plan-live-grid" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginTop:13}}>
+                  <div style={{border:"1px solid #bbf7d0",background:"#f7fef9",borderRadius:15,padding:"12px 13px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontSize:20}}>🏆</span>
+                      <div style={{fontSize:12,fontWeight:950,color:"#14532d"}}>BEFORE YOU PLAY</div>
+                    </div>
+                    <div style={{fontSize:10,color:"#475569",marginTop:6,lineHeight:1.45}}>
+                      Build your personalised 18-hole game plan using your target, handicap, course and previous performance.
+                    </div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:9}}>
+                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>WIN THE COMPETITION</span>
+                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>TARGET STABLEFORD</span>
+                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>TARGET GROSS</span>
+                    </div>
                   </div>
-                  <div style={{border:"1px solid #bfdbfe",background:"#eff6ff",borderRadius:14,padding:"10px 11px"}}>
-                    <div style={{fontSize:18,lineHeight:1}}>🎯</div>
-                    <div style={{fontSize:12,fontWeight:900,color:"#1e3a8a",marginTop:5}}>TARGET STABLEFORD POINTS</div>
-                    <div style={{fontSize:10,color:"#475569",marginTop:3,lineHeight:1.35}}>Choose the points you want and get the most realistic hole-by-hole route to that total.</div>
-                  </div>
-                  <div style={{border:"1px solid #fde68a",background:"#fffbeb",borderRadius:14,padding:"10px 11px"}}>
-                    <div style={{fontSize:18,lineHeight:1}}>⛳</div>
-                    <div style={{fontSize:12,fontWeight:900,color:"#78350f",marginTop:5}}>TARGET A GROSS SCORE</div>
-                    <div style={{fontSize:10,color:"#475569",marginTop:3,lineHeight:1.35}}>Choose the gross score you want to shoot and let the system map out the most likely way to get there.</div>
-                  </div>
-                  <div style={{border:"1px solid #ddd6fe",background:"#f5f3ff",borderRadius:14,padding:"10px 11px"}}>
-                    <div style={{fontSize:18,lineHeight:1}}>🔄</div>
-                    <div style={{fontSize:12,fontWeight:900,color:"#5b21b6",marginTop:5}}>LIVE REPLAN</div>
-                    <div style={{fontSize:10,color:"#475569",marginTop:3,lineHeight:1.35}}>Enter scores during the round and automatically rebuild the safest remaining route.</div>
+
+                  <div style={{border:"1px solid #d1fae5",background:"#fbfffd",borderRadius:15,padding:"12px 13px"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontSize:20}}>🔄</span>
+                      <div style={{fontSize:12,fontWeight:950,color:"#14532d"}}>ON THE COURSE</div>
+                    </div>
+                    <div style={{fontSize:10,color:"#475569",marginTop:6,lineHeight:1.45}}>
+                      Enter scores as you play. See the next three holes, track your target and automatically replan after every hole.
+                    </div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:9}}>
+                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>LIVE REPLAN</span>
+                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>NEXT 3 HOLES</span>
+                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>SHOTGUN STARTS</span>
+                      <span style={{fontSize:9,fontWeight:900,color:"#14532d",background:"#ecfdf5",border:"1px solid #bbf7d0",borderRadius:999,padding:"4px 7px"}}>AUTOSAVE</span>
+                    </div>
                   </div>
                 </div>
 
-                <div style={{marginTop:10,fontSize:10,color:"#64748b",fontWeight:700}}>
-                  Uses all-years course history, your latest handicap or a temporary handicap, plus exact-hole, SI, Par and yardage performance.
+                <div style={{marginTop:9,fontSize:9,color:"#64748b",fontWeight:700}}>
+                  Build the plan first, or go straight into Live Replan from the same menu.
                 </div>
               </div>
+
               <div className="hm-card-action" style={{alignSelf:"center"}}>
-                <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("pre_round"); }} style={{background:"linear-gradient(180deg,#10b981,#047857)",color:"white",minWidth:170}}>
-                  <span>→ Build My Game Plan</span>
-                </button>
-                <div className="hm-pill">4 MODES</div>
-              </div>
-            </div>
-          </button>
-
-          {/* LIVE REPLAN — MAIN MENU ENTRY */}
-          <button
-            className="hm-card heroish"
-            onClick={() => {
-              try { window.__WP_START_MODE = "live"; } catch {}
-              setView("pre_round");
-            }}
-            style={{
-              textAlign:"left",
-              cursor:"pointer",
-              color:"#0f172a",
-              border:"1px solid rgba(109,40,217,.30)",
-              background:"linear-gradient(135deg,#f5f3ff 0%,#ffffff 46%,#ecfdf5 100%)",
-              boxShadow:"0 14px 34px rgba(76,29,149,.10)"
-            }}
-          >
-            <div className="hm-card-inner">
-              <div style={{ minWidth:0, flex:1 }}>
-                <div style={{display:"inline-flex",alignItems:"center",gap:7,padding:"5px 9px",borderRadius:999,background:"rgba(109,40,217,.10)",color:"#6d28d9",fontSize:10,fontWeight:900,letterSpacing:".08em",textTransform:"uppercase",marginBottom:8}}>🔄 On-Course Intelligence</div>
-                <h3 style={{color:"#0f172a",marginBottom:4}}>Live Replan</h3>
-                <div className="hm-desc" style={{color:"#475569",maxWidth:760}}>
-                  Enter your gross score as you play. The system locks in completed holes and instantly rebuilds the safest route to your target.
-                </div>
-                <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:12}}>
-                  <span style={{fontSize:10,fontWeight:900,color:"#5b21b6",background:"#ede9fe",border:"1px solid #ddd6fe",borderRadius:999,padding:"5px 8px"}}>POINTS BANKED</span>
-                  <span style={{fontSize:10,fontWeight:900,color:"#047857",background:"#ecfdf5",border:"1px solid #a7f3d0",borderRadius:999,padding:"5px 8px"}}>NEW ATTACK HOLES</span>
-                  <span style={{fontSize:10,fontWeight:900,color:"#0f172a",background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:999,padding:"5px 8px"}}>AHEAD / BEHIND PLAN</span><span style={{fontSize:10,fontWeight:900,color:"#5b21b6",background:"#f5f3ff",border:"1px solid #ddd6fe",borderRadius:999,padding:"5px 8px"}}>FULL-SCREEN ON-COURSE</span>
-                </div>
-              </div>
-              <div className="hm-card-action">
                 <button
                   className="hm-linkbtn"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    try { window.__WP_START_MODE = "live"; } catch {}
-                    setView("pre_round");
+                  onClick={(e)=>{e.stopPropagation();setView("pre_round");}}
+                  style={{
+                    background:"linear-gradient(180deg,#f6d46b,#e8b83e)",
+                    color:"#0f172a",
+                    minWidth:185,
+                    border:"1px solid rgba(146,100,12,.18)"
                   }}
-                  style={{background:"linear-gradient(180deg,#7c3aed,#5b21b6)",color:"white",minWidth:170}}
                 >
-                  <span>→ Start Live Replan</span>
+                  <span>→ Game Plan &amp; Live Mode</span>
                 </button>
-                <div className="hm-pill">LIVE</div>
+                <div className="hm-pill">ONE MENU</div>
               </div>
             </div>
           </button>
+
+          <style>{`
+            @media (max-width:760px){
+              .wp-home-plan-live-grid{grid-template-columns:1fr !important;}
+            }
+          `}</style>
 
           {/* TWO-UP ROW */}
           <div className="hm-row2">
@@ -3435,7 +3426,7 @@ function Home({
                   </ul>
                 </div>
                 <div className="hm-card-action">
-                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("standings"); }}>
+                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("standings"); }} style={{background:"linear-gradient(180deg,#f6d46b,#e8b83e)",color:"#0f172a",border:"1px solid rgba(146,100,12,.18)"}}>
                     <span>→ View League</span>
                   </button>
                   <div className="hm-pill">⋯</div>
@@ -3455,7 +3446,7 @@ function Home({
                   </ul>
                 </div>
                 <div className="hm-card-action">
-                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("eclectic"); }}>
+                  <button className="hm-linkbtn" onClick={(e) => { e.stopPropagation(); setView("eclectic"); }} style={{background:"linear-gradient(180deg,#f6d46b,#e8b83e)",color:"#0f172a",border:"1px solid rgba(146,100,12,.18)"}}>
                     <span>→ View Eclectic</span>
                   </button>
                   <div className="hm-pill">⋯</div>
