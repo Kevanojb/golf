@@ -15492,6 +15492,22 @@ function WP_num(){
   return NaN;
 }
 function WP_norm(v){ return String(v||"").trim().toLowerCase().replace(/\s+/g," "); }
+function WP_courseMatchKey(v){
+  // Used only for matching the SAME course across Supabase and imported history.
+  // Keep meaningful qualifiers such as "(Championship)", "(East)", "(Main)" etc,
+  // but ignore harmless naming differences such as "Golf Club" or "GC".
+  return WP_norm(v)
+    .replace(/&/g," and ")
+    .replace(/\bgolf\s*&\s*country\s*club\b/g," ")
+    .replace(/\bgolf\s+and\s+country\s+club\b/g," ")
+    .replace(/\bgolf\s+country\s+club\b/g," ")
+    .replace(/\bgolf\s+club\b/g," ")
+    .replace(/\bgolf\s+course\b/g," ")
+    .replace(/\bgc\b/g," ")
+    .replace(/[.,']/g," ")
+    .replace(/\s+/g," ")
+    .trim();
+}
 function WP_series(p){
   const a=Array.isArray(p?.roundSeries)&&p.roundSeries.length?p.roundSeries:(Array.isArray(p?.series)?p.series:[]);
   return a.filter(Boolean).slice().sort((x,y)=>(WP_num(x?.dateMs,x?.idx,0)||0)-(WP_num(y?.dateMs,y?.idx,0)||0));
@@ -15547,9 +15563,9 @@ function WP_courseOptionsFromModel(model){
   const map=new Map();
   for(const p of (Array.isArray(model?.players)?model.players:[])){
     for(const r of WP_series(p)){
-      const label=WP_course(r); const key=WP_norm(label);
+      const label=WP_course(r); const key=WP_courseMatchKey(label);
       if(!key) continue;
-      const cur=map.get(key)||{key,label,rounds:0,lastMs:0};
+      const cur=map.get(key)||{key,label,rounds:0,lastMs:0,historyCourseName:label};
       cur.rounds++; cur.lastMs=Math.max(cur.lastMs,WP_dateMs(r)||0); if(label.length>cur.label.length)cur.label=label;
       map.set(key,cur);
     }
@@ -15563,11 +15579,11 @@ function WP_median(values){
   return a.length%2?a[m]:(a[m-1]+a[m])/2;
 }
 function WP_findLatestEventAtCourse(model, courseKey){
-  const key=WP_norm(courseKey); if(!key) return null;
+  const key=WP_courseMatchKey(courseKey); if(!key) return null;
   const events=new Map();
   for(const p of (Array.isArray(model?.players)?model.players:[])){
     for(const r of WP_series(p)){
-      if(WP_norm(WP_course(r))!==key) continue;
+      if(WP_courseMatchKey(WP_course(r))!==key) continue;
       const ek=WP_eventKey(r);
       const e=events.get(ek)||{key:ek,courseName:WP_course(r),dateMs:0,dateLabel:WP_dateLabel(r),entries:[]};
       e.dateMs=Math.max(e.dateMs,WP_dateMs(r)||0);
@@ -15729,7 +15745,7 @@ function WP_roundHasLayout(r){
 }
 function WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,tempMode="whs",layoutOverride=null){
   const mineInEvent=event?.entries?.find(x=>String(x.player?.name||"")===String(p?.name||""))?.round||null;
-  const sameCourse=WP_series(p).filter(r=>WP_norm(WP_course(r))===WP_norm(courseKey)).reverse();
+  const sameCourse=WP_series(p).filter(r=>WP_courseMatchKey(WP_course(r))===WP_courseMatchKey(courseKey)).reverse();
   // If the golfer has explicitly selected a Supabase tee, that tee definition
   // is the authoritative layout. History is still used for performance signals,
   // but it must not silently replace today's Par / SI / yardages / Rating / Slope.
@@ -15816,7 +15832,7 @@ function WP_playerHistorySignals(p,courseKey){
     const pts=WP_holePts(r), gross=WP_gross(r), ps=WP_pars(r), sis=WP_si(r), ys=WP_yards(r);
     for(let i=0;i<18;i++){
       const pt=Number(pts[i]), g=Number(gross[i]), par=Number(ps[i]), si=Number(sis[i]), y=Number(ys[i]);
-      const same=WP_norm(WP_course(r))===WP_norm(courseKey);
+      const same=WP_courseMatchKey(WP_course(r))===WP_courseMatchKey(courseKey);
       if(Number.isFinite(pt)){
         if(same) exactPts[i].push(pt);
         add(parPts,Number.isFinite(par)?par:null,pt);
@@ -17447,17 +17463,35 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
   const courses = React.useMemo(()=>{
     const map=new Map();
+
+    // Supabase names win for display because this is the maintained course library.
     for(const c of dbCourses){
-      const label=String(c?.name||"").trim(); const key=WP_norm(label);
-      if(!key) continue;
-      map.set(key,{key,label,dbId:c.id,source:"supabase",rounds:0,lastMs:0});
+      const label=String(c?.name||"").trim();
+      const matchKey=WP_courseMatchKey(label);
+      if(!matchKey) continue;
+      map.set(matchKey,{
+        key:matchKey,label,dbId:c.id,source:"supabase",
+        rounds:0,lastMs:0,aliases:[label]
+      });
     }
+
+    // Fold imported-history aliases into the same course where possible.
+    // Example: "Chart Hills" + "Chart Hills Golf Club" => one dropdown option.
     for(const c of historicCourses){
-      if(!map.has(c.key)) map.set(c.key,{...c,source:"history"});
-      else {
-        const x=map.get(c.key); x.rounds=c.rounds||0; x.lastMs=c.lastMs||0;
+      const matchKey=WP_courseMatchKey(c?.label||c?.key);
+      if(!matchKey) continue;
+      if(!map.has(matchKey)){
+        map.set(matchKey,{...c,key:matchKey,source:"history",aliases:[c.label]});
+      }else{
+        const x=map.get(matchKey);
+        x.rounds=(Number(x.rounds)||0)+(Number(c.rounds)||0);
+        x.lastMs=Math.max(Number(x.lastMs)||0,Number(c.lastMs)||0);
+        x.historyCourseName=c.label;
+        x.hasHistory=true;
+        x.aliases=Array.from(new Set([...(x.aliases||[]),c.label].filter(Boolean)));
       }
     }
+
     return Array.from(map.values()).sort((a,b)=>a.label.localeCompare(b.label));
   },[dbCourses,historicCourses]);
   const players = React.useMemo(() => (Array.isArray(seasonModel?.players) ? seasonModel.players : [])
@@ -17566,7 +17600,10 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     [dbTees,selectedTeeId]
   );
 
-  const event = React.useMemo(() => WP_findLatestEventAtCourse(seasonModel, courseKey), [seasonModel, courseKey]);
+  const event = React.useMemo(
+    () => WP_findLatestEventAtCourse(seasonModel, selectedCourse?.label||courseKey),
+    [seasonModel,courseKey,selectedCourse?.label]
+  );
 
   // New/unplayed courses still need an event-shaped object because the existing
   // report renderer expects a course container. This contains NO fake result.
@@ -17585,6 +17622,15 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       isSupabaseOnly:true
     };
   },[event,selectedCourse,selectedDbTee,courseKey]);
+
+  React.useEffect(()=>{
+    // "Win the competition" requires a real previous Den result.
+    // New courses remain fully usable: automatically land on Stableford target
+    // rather than showing a disabled/contradictory bottom button.
+    if(selectedCourse && !event && planMode==="winning"){
+      setPlanMode("stableford");
+    }
+  },[selectedCourse?.key,event,planMode]);
   const winnerPts = Number(event?.winningPoints);
   const target = planMode === "winning"
     ? Number(event?.targetPoints)
@@ -18042,15 +18088,42 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
             </div>
           </section>
 
-          {event && <section className="content-card p-5 md:p-7">
-            <div className="text-[10px] font-black uppercase tracking-[.18em] text-slate-400">Choose your destination</div>
+          {planningEvent && <section className="content-card p-5 md:p-7">
+            <div className="flex flex-wrap items-end justify-between gap-2">
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-[.18em] text-slate-400">Choose your destination</div>
+                {!event?<div className="mt-1 text-xs font-bold text-blue-700">New course: choose Stableford, Gross or Live Replan. Winning benchmark becomes available after the first Den result.</div>:null}
+              </div>
+            </div>
             <div className="mt-3 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
               {[
-                ['winning','🏆','Beat likely winning score','Let Den Golf set the target'],
+                ['winning','🏆','Beat likely winning score',event?'Let Den Golf set the target':'Unavailable · no previous Den result'],
                 ['stableford','🎯','Choose Stableford target','Build an exact points route'],
                 ['gross','⛳','Choose gross target','Build an exact stroke route'],
                 ['live','🔄','Live Replan','Enter scores as you play and rebuild the safest route']
-              ].map(([m,icon,title,sub])=><button key={m} type="button" onClick={()=>choosePlanMode(m)} className={`rounded-2xl border p-4 text-left transition ${planMode===m?'border-emerald-400 bg-emerald-50 shadow-sm':'border-slate-200 bg-white hover:bg-slate-50'}`}><div className="text-2xl">{icon}</div><div className="mt-2 font-black text-slate-900">{title}</div><div className="mt-1 text-xs text-slate-500">{sub}</div></button>)}
+              ].map(([m,icon,title,sub])=>{
+                const unavailable=(m==='winning'&&!event);
+                return <button
+                  key={m}
+                  type="button"
+                  disabled={unavailable}
+                  onClick={()=>!unavailable&&choosePlanMode(m)}
+                  className={`rounded-2xl border p-4 text-left transition ${
+                    unavailable
+                      ? 'border-slate-200 bg-slate-100 opacity-55 cursor-not-allowed'
+                      : planMode===m
+                        ? 'border-emerald-400 bg-emerald-50 shadow-sm'
+                        : 'border-slate-200 bg-white hover:bg-slate-50'
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="text-2xl">{icon}</div>
+                    {unavailable?<span className="rounded-full bg-slate-200 px-2 py-1 text-[8px] font-black uppercase tracking-wider text-slate-500">No history</span>:null}
+                  </div>
+                  <div className="mt-2 font-black text-slate-900">{title}</div>
+                  <div className={`mt-1 text-xs ${unavailable?'font-bold text-slate-500':'text-slate-500'}`}>{sub}</div>
+                </button>;
+              })}
             </div>
             {planMode==='stableford'?<div className="mt-4 rounded-2xl border border-emerald-200 bg-emerald-50 p-4"><label className="text-[10px] font-black uppercase tracking-widest text-emerald-700">Target Stableford points</label><div className="mt-2 flex items-center gap-3"><input type="number" min="18" max="72" step="1" value={customPoints} onChange={e=>setCustomPoints(e.target.value)} className="w-28 rounded-xl border border-emerald-300 bg-white px-3 py-2 text-2xl font-black text-slate-900"/><span className="font-black text-emerald-800">points</span></div><div className="mt-2 text-xs text-emerald-800">The optimizer will use your previous rounds, exact-hole record, SI and Par profile to decide where those points are most realistically made.</div></div>:null}
             {planMode==='gross'?<div className="mt-4 rounded-2xl border border-blue-200 bg-blue-50 p-4"><label className="text-[10px] font-black uppercase tracking-widest text-blue-700">Target gross score</label><div className="mt-2 flex items-center gap-3"><input type="number" min="54" max="180" step="1" value={customGross} onChange={e=>setCustomGross(e.target.value)} className="w-28 rounded-xl border border-blue-300 bg-white px-3 py-2 text-2xl font-black text-slate-900"/><span className="font-black text-blue-800">gross</span></div><div className="mt-2 text-xs text-blue-800">The optimizer allocates pars, bogeys and worse scores to the holes where your history says they are most likely, while making the 18-hole total equal your chosen gross score.</div></div>:null}
@@ -18139,7 +18212,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
           </section>}
 
-          {event && <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
+          {planningEvent && <section className="overflow-hidden rounded-3xl border border-slate-200 bg-white shadow-sm">
             <div className="grid grid-cols-1 md:grid-cols-[1.25fr_.75fr]">
               <div className="p-5 md:p-7">
                 <div className="text-[10px] font-black uppercase tracking-[.18em] text-slate-400">{planMode==='winning'?'The winning equation':planMode==='stableford'?'Your points target':planMode==='live'?'Live round target':'Your gross target'}</div>
@@ -18153,13 +18226,29 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
             </div>
           </section>}
 
-          <button type="button" disabled={!event || !selectedPlayers.length || !Number.isFinite(target) || (planMode==='live' && (selectedPlayers.length!==1 || livePreview.played<1))} onClick={generatePlan} className="w-full rounded-3xl px-6 py-5 text-lg md:text-xl font-black text-white shadow-xl disabled:cursor-not-allowed disabled:opacity-40" style={{background:planMode==='live'?"linear-gradient(90deg,#4c1d95 0%,#6d28d9 48%,#08775f 100%)":"linear-gradient(90deg,#071d35 0%,#0b3e61 45%,#08775f 100%)"}}>
-            {event ? (planMode==='live'
-              ? (liveScoringMode==="gross"
-                  ? `🔄 Recalculate Remaining ${18-livePreview.played} Holes · ${livePreview.gross} strokes used · Target ${Number.isFinite(target)?Math.round(target):'—'} gross`
-                  : `🔄 Recalculate Remaining ${18-livePreview.played} Holes · ${livePreview.pts} pts banked · Target ${Number.isFinite(target)?Math.round(target):'—'}`)
-              : `Build ${selectedPlayers.length || ""} ${planMode==='winning'?'Winning':planMode==='stableford'?'Stableford':'Gross'} Route${selectedPlayers.length===1?"":"s"} · Target ${Number.isFinite(target)?Math.round(target):'—'} ${planMode==='gross'?'gross':'pts'}`
-            ) : "Choose a course with a previous result"}
+          <button
+            type="button"
+            disabled={
+              !planningEvent ||
+              !selectedPlayers.length ||
+              !Number.isFinite(target) ||
+              (planMode==='winning'&&!event) ||
+              (planMode==='live' && (selectedPlayers.length!==1 || livePreview.played<1))
+            }
+            onClick={generatePlan}
+            className="w-full rounded-3xl px-6 py-5 text-lg md:text-xl font-black text-white shadow-xl disabled:cursor-not-allowed disabled:opacity-40"
+            style={{background:planMode==='live'?"linear-gradient(90deg,#4c1d95 0%,#6d28d9 48%,#08775f 100%)":"linear-gradient(90deg,#071d35 0%,#0b3e61 45%,#08775f 100%)"}}
+          >
+            {!planningEvent
+              ? "Choose a course and tee"
+              : planMode==='winning'&&!event
+                ? "No winning benchmark yet · choose Stableford, Gross or Live Replan"
+                : planMode==='live'
+                  ? (liveScoringMode==="gross"
+                      ? `🔄 Recalculate Remaining ${18-livePreview.played} Holes · ${livePreview.gross} strokes used · Target ${Number.isFinite(target)?Math.round(target):'—'} gross`
+                      : `🔄 Recalculate Remaining ${18-livePreview.played} Holes · ${livePreview.pts} pts banked · Target ${Number.isFinite(target)?Math.round(target):'—'}`)
+                  : `Build ${selectedPlayers.length || ""} ${planMode==='winning'?'Winning':planMode==='stableford'?'Stableford':'Gross'} Route${selectedPlayers.length===1?"":"s"} · Target ${Number.isFinite(target)?Math.round(target):'—'} ${planMode==='gross'?'gross':'pts'}`
+            }
           </button>
         </>
       )}
