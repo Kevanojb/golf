@@ -18283,10 +18283,49 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
 
 // Pre-Round planner: if data is not loaded, scan ALL stored games and return to this view.
 
+function WP_liveHistoryRoundId({playerName,courseKey,teeId,date,scores}){
+  const raw=[WP_norm(playerName),String(courseKey||''),String(teeId||''),String(date||''),(scores||[]).map(x=>Math.round(Number(x)||0)).join('-')].join('|');
+  let h=2166136261;for(let i=0;i<raw.length;i++){h^=raw.charCodeAt(i);h=Math.imul(h,16777619);}
+  return `live_caddie_${(h>>>0).toString(16)}`;
+}
+function WP_liveHistoryLocalKey(id){return `den-live-history:v1:${String(id||'')}`;}
+function WP_buildLiveHistoryRecord({player,event,courseKey,teeId,teeName,layout,liveResult,liveScores,tempHI,tempMode,weatherContext}){
+  const scores=Array.from({length:18},(_,i)=>Math.round(Number(liveScores?.[i])||0));
+  if(scores.some(x=>x<=0))throw new Error('All 18 gross scores are required.');
+  const date=String(weatherContext?.date||new Date().toISOString().slice(0,10));
+  const holes=(liveResult?.holes||[]).map(h=>{const w=weatherContext?WP_weatherAtHole(weatherContext,Number(h.hole)):null;return{
+    hole:Number(h.hole),par:Number(h.par),si:Number(h.si),yards:Number(h.yard),gross:Number(h.actualGross),stableford:Number(h.actualPts),shots:Number(h.strokes),
+    bearing:Number(weatherContext?.geometryByHole?.[Number(h.hole)]?.primary_bearing_deg),
+    weather:w?{temp_c:Number(w.tempC),wind_mph:Number(w.windMph),gust_mph:Number(w.gustMph),wind_direction_deg:Number(w.windDirection),rain_mm:Number(w.rainMm),headwind_mph:Number(w.headwindMph),crosswind_mph:Number(w.crosswindMph),stroke_penalty:Number(w.strokePenalty)}:null
+  };});
+  const id=WP_liveHistoryRoundId({playerName:player?.name,courseKey,teeId,date,scores});
+  return {id,source:'live_caddie',competition:false,performance_history:true,player_name:String(player?.name||''),course_key:String(courseKey||''),course_name:String(event?.courseName||courseKey||''),tee_id:teeId||null,tee_name:String(teeName||layout?.teeName||''),played_date:date,start_hole:Number(liveResult?.startHole)||1,handicap_mode:String(tempMode||layout?.temporaryMode||'den'),handicap_input:Number.isFinite(Number(tempHI))?Number(tempHI):null,handicap_index:Number.isFinite(Number(layout?.hi))?Number(layout.hi):null,course_handicap:Number.isFinite(Number(layout?.ch))?Number(layout.ch):null,gross_total:scores.reduce((a,b)=>a+b,0),stableford_total:holes.reduce((s,h)=>s+(Number(h.stableford)||0),0),scores,holes,weather:weatherContext?{enabled:true,date:String(weatherContext.date||date),tee_time:String(weatherContext.teeTime||''),location:weatherContext.location||null,summary:WP_weatherAtHole(weatherContext,1)||null}:{enabled:false},created_at:new Date().toISOString()};
+}
+async function WP_saveLiveRoundToHistory(record){
+  if(!record?.id)throw new Error('Could not create a round ID.');
+  const localKey=WP_liveHistoryLocalKey(record.id);
+  try{if(window.localStorage?.getItem(localKey))return {ok:true,duplicate:true,storage:'local'};}catch{}
+  const supabase=typeof window!=='undefined'?window.__supabase_client__:null;
+  if(supabase){
+    const payload={id:record.id,source:record.source,competition:false,performance_history:true,player_name:record.player_name,course_key:record.course_key,course_name:record.course_name,tee_id:record.tee_id,tee_name:record.tee_name,played_date:record.played_date,handicap_mode:record.handicap_mode,handicap_input:record.handicap_input,handicap_index:record.handicap_index,course_handicap:record.course_handicap,gross_total:record.gross_total,stableford_total:record.stableford_total,scores:record.scores,holes:record.holes,weather:record.weather,created_at:record.created_at};
+    const r=await supabase.from('player_round_history').upsert([payload],{onConflict:'id'});
+    if(r.error){
+      const msg=String(r.error?.message||r.error);try{window.localStorage?.setItem(localKey,JSON.stringify(record));}catch{}
+      if(/player_round_history|relation|schema|column/i.test(msg))return {ok:true,localOnly:true,warning:'Saved on this device. Run the App-112 Supabase migration to sync history across devices.'};
+      throw r.error;
+    }
+  }
+  try{window.localStorage?.setItem(localKey,JSON.stringify(record));}catch{}
+  try{window.dispatchEvent(new CustomEvent('den_player_history_changed',{detail:{roundId:record.id,playerName:record.player_name}}));}catch{}
+  return {ok:true,storage:supabase?'supabase+local':'local'};
+}
+
 function WP_OnCourseMode({
   model, event, courseKey, player, handicapMap, target, liveMode, startHole, layoutOverride,
-  tempHI, tempMode, liveScores, setLiveScores, onExit, onViewFull, weatherContext=null
+  tempHI, tempMode, liveScores, setLiveScores, onExit, onViewFull, weatherContext=null,
+  teeId=null,teeName="",onHistorySaved=null
 }){
+  const [historySaveState,setHistorySaveState]=React.useState({status:'idle',message:''});
   const [cursorHole,setCursorHole]=React.useState(()=>{
     const order=WP_liveHoleOrder(startHole);
     for(const holeNo of order){
@@ -18451,6 +18490,17 @@ function WP_OnCourseMode({
   const frontTargetPts=sumBy(frontNine,'targetPts');
   const backTargetPts=sumBy(backNine,'targetPts');
 
+  const saveRoundToHistory=async()=>{
+    if(!roundComplete||historySaveState.status==='saving')return;
+    setHistorySaveState({status:'saving',message:'Saving permanent history…'});
+    try{
+      const record=WP_buildLiveHistoryRecord({player,event,courseKey,teeId,teeName,layout:liveResult.layout,liveResult,liveScores,tempHI,tempMode,weatherContext});
+      const result=await WP_saveLiveRoundToHistory(record);
+      setHistorySaveState({status:'saved',message:result.duplicate?'This round is already in performance history.':(result.warning||'Saved to permanent performance history.')});
+      onHistorySaved?.(record,result);
+    }catch(e){setHistorySaveState({status:'error',message:String(e?.message||e||'Could not save round.')});}
+  };
+
   return (
     <div className="oc-shell">
       <style>{`
@@ -18474,7 +18524,7 @@ function WP_OnCourseMode({
         .oc-nav{display:flex;justify-content:center;gap:8px;margin-top:10px}.oc-nav button{border:1px solid #cbd5e1;background:#fff;border-radius:999px;padding:8px 12px;font-size:10px;font-weight:900;color:#334155}
         .oc-next-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px}.oc-next-card{border:1px solid #dbe5ee;border-radius:17px;background:#fff;padding:11px}.oc-next-card.oc-primary{background:#ecfdf5;border-color:#a7f3d0}.oc-next-card.oc-stretch{background:#fffbeb;border-color:#fde68a}.oc-next-card.oc-opportunity{background:#eff6ff;border-color:#bfdbfe}.oc-next-card.oc-danger{background:#fff7ed;border-color:#fed7aa}
         .oc-next-top{display:flex;justify-content:space-between;gap:6px;font-size:8px;font-weight:950;color:#64748b}.oc-next-main{display:flex;justify-content:space-between;align-items:end;margin-top:5px}.oc-mini-k{font-size:7px;font-weight:900;color:#64748b}.oc-mini-gross{font-size:34px;font-weight:950;line-height:1}.oc-mini-points{font-size:13px;font-weight:950}.oc-mini-tag{font-size:9px;font-weight:950;margin-top:6px}.oc-mini-advice{font-size:9px;color:#64748b;line-height:1.3;margin-top:4px}
-        .oc-change{margin-top:10px;border-radius:14px;border:1px solid #dbe5ee;background:#fff;padding:10px}.oc-change-title{font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.1em;color:#64748b}.oc-change-text{font-size:11px;font-weight:850;color:#334155;margin-top:3px}.oc-complete{border-radius:24px;border:1px solid #dbe5ee;background:#fff;padding:14px;box-shadow:0 14px 34px rgba(15,23,42,.08)}.oc-complete-head{text-align:center;padding:8px 4px 14px}.oc-complete-title{font-size:28px;font-weight:950;letter-spacing:-.035em;color:#0f172a}.oc-complete-sub{font-size:11px;color:#64748b;margin-top:4px}.oc-complete-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}.oc-score-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.oc-nine-card{border:1px solid #cbd5e1;border-radius:15px;background:#f8fafc;padding:10px}.oc-nine-card.total{background:linear-gradient(145deg,#0f172a,#1e293b);border-color:#0f172a;color:#fff}.oc-nine-title{font-size:8px;font-weight:950;letter-spacing:.09em;text-transform:uppercase;color:#64748b}.oc-nine-card.total .oc-nine-title{color:#cbd5e1}.oc-nine-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}.oc-nine-stat{min-width:0}.oc-nine-k{font-size:7px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8}.oc-nine-v{font-size:23px;font-weight:950;line-height:1;margin-top:2px;color:#0f172a}.oc-nine-card.total .oc-nine-v{color:#fff}.oc-nine-sub{font-size:7px;color:#94a3b8;margin-top:3px}.oc-total-gross{margin-top:9px;border-top:1px solid rgba(148,163,184,.35);padding-top:8px}.oc-total-gross .oc-nine-v{font-size:31px}.oc-count{border-radius:13px;padding:9px;text-align:center;border:1px solid #e2e8f0}.oc-count.good{background:#ecfdf5;border-color:#86efac}.oc-count.bad{background:#fff1f2;border-color:#fda4af}.oc-count.on{background:#f8fafc}.oc-count-v{font-size:22px;font-weight:950}.oc-count-k{font-size:8px;font-weight:950;text-transform:uppercase;letter-spacing:.08em;color:#64748b}.oc-result-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.oc-result{border-radius:14px;border:1px solid #e2e8f0;padding:9px;background:#f8fafc}.oc-result.better{background:#dcfce7;border-color:#4ade80;box-shadow:inset 0 0 0 1px rgba(22,163,74,.08)}.oc-result.worse{background:#fee2e2;border-color:#fb7185;box-shadow:inset 0 0 0 1px rgba(225,29,72,.08)}.oc-result.on{background:#f8fafc;border-color:#cbd5e1}.oc-result-h{display:flex;justify-content:space-between;gap:6px;align-items:center;font-size:9px;font-weight:950}.oc-result-main{display:flex;align-items:end;justify-content:space-between;gap:7px;margin-top:5px}.oc-result-actual{font-size:25px;font-weight:950;line-height:1}.oc-result-target{font-size:8px;color:#64748b;text-align:right}.oc-result-delta{font-size:9px;font-weight:950;margin-top:5px}.oc-result.better .oc-result-delta{color:#15803d}.oc-result.worse .oc-result-delta{color:#be123c}.oc-result.on .oc-result-delta{color:#64748b}.oc-legend{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:9px;font-weight:900;color:#64748b}.oc-dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}.oc-dot.good{background:#86efac}.oc-dot.bad{background:#fda4af}.oc-dot.on{background:#cbd5e1}
+        .oc-change{margin-top:10px;border-radius:14px;border:1px solid #dbe5ee;background:#fff;padding:10px}.oc-change-title{font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.1em;color:#64748b}.oc-change-text{font-size:11px;font-weight:850;color:#334155;margin-top:3px}.oc-complete{border-radius:24px;border:1px solid #dbe5ee;background:#fff;padding:14px;box-shadow:0 14px 34px rgba(15,23,42,.08)}.oc-complete-head{text-align:center;padding:8px 4px 14px}.oc-complete-title{font-size:28px;font-weight:950;letter-spacing:-.035em;color:#0f172a}.oc-complete-sub{font-size:11px;color:#64748b;margin-top:4px}.oc-history-save{margin-top:14px;border:2px solid #a7f3d0;border-radius:18px;background:#ecfdf5;padding:12px;text-align:left}.oc-history-save-title{font-size:13px;font-weight:950;color:#065f46}.oc-history-save-sub{font-size:9px;line-height:1.4;color:#64748b;margin-top:3px}.oc-history-btn{width:100%;min-height:56px;margin-top:10px;border:0;border-radius:16px;background:#047857;color:#fff;font-size:14px;font-weight:950}.oc-history-btn:disabled{opacity:.55}.oc-history-msg{margin-top:8px;font-size:10px;font-weight:900;color:#065f46}.oc-history-msg.err{color:#be123c}.oc-complete-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}.oc-score-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.oc-nine-card{border:1px solid #cbd5e1;border-radius:15px;background:#f8fafc;padding:10px}.oc-nine-card.total{background:linear-gradient(145deg,#0f172a,#1e293b);border-color:#0f172a;color:#fff}.oc-nine-title{font-size:8px;font-weight:950;letter-spacing:.09em;text-transform:uppercase;color:#64748b}.oc-nine-card.total .oc-nine-title{color:#cbd5e1}.oc-nine-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}.oc-nine-stat{min-width:0}.oc-nine-k{font-size:7px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8}.oc-nine-v{font-size:23px;font-weight:950;line-height:1;margin-top:2px;color:#0f172a}.oc-nine-card.total .oc-nine-v{color:#fff}.oc-nine-sub{font-size:7px;color:#94a3b8;margin-top:3px}.oc-total-gross{margin-top:9px;border-top:1px solid rgba(148,163,184,.35);padding-top:8px}.oc-total-gross .oc-nine-v{font-size:31px}.oc-count{border-radius:13px;padding:9px;text-align:center;border:1px solid #e2e8f0}.oc-count.good{background:#ecfdf5;border-color:#86efac}.oc-count.bad{background:#fff1f2;border-color:#fda4af}.oc-count.on{background:#f8fafc}.oc-count-v{font-size:22px;font-weight:950}.oc-count-k{font-size:8px;font-weight:950;text-transform:uppercase;letter-spacing:.08em;color:#64748b}.oc-result-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.oc-result{border-radius:14px;border:1px solid #e2e8f0;padding:9px;background:#f8fafc}.oc-result.better{background:#dcfce7;border-color:#4ade80;box-shadow:inset 0 0 0 1px rgba(22,163,74,.08)}.oc-result.worse{background:#fee2e2;border-color:#fb7185;box-shadow:inset 0 0 0 1px rgba(225,29,72,.08)}.oc-result.on{background:#f8fafc;border-color:#cbd5e1}.oc-result-h{display:flex;justify-content:space-between;gap:6px;align-items:center;font-size:9px;font-weight:950}.oc-result-main{display:flex;align-items:end;justify-content:space-between;gap:7px;margin-top:5px}.oc-result-actual{font-size:25px;font-weight:950;line-height:1}.oc-result-target{font-size:8px;color:#64748b;text-align:right}.oc-result-delta{font-size:9px;font-weight:950;margin-top:5px}.oc-result.better .oc-result-delta{color:#15803d}.oc-result.worse .oc-result-delta{color:#be123c}.oc-result.on .oc-result-delta{color:#64748b}.oc-legend{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:9px;font-weight:900;color:#64748b}.oc-dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}.oc-dot.good{background:#86efac}.oc-dot.bad{background:#fda4af}.oc-dot.on{background:#cbd5e1}
         @media(max-width:430px){.oc-score-totals{grid-template-columns:1fr 1fr}.oc-nine-card.total{grid-column:1/-1}.oc-result-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-stat-v{font-size:16px}.oc-gross{font-size:82px}.oc-current{min-height:42vh}.oc-advice{font-size:12px}.oc-caddie-head{font-size:20px}.oc-next-grid{grid-template-columns:1fr}.oc-scorebar{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}.oc-stat{padding:6px 3px}}
       `}</style>
 
@@ -18582,6 +18632,14 @@ function WP_OnCourseMode({
                 </div>
               </div>
 
+              <div className="oc-history-save">
+                <div className="oc-history-save-title">PERFORMANCE HISTORY</div>
+                <div className="oc-history-save-sub">Save this completed round for future scoring, course and weather predictions. It is tagged LIVE CADDIE and is not added to Den Society competition results.</div>
+                <button type="button" className="oc-history-btn" disabled={historySaveState.status==='saving'||historySaveState.status==='saved'} onClick={saveRoundToHistory}>
+                  {historySaveState.status==='saving'?'SAVING…':historySaveState.status==='saved'?'✓ ROUND SAVED TO HISTORY':'SAVE ROUND TO HISTORY'}
+                </button>
+                {historySaveState.message?<div className={`oc-history-msg ${historySaveState.status==='error'?'err':''}`}>{historySaveState.message}</div>:null}
+              </div>
               <div className="oc-complete-counts">
                 <div className="oc-count good"><div className="oc-count-v">{betterCount}</div><div className="oc-count-k">Better than target</div></div>
                 <div className="oc-count on"><div className="oc-count-v">{onCount}</div><div className="oc-count-k">On target</div></div>
@@ -19724,6 +19782,9 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       liveScores={liveScores}
       setLiveScores={setLiveScores}
       weatherContext={(weatherEnabled&&courseWeather)?{...courseWeather,date:weatherDate,teeTime:weatherTeeTime,location:weatherLocation,geometryByHole}:null}
+      teeId={selectedTeeId}
+      teeName={selectedDbTee?.teeName||""}
+      onHistorySaved={()=>{try{window.dispatchEvent(new CustomEvent("den_player_history_changed"));}catch{}}}
       onExit={()=>setOnCourseMode(false)}
       onViewFull={()=>{
         const r=WP_generateLiveReplanHTML({
