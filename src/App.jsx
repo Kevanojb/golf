@@ -7821,8 +7821,10 @@ function PlayerProgressView({
   seasonProgress,
   seasonError,
   runSeasonAnalysis,
+  autoLoadingHistory=false,
   setView,
 }) {
+  const reviewAutoLoading=!!autoLoadingHistory;
   const [cohortMode, setCohortMode] = React.useState(() => {
     try {
       const v =
@@ -9785,6 +9787,10 @@ const allRows = [...parRows, ...siRows, ...ydRows].filter(r => Number.isFinite(r
   // -------------------------
   const StatPill = ({ label, val, sub, tone }) => (
     <div className="rounded-2xl border border-neutral-200 bg-white p-4 shadow-sm">
+      {reviewAutoLoading?<div className="mb-4 rounded-2xl border border-blue-200 bg-blue-50 p-4">
+        <div className="font-black text-blue-900">Loading stored golf history…</div>
+        <div className="mt-1 text-sm text-blue-800">Combining imported historical rounds with saved Live Caddie rounds for Review Performance.</div>
+      </div>:null}
       <div className="text-[10px] font-black tracking-widest uppercase text-neutral-400">{label}</div>
       <div className={"mt-2 text-3xl font-black tabular-nums " + (tone || "text-neutral-900")}>{val}</div>
       {sub && <div className="text-sm text-neutral-600 mt-1">{sub}</div>}
@@ -24654,6 +24660,7 @@ const [seasonLoading, setSeasonLoading] = useState(false);
         const [seasonProgress, setSeasonProgress] = useState({ done: 0, total: 0 });
         const [seasonError, setSeasonError] = useState("");
         const [seasonPlayer, setSeasonPlayer] = useState("");
+        const reviewHistoryAutoLoadRef = useRef(false);
 
         // App-116: this effect must come AFTER seasonPlayer is declared.
         // App-115 referenced seasonPlayer earlier in the render, which put it in
@@ -25704,6 +25711,22 @@ setSeasonRounds(rounds);
   }
 }
 
+        // App-119: opening Review Performance automatically loads the imported
+        // historical rounds if they are not already in memory. The performance
+        // model then combines them with player_round_history.
+        useEffect(()=>{
+          if(view!=="player_progress" || seasonLoading)return;
+          const importedLoaded=(Array.isArray(seasonRounds)&&seasonRounds.length>0) ||
+            (Array.isArray(seasonFiles?.processed)&&seasonFiles.processed.length>0);
+          if(importedLoaded){ reviewHistoryAutoLoadRef.current=false; return; }
+          if(reviewHistoryAutoLoadRef.current)return;
+          reviewHistoryAutoLoadRef.current=true;
+          Promise.resolve(loadAllGamesAndBuildPlayerModel({afterView:"player_progress"}))
+            .catch(e=>{
+              console.error("Review Performance automatic history load failed",e);
+              reviewHistoryAutoLoadRef.current=false;
+            });
+        },[view,seasonLoading,seasonRounds,seasonFiles]);
 
         const [courseList, setCourseList] = useState([]);
         const [players, setPlayers] = useState([]);
@@ -27425,6 +27448,7 @@ if (res.error) toast("Error: " + res.error.message);
     seasonProgress={seasonProgress}
     seasonError={seasonError}
     runSeasonAnalysis={loadAllGamesAndBuildPlayerModel}
+    autoLoadingHistory={seasonLoading && (!Array.isArray(seasonFiles?.processed)||seasonFiles.processed.length===0)}
     setView={setView}
     scoringMode={scoringMode}
     setScoringMode={setScoringMode}
