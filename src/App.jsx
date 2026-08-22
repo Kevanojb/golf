@@ -24429,15 +24429,6 @@ React.useEffect(()=>{
           catch(e){console.error("All-years performance model build failed",e);return null;}
         },[performanceRoundsAll,hiddenPlayerKeys]);
 
-        React.useEffect(()=>{
-          const ps=performanceModel?.players||[];
-          if(!ps.length)return;
-          if(!seasonPlayer||!ps.some(p=>String(p?.name||"")===String(seasonPlayer))){
-            setSeasonPlayer(String(ps[0]?.name||""));
-          }
-        },[performanceModel,seasonPlayer]);
-
-
         // Pre-Round Intelligence deliberately ignores the Season Analysis year/window.
         // It uses every stored round from every year, while player handicaps are
         // sourced separately from the current calendar-year handicap export logic.
@@ -24522,6 +24513,18 @@ const [seasonLoading, setSeasonLoading] = useState(false);
         const [seasonProgress, setSeasonProgress] = useState({ done: 0, total: 0 });
         const [seasonError, setSeasonError] = useState("");
         const [seasonPlayer, setSeasonPlayer] = useState("");
+
+        // App-116: this effect must come AFTER seasonPlayer is declared.
+        // App-115 referenced seasonPlayer earlier in the render, which put it in
+        // JavaScript's temporal dead zone and blanked the whole React screen.
+        React.useEffect(()=>{
+          const ps=performanceModel?.players||[];
+          if(!ps.length)return;
+          if(!seasonPlayer||!ps.some(p=>String(p?.name||"")===String(seasonPlayer))){
+            setSeasonPlayer(String(ps[0]?.name||""));
+          }
+        },[performanceModel,seasonPlayer]);
+
         const [scoringMode, setScoringMode] = useState("stableford");
         const [grossCompare, setGrossCompare] = useState("par");
 
