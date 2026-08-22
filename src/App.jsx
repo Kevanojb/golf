@@ -17601,6 +17601,25 @@ function WP_clearLiveRound(query){
     return false;
   }
 }
+function WP_clearAllLiveRoundsForPlayerCourse(playerName,courseKey){
+  try{
+    if(typeof window==='undefined'||!window.localStorage)return 0;
+    const p=String(playerName||'player').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-');
+    const c=String(courseKey||'course').trim().toLowerCase().replace(/[^a-z0-9]+/g,'-');
+    const prefix=`den-live-round:v1:${p}:${c}:`;
+    const remove=[];
+    for(let i=0;i<window.localStorage.length;i++){
+      const k=window.localStorage.key(i);
+      if(String(k||'').startsWith(prefix))remove.push(k);
+    }
+    remove.forEach(k=>window.localStorage.removeItem(k));
+    return remove.length;
+  }catch(e){
+    console.warn('Clear all live-round slots failed',e);
+    return 0;
+  }
+}
+
 
 function WP_liveHoleOrder(startHole=1){
   const s=Math.max(1,Math.min(18,Math.round(Number(startHole)||1)));
@@ -18736,7 +18755,8 @@ function WP_MobileOnCourseSetup({
   liveScores,setLiveScores,planningEvent,selectedDbTee,onStart,onAdvanced,onHome,onPendingTee,
   playersLoading=false,onReloadPlayers,
   weatherEnabled,setWeatherEnabled,weatherBusy,weatherError,weatherSummary,
-  weatherDate,setWeatherDate,weatherTeeTime,setWeatherTeeTime,onLoadWeather
+  weatherDate,setWeatherDate,weatherTeeTime,setWeatherTeeTime,onLoadWeather,
+  onResumeIntent,onFreshIntent
 }){
   const [step,setStep]=React.useState(0);
   const [latestPlan,setLatestPlan]=React.useState(()=>WP_loadLatestPreRoundPlanSnapshot());
@@ -18773,8 +18793,9 @@ function WP_MobileOnCourseSetup({
   const target=liveScoringMode==='gross'?Number(customGross):Number(customPoints);
   const canStart=!!playerName&&!!courseKey&&!!selectedDbTee&&!!planningEvent&&Number.isFinite(target);
 
-  const applyPlan=(r)=>{
+  const applyPlan=(r,{resume=false}={})=>{
     if(!r)return;
+    if(resume)onResumeIntent?.(); else onFreshIntent?.();
     if(r.playerName)setSelectedPlayers([String(r.playerName)]);
     if(r.courseKey)setCourseKey(String(r.courseKey));
     if(r.teeId)onPendingTee?.(String(r.teeId));
@@ -18788,14 +18809,21 @@ function WP_MobileOnCourseSetup({
       setTempHandicapModes(prev=>({...prev,[String(r.playerName)]:String(r.tempMode||'den')}));
     }
     setLiveStartHole(Number(r.startHole)||1);
-    if(Array.isArray(r.scores))setLiveScores(Array.from({length:18},(_,i)=>{
-      const n=Number(r.scores?.[i]); return Number.isFinite(n)&&n>0?String(Math.round(n)):"";
-    }));
-    else setLiveScores(Array(18).fill(""));
+
+    // CRITICAL: scores are restored ONLY after the user taps Resume.
+    // A pre-round plan reuses setup details but always starts with a blank scorecard.
+    if(resume && Array.isArray(r.scores)){
+      setLiveScores(Array.from({length:18},(_,i)=>{
+        const n=Number(r.scores?.[i]); return Number.isFinite(n)&&n>0?String(Math.round(n)):"";
+      }));
+    }else{
+      setLiveScores(Array(18).fill(""));
+    }
     setStep(4);
   };
 
   const newRound=()=>{
+    onFreshIntent?.();
     setLiveScores(Array(18).fill(""));
     if(!playerName){
       try{
@@ -18853,10 +18881,10 @@ function WP_MobileOnCourseSetup({
         {step===0?<>
           <div className="mq-sub">Use information the app already knows. You should only need a few taps before scoring.</div>
           <div className="mq-stack">
-            {latestLive?<button className="mq-big resume" onClick={()=>applyPlan(latestLive)}>
+            {latestLive?<button className="mq-big resume" onClick={()=>applyPlan(latestLive,{resume:true})}>
               <div><div className="mq-big-title">▶ Resume saved round</div><div className="mq-big-sub">{latestLive.playerName} · {latestLive.courseName||latestLive.courseKey} · {latestLive.__completed}/18 holes completed</div></div><div className="mq-arrow">→</div>
             </button>:null}
-            {latestPlan?<button className="mq-big primary" onClick={()=>applyPlan(latestPlan)}>
+            {latestPlan?<button className="mq-big primary" onClick={()=>applyPlan(latestPlan,{resume:false})}>
               <div><div className="mq-big-title">{recentPlanToday?"✓ Use today's pre-round plan":"Use latest pre-round plan"}</div><div className="mq-big-sub">{latestPlan.playerName} · {latestPlan.courseName||latestPlan.courseKey} · {latestPlan.target} {latestPlan.liveMode==='gross'?'gross':'pts'}{latestPlan.teeName?` · ${latestPlan.teeName}`:''}</div></div><div className="mq-arrow">→</div>
             </button>:null}
             <button className="mq-big" onClick={newRound}>
@@ -19195,7 +19223,9 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   });
   const [mobilePendingTeeId,setMobilePendingTeeId]=React.useState("");
   const [mobilePlayersLoading,setMobilePlayersLoading]=React.useState(false);
+  const [mobileResumeRequested,setMobileResumeRequested]=React.useState(false);
   const mobilePlayersLoadRef=React.useRef(false);
+  const suppressLiveAutoRestoreRef=React.useRef(false);
   const [customPoints, setCustomPoints] = React.useState(40);
   const [customGross, setCustomGross] = React.useState(85);
   const [weatherEnabled,setWeatherEnabled]=React.useState(false);
@@ -19463,18 +19493,25 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       liveMode:liveScoringMode
     });
     setSavedLiveRound(r);
+
+    // App-110: discovering a saved round is NOT the same as resuming it.
+    // Never populate liveScores during quick setup/fresh-round flow.
+    if(mobileQuickSetup || suppressLiveAutoRestoreRef.current || !mobileResumeRequested) return;
+
     if(r?.scores?.some(v=>String(v).trim()!=="")){
       setLiveScores(prev=>{
         const hasCurrent=(prev||[]).some(v=>Number.isFinite(Number(v))&&Number(v)>0);
         return hasCurrent?prev:r.scores;
       });
       setLiveSaveStatus("saved");
+      setMobileResumeRequested(false);
     }
-  },[planMode,activeLivePlayerName,courseKey,liveStartHole,liveScoringMode]);
+  },[planMode,activeLivePlayerName,courseKey,liveStartHole,liveScoringMode,mobileQuickSetup,mobileResumeRequested]);
 
   React.useEffect(()=>{
     if(planMode!=="live" || !activeLivePlayerName || !courseKey) return;
     const hasData=(liveScores||[]).some(v=>Number.isFinite(Number(v))&&Number(v)>0);
+    // Do not create/recreate a saved round merely from setup selections.
     if(!hasData) return;
     const ok=WP_saveLiveRound({
       playerName:activeLivePlayerName,
@@ -19529,6 +19566,14 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       return;
     }
     if(!activeLivePlayerName||!courseKey) return;
+
+    // App-110: changing/selecting a course must never silently restore scores.
+    // Saved-round discovery happens above; only the RESUME action may restore.
+    if(mobileQuickSetup || suppressLiveAutoRestoreRef.current || !mobileResumeRequested){
+      setLiveScores(Array(18).fill(""));
+      return;
+    }
+
     const r=WP_loadLiveRound({
       playerName:activeLivePlayerName,
       courseKey,
@@ -19539,10 +19584,11 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       setLiveScores(r.scores);
       setSavedLiveRound(r);
       setLiveSaveStatus("saved");
+      setMobileResumeRequested(false);
     }else{
       setLiveScores(Array(18).fill(""));
     }
-  },[courseKey]);
+  },[courseKey,mobileQuickSetup,mobileResumeRequested,activeLivePlayerName,liveStartHole,liveScoringMode,planMode]);
 
 
   // IMPORTANT: keep conditional renders AFTER all hooks above.
@@ -19586,8 +19632,22 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       weatherTeeTime={weatherTeeTime}
       setWeatherTeeTime={setWeatherTeeTime}
       onLoadWeather={loadWeatherForPlan}
-      onStart={()=>{setMobileQuickSetup(false);setOnCourseMode(true);}}
-      onAdvanced={()=>setMobileQuickSetup(false)}
+      onResumeIntent={()=>{
+        suppressLiveAutoRestoreRef.current=true;
+        setMobileResumeRequested(true);
+      }}
+      onFreshIntent={()=>{
+        suppressLiveAutoRestoreRef.current=true;
+        setMobileResumeRequested(false);
+        setLiveScores(Array(18).fill(""));
+      }}
+      onStart={()=>{
+        // Scores already in state only when Resume was explicitly selected.
+        suppressLiveAutoRestoreRef.current=false;
+        setMobileQuickSetup(false);
+        setOnCourseMode(true);
+      }}
+      onAdvanced={()=>{suppressLiveAutoRestoreRef.current=false;setMobileQuickSetup(false);}}
       onHome={()=>setView("home")}
     />;
   }
@@ -19635,13 +19695,12 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   };
 
   const clearCurrentLiveRound=()=>{
+    suppressLiveAutoRestoreRef.current=true;
+    setMobileResumeRequested(false);
     if(activeLivePlayerName&&courseKey){
-      WP_clearLiveRound({
-        playerName:activeLivePlayerName,
-        courseKey,
-        startHole:liveStartHole,
-        liveMode:liveScoringMode
-      });
+      // Clear every start-hole/scoring-mode slot for this golfer/course.
+      // This prevents an old saved slot from reappearing after "Clear round".
+      WP_clearAllLiveRoundsForPlayerCourse(activeLivePlayerName,courseKey);
     }
     setLiveScores(Array(18).fill(""));
     setSavedLiveRound(null);
@@ -19650,6 +19709,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
   const resumeSavedLiveRound=()=>{
     if(!savedLiveRound) return;
+    suppressLiveAutoRestoreRef.current=true;
+    setMobileResumeRequested(true);
     setLiveScores(Array.isArray(savedLiveRound.scores)?savedLiveRound.scores:Array(18).fill(""));
     if(Number.isFinite(Number(savedLiveRound.target))){
       if(savedLiveRound.liveMode==="gross") setCustomGross(Number(savedLiveRound.target));
