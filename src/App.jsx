@@ -17612,14 +17612,47 @@ function WP_savePreRoundPlanSnapshot(payload){
     return false;
   }
 }
-function WP_loadLatestPreRoundPlanSnapshot(){
+function WP_clearPreRoundPlanSnapshot(){
+  try{
+    if(typeof window==='undefined'||!window.localStorage)return false;
+    window.localStorage.removeItem(WP_preRoundSnapshotKey());
+    return true;
+  }catch(e){
+    console.warn("Pre-round plan snapshot clear failed",e);
+    return false;
+  }
+}
+function WP_loadLatestPreRoundPlanSnapshot(validPlayers=[]){
   try{
     if(typeof window==='undefined'||!window.localStorage)return null;
     const raw=window.localStorage.getItem(WP_preRoundSnapshotKey());
     if(!raw)return null;
     const r=JSON.parse(raw);
-    return r&&r.version===1?r:null;
-  }catch(e){ return null; }
+    if(!r||r.version!==1){
+      WP_clearPreRoundPlanSnapshot();
+      return null;
+    }
+
+    // App-120: a "today's plan" is genuinely a same-day transient item.
+    // Old plans must never keep taking over the mobile start screen.
+    const today=new Date().toISOString().slice(0,10);
+    if(String(r.date||"")!==today){
+      WP_clearPreRoundPlanSnapshot();
+      return null;
+    }
+
+    // Also reject a plan for a golfer who no longer exists in the current
+    // combined roster/history list.
+    const validSet=new Set((validPlayers||[]).map(p=>WP_norm(typeof p==="string"?p:p?.name)).filter(Boolean));
+    if(validSet.size && !validSet.has(WP_norm(r.playerName))){
+      WP_clearPreRoundPlanSnapshot();
+      return null;
+    }
+    return r;
+  }catch(e){
+    WP_clearPreRoundPlanSnapshot();
+    return null;
+  }
 }
 function WP_findLatestLiveRound(validPlayers=[]){
   try{
@@ -17765,6 +17798,125 @@ function WP_livePlayedSequence(actualGross,startHole=1){
     else break;
   }
   return played;
+}
+
+
+function WP_liveLockedProbabilitySummary(plan){
+  if(!plan||!Array.isArray(plan.holes)||!plan.holes.length)return {};
+  const isGross=plan.liveMode==="gross"||plan.mode==="gross";
+  const pmfs=plan.holes.map(h=>{
+    if(h?.played){
+      const v=Math.max(0,Math.round(Number(isGross?h.actualGross:h.actualPts)||0));
+      const a=new Array(v+1).fill(0);a[v]=1;return a;
+    }
+    return isGross?WP_grossPmf(h):WP_stablefordPmf(h);
+  });
+  const dist=WP_convolvePmfs(pmfs);
+  const target=Math.round(Number(plan.liveTarget??plan.targetRequested??(isGross?plan.totalGross:plan.pointsTotal))||0);
+  const probFor=t=>isGross?WP_probAtMost(dist,t):WP_probAtLeast(dist,t);
+  const targetProb=probFor(target);
+
+  const candidates=isGross
+    ? Array.from(new Set([target-3,target-2,target-1,target,target+1,target+2,target+3,target+5].filter(x=>x>0))).sort((a,b)=>a-b)
+    : Array.from(new Set([target+4,target+2,target+1,target,target-1,target-2,target-4].filter(x=>x>=0))).sort((a,b)=>b-a);
+
+  const ladder=candidates.map(t=>({target:t,prob:probFor(t)}));
+
+  // "Stretch" = closest harder target with ~20-45% chance.
+  // "Safe" = closest easier target with >=70% chance.
+  const harder=ladder.filter(x=>isGross?x.target<target:x.target>target);
+  const easier=ladder.filter(x=>isGross?x.target>target:x.target<target);
+  const stretch=(harder.filter(x=>x.prob>=.18&&x.prob<=.48).sort((a,b)=>Math.abs(a.target-target)-Math.abs(b.target-target))[0])
+    || harder.sort((a,b)=>b.prob-a.prob)[0] || null;
+  const safe=(easier.filter(x=>x.prob>=.70).sort((a,b)=>Math.abs(a.target-target)-Math.abs(b.target-target))[0])
+    || easier.sort((a,b)=>b.prob-a.prob)[0] || null;
+
+  let mode=0,best=-1;
+  dist.forEach((v,i)=>{if(v>best){best=v;mode=i;}});
+  const q25=WP_distQuantile(dist,.25),q50=WP_distQuantile(dist,.50),q75=WP_distQuantile(dist,.75);
+
+  return {
+    liveTargetProbability:targetProb,
+    liveTargetProbabilityText:WP_probPctText(targetProb),
+    liveProbabilityDistribution:dist,
+    liveProbabilityLadder:ladder,
+    liveStretchTarget:stretch,
+    liveSafeTarget:safe,
+    liveMostLikelyTotal:mode,
+    liveQ25:q25,liveMedian:q50,liveQ75:q75
+  };
+}
+
+function WP_courseMemory(player,courseKey){
+  const rounds=WP_series(player).filter(r=>WP_courseMatchKey(WP_course(r))===WP_courseMatchKey(courseKey));
+  if(!rounds.length)return {known:false,rounds:0,bestGross:NaN,typicalGross:NaN,strong:[],danger:[]};
+
+  const grossTotals=[];
+  const relByHole=Array.from({length:18},()=>[]);
+  const ptsByHole=Array.from({length:18},()=>[]);
+  rounds.forEach(r=>{
+    const gs=WP_gross(r),ps=WP_pars(r),pts=WP_holePts(r);
+    const valid=gs.map(Number).filter(Number.isFinite);
+    if(valid.length>=9)grossTotals.push(valid.reduce((s,v)=>s+v,0)*(18/valid.length));
+    for(let i=0;i<18;i++){
+      const g=Number(gs[i]),par=Number(ps[i]),pt=Number(pts[i]);
+      if(Number.isFinite(g)&&Number.isFinite(par))relByHole[i].push(g-par);
+      if(Number.isFinite(pt))ptsByHole[i].push(pt);
+    }
+  });
+
+  const holeRows=Array.from({length:18},(_,i)=>{
+    const rel=WP_avg(relByHole[i]),pts=WP_avg(ptsByHole[i]);
+    const n=Math.max(relByHole[i].length,ptsByHole[i].length);
+    // Higher score = stronger hole.
+    const strength=(Number.isFinite(pts)?pts*1.2:0)-(Number.isFinite(rel)?rel:1);
+    return {hole:i+1,rel,pts,n,strength};
+  }).filter(h=>h.n>0);
+
+  const strong=holeRows.slice().sort((a,b)=>b.strength-a.strength).slice(0,3);
+  const danger=holeRows.slice().sort((a,b)=>a.strength-b.strength).slice(0,3);
+  return {
+    known:true,
+    rounds:rounds.length,
+    bestGross:grossTotals.length?Math.min(...grossTotals):NaN,
+    typicalGross:WP_avg(grossTotals),
+    strong,danger
+  };
+}
+
+function WP_postRoundIntelligence(liveResult,totalGross,totalPts){
+  const holes=(liveResult?.holes||[]).filter(h=>h?.played);
+  const original=new Map((liveResult?.originalPlan?.holes||[]).map(h=>[Number(h.hole),h]));
+  const losses=holes.map(h=>{
+    const p=original.get(Number(h.hole));
+    if(!p)return null;
+    const lossGross=Number(h.actualGross)-Number(p.targetGross);
+    const lossPts=Number(p.targetPts)-Number(h.actualPts);
+    return {hole:Number(h.hole),par:Number(h.par),actualGross:Number(h.actualGross),actualPts:Number(h.actualPts),targetGross:Number(p.targetGross),targetPts:Number(p.targetPts),lossGross,lossPts};
+  }).filter(Boolean);
+
+  const worst=losses.slice().sort((a,b)=>b.lossGross-a.lossGross).slice(0,3);
+  const worstTwo=worst.slice(0,2);
+  const worstTwoLoss=worstTwo.reduce((s,x)=>s+Math.max(0,Number(x.lossGross)||0),0);
+  const sixteenHoleEquivalent=Number.isFinite(totalGross)?totalGross-worstTwoLoss:NaN;
+  const damageHoles=losses.filter(x=>x.lossGross>=2);
+  const parOrBetter=holes.filter(h=>Number(h.actualGross)<=Number(h.par)).length;
+  const bogeyOrBetter=holes.filter(h=>Number(h.actualGross)<=Number(h.par)+1).length;
+
+  let headline="Steady round";
+  let takeaway="Most of the score came from normal hole-to-hole variance rather than one obvious leak.";
+  if(damageHoles.length>=2){
+    headline=`${damageHoles.length} damage holes drove the score`;
+    takeaway=`The quickest gain is not more birdies. Reduce the ${damageHoles.length} holes that cost two or more shots against par/route.`;
+  }else if(damageHoles.length===1){
+    headline=`One hole did most of the damage`;
+    takeaway=`The round was structurally strong outside H${damageHoles[0].hole}. Protecting against one big number is the clearest improvement.`;
+  }else if(parOrBetter>=12){
+    headline="Very strong scoring control";
+    takeaway="The card was built on repeated par-or-better golf rather than isolated hero holes.";
+  }
+
+  return {worst,damageHoles,parOrBetter,bogeyOrBetter,worstTwoLoss,sixteenHoleEquivalent,headline,takeaway,totalGross,totalPts};
 }
 
 function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
@@ -18013,6 +18165,16 @@ function WP_makeLiveReplan(model,event,p,courseKey,handicapMap,options={}){
 
   plan.originalTargetProbability=Number(original?.targetProbability);
   plan.originalTargetProbabilityText=original?.targetProbabilityText||'—';
+
+  // App-121: once a hole is completed its score is no longer probabilistic.
+  // Lock completed holes as point masses and calculate the chance only across
+  // the uncertainty that genuinely remains.
+  Object.assign(plan,WP_liveLockedProbabilitySummary(plan));
+  if(Number.isFinite(Number(plan.liveTargetProbability))){
+    plan.targetProbability=Number(plan.liveTargetProbability);
+    plan.targetProbabilityText=plan.liveTargetProbabilityText;
+  }
+
   plan.probabilityChange=(Number.isFinite(plan.targetProbability)&&Number.isFinite(plan.originalTargetProbability))
     ? plan.targetProbability-plan.originalTargetProbability : NaN;
   return plan;
@@ -18077,8 +18239,8 @@ function WP_liveScoringCaddie(plan){
     why='Being ahead is valuable only if you keep the big number off the card.';
     tone='good';
   }else if(delta<=-2){
-    mode='NO PANIC';
-    headline=`You are ${Math.abs(delta)} behind the original route`;
+    mode='DON’T CHASE';
+    headline=`You are ${Math.abs(delta)} behind — do not win it back immediately`;
     const futureTxt=bestRecovery.length?bestRecovery.map(h=>`H${h.hole}`).join(' and '):'later holes';
     if(routeNeedsGain && opportunityScore(next)>=opportunityScore(bestRecovery[0])){
       instruction=`H${next.hole} is one of your better recovery chances. Commit to the planned ${isGross?`${next.targetGross} gross`:`${next.targetPts} points`}, but do not chase a miracle score.`;
@@ -18593,9 +18755,13 @@ function WP_OnCourseMode({
   const next1=Number.isFinite(next1No)?holes.find(h=>h.hole===next1No)||null:null;
   const next2=Number.isFinite(next2No)?holes.find(h=>h.hole===next2No)||null:null;
   const delta=Number(liveResult.deltaVsOriginal)||0;
-  const prob=liveResult.targetProbabilityText||'—';
+  const prob=liveResult.liveTargetProbabilityText||liveResult.targetProbabilityText||'—';
   const status=liveResult.status||'ON PLAN';
   const mobileCaddie=WP_liveScoringCaddie(liveResult);
+  const courseMemory=React.useMemo(()=>WP_courseMemory(player,courseKey),[player,courseKey]);
+  const liveLadder=(liveResult.liveProbabilityLadder||[]).filter(x=>Math.abs(Number(x.target)-Number(liveResult.liveTarget))<=3).slice(0,7);
+  const confidence=String(liveResult.probabilityDataConfidence||'LOW');
+  const knownCourse=!!courseMemory.known;
 
   const setScore=(holeNo,val)=>{
     setLiveScores(prev=>{
@@ -18711,6 +18877,7 @@ function WP_OnCourseMode({
   const backTargetGross=sumBy(backNine,'targetGross');
   const frontTargetPts=sumBy(frontNine,'targetPts');
   const backTargetPts=sumBy(backNine,'targetPts');
+  const postIntel=roundComplete?WP_postRoundIntelligence(liveResult,totalGross18,totalPts18):null;
 
   const saveRoundToHistory=async()=>{
     if(!roundComplete||historySaveState.status==='saving')return;
@@ -18722,6 +18889,12 @@ function WP_OnCourseMode({
       // A permanent saved round is no longer resumable. Remove every temporary
       // autosave slot for this player/course so old "Resume" cards cannot linger.
       WP_clearAllLiveRoundsForPlayerCourse(player?.name,courseKey);
+      const transientPlan=WP_loadLatestPreRoundPlanSnapshot();
+      if(transientPlan &&
+         WP_norm(transientPlan.playerName)===WP_norm(player?.name) &&
+         String(transientPlan.courseKey||"")===String(courseKey||"")){
+        WP_clearPreRoundPlanSnapshot();
+      }
 
       setHistorySaveState({status:'saved',message:result.duplicate?'This round is already in performance history.':(result.warning||'Saved to permanent performance history.')});
       onHistorySaved?.(record,result);
@@ -18740,7 +18913,7 @@ function WP_OnCourseMode({
         .oc-scorebar{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin-top:9px}
         .oc-stat{background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.12);border-radius:11px;padding:7px 6px;text-align:center}.oc-stat-k{font-size:7px;font-weight:900;letter-spacing:.07em;text-transform:uppercase;opacity:.68}.oc-stat-v{font-size:18px;font-weight:950;line-height:1.05;margin-top:2px}
         .oc-body{padding:12px 12px calc(18px + env(safe-area-inset-bottom));max-width:760px;width:100%;margin:0 auto}
-        .oc-status{border-radius:14px;padding:10px 12px;background:#eef2ff;border:1px solid #c7d2fe;margin-bottom:10px}.oc-status b{font-size:13px}.oc-status div{font-size:9px;color:#64748b;margin-top:2px}
+        .oc-status{border-radius:14px;padding:10px 12px;background:#eef2ff;border:1px solid #c7d2fe;margin-bottom:10px}.oc-status b{font-size:13px}.oc-status div{font-size:9px;color:#64748b;margin-top:2px}.oc-intel{border-radius:18px;border:1px solid #dbe5ee;background:#fff;padding:12px;margin-bottom:10px}.oc-intel-head{display:flex;justify-content:space-between;gap:8px;align-items:center}.oc-intel-k{font-size:8px;font-weight:950;letter-spacing:.12em;text-transform:uppercase;color:#64748b}.oc-intel-v{font-size:11px;font-weight:950;color:#0f172a}.oc-ladder{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:9px}.oc-ladder-cell{border:1px solid #e2e8f0;border-radius:12px;padding:8px;text-align:center;background:#f8fafc}.oc-ladder-cell.current{background:#ecfdf5;border-color:#6ee7b7}.oc-ladder-t{font-size:8px;font-weight:900;color:#64748b;text-transform:uppercase}.oc-ladder-p{font-size:18px;font-weight:950;margin-top:2px}.oc-target-suggestion{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}.oc-target-box{border-radius:12px;padding:8px;border:1px solid #e2e8f0}.oc-target-box.stretch{background:#eff6ff;border-color:#bfdbfe}.oc-target-box.safe{background:#f8fafc}.oc-target-box b{font-size:13px}.oc-target-box div{font-size:8px;color:#64748b;margin-top:2px}.oc-memory{margin-top:8px;font-size:9px;color:#475569;line-height:1.4}.oc-memory strong{color:#0f172a}.oc-postintel{margin-top:12px;border:2px solid #bfdbfe;border-radius:18px;background:#eff6ff;padding:12px;text-align:left}.oc-post-title{font-size:15px;font-weight:950;color:#0f172a}.oc-post-copy{font-size:10px;color:#475569;line-height:1.4;margin-top:4px}.oc-post-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:9px}.oc-post-stat{border:1px solid #bfdbfe;border-radius:12px;background:#fff;padding:8px;text-align:center}.oc-post-stat b{font-size:18px}.oc-post-stat div{font-size:7px;text-transform:uppercase;font-weight:900;color:#64748b;margin-top:2px}.oc-leaks{margin-top:9px;display:flex;gap:5px;flex-wrap:wrap}.oc-leak{border-radius:999px;background:#fff1f2;border:1px solid #fecdd3;padding:5px 8px;font-size:9px;font-weight:900;color:#9f1239}
         .oc-caddie{border-radius:20px;padding:14px 15px;margin-bottom:10px;border:2px solid #cbd5e1;background:#fff;box-shadow:0 10px 26px rgba(15,23,42,.08)}.oc-caddie.good{background:linear-gradient(160deg,#ecfdf5,#fff);border-color:#86efac}.oc-caddie.warn{background:linear-gradient(160deg,#fffbeb,#fff);border-color:#fbbf24}.oc-caddie.normal{background:linear-gradient(160deg,#eff6ff,#fff);border-color:#93c5fd}.oc-caddie-mode{font-size:9px;font-weight:950;letter-spacing:.14em;text-transform:uppercase;color:#08775f}.oc-caddie-head{font-size:21px;font-weight:950;line-height:1.05;margin-top:4px}.oc-caddie-inst{font-size:13px;font-weight:850;line-height:1.35;margin-top:7px;color:#1e293b}.oc-caddie-why{font-size:10px;color:#64748b;line-height:1.35;margin-top:5px}.oc-caddie-recovery{margin-top:9px;padding-top:8px;border-top:1px solid #dbe5ee;font-size:10px;color:#475569}.oc-caddie-recovery b{color:#0f172a}
         .oc-current{border-radius:24px;border:2px solid #cbd5e1;background:#fff;padding:16px;box-shadow:0 14px 34px rgba(15,23,42,.10);min-height:48vh;display:flex;flex-direction:column;justify-content:space-between}
         .oc-current.oc-primary{background:linear-gradient(160deg,#ecfdf5,#ffffff);border-color:#6ee7b7}.oc-current.oc-stretch{background:linear-gradient(160deg,#fffbeb,#fff);border-color:#fbbf24}.oc-current.oc-opportunity{background:linear-gradient(160deg,#eff6ff,#fff);border-color:#93c5fd}.oc-current.oc-danger{background:linear-gradient(160deg,#fff7ed,#fff);border-color:#fdba74}.oc-current.oc-played{background:#eef2ff;border-color:#c7d2fe}
@@ -18752,7 +18925,7 @@ function WP_OnCourseMode({
         .oc-next-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:10px}.oc-next-card{border:1px solid #dbe5ee;border-radius:17px;background:#fff;padding:11px}.oc-next-card.oc-primary{background:#ecfdf5;border-color:#a7f3d0}.oc-next-card.oc-stretch{background:#fffbeb;border-color:#fde68a}.oc-next-card.oc-opportunity{background:#eff6ff;border-color:#bfdbfe}.oc-next-card.oc-danger{background:#fff7ed;border-color:#fed7aa}
         .oc-next-top{display:flex;justify-content:space-between;gap:6px;font-size:8px;font-weight:950;color:#64748b}.oc-next-main{display:flex;justify-content:space-between;align-items:end;margin-top:5px}.oc-mini-k{font-size:7px;font-weight:900;color:#64748b}.oc-mini-gross{font-size:34px;font-weight:950;line-height:1}.oc-mini-points{font-size:13px;font-weight:950}.oc-mini-tag{font-size:9px;font-weight:950;margin-top:6px}.oc-mini-advice{font-size:9px;color:#64748b;line-height:1.3;margin-top:4px}
         .oc-change{margin-top:10px;border-radius:14px;border:1px solid #dbe5ee;background:#fff;padding:10px}.oc-change-title{font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.1em;color:#64748b}.oc-change-text{font-size:11px;font-weight:850;color:#334155;margin-top:3px}.oc-complete{border-radius:24px;border:1px solid #dbe5ee;background:#fff;padding:14px;box-shadow:0 14px 34px rgba(15,23,42,.08)}.oc-complete-head{text-align:center;padding:8px 4px 14px}.oc-complete-title{font-size:28px;font-weight:950;letter-spacing:-.035em;color:#0f172a}.oc-complete-sub{font-size:11px;color:#64748b;margin-top:4px}.oc-history-save{margin-top:14px;border:2px solid #a7f3d0;border-radius:18px;background:#ecfdf5;padding:12px;text-align:left}.oc-history-save-title{font-size:13px;font-weight:950;color:#065f46}.oc-history-save-sub{font-size:9px;line-height:1.4;color:#64748b;margin-top:3px}.oc-history-btn{width:100%;min-height:56px;margin-top:10px;border:0;border-radius:16px;background:#047857;color:#fff;font-size:14px;font-weight:950}.oc-history-btn:disabled{opacity:.55}.oc-history-msg{margin-top:8px;font-size:10px;font-weight:900;color:#065f46}.oc-history-msg.err{color:#be123c}.oc-complete-counts{display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-top:10px}.oc-score-totals{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.oc-nine-card{border:1px solid #cbd5e1;border-radius:15px;background:#f8fafc;padding:10px}.oc-nine-card.total{background:linear-gradient(145deg,#0f172a,#1e293b);border-color:#0f172a;color:#fff}.oc-nine-title{font-size:8px;font-weight:950;letter-spacing:.09em;text-transform:uppercase;color:#64748b}.oc-nine-card.total .oc-nine-title{color:#cbd5e1}.oc-nine-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px}.oc-nine-stat{min-width:0}.oc-nine-k{font-size:7px;font-weight:900;text-transform:uppercase;letter-spacing:.06em;color:#94a3b8}.oc-nine-v{font-size:23px;font-weight:950;line-height:1;margin-top:2px;color:#0f172a}.oc-nine-card.total .oc-nine-v{color:#fff}.oc-nine-sub{font-size:7px;color:#94a3b8;margin-top:3px}.oc-total-gross{margin-top:9px;border-top:1px solid rgba(148,163,184,.35);padding-top:8px}.oc-total-gross .oc-nine-v{font-size:31px}.oc-count{border-radius:13px;padding:9px;text-align:center;border:1px solid #e2e8f0}.oc-count.good{background:#ecfdf5;border-color:#86efac}.oc-count.bad{background:#fff1f2;border-color:#fda4af}.oc-count.on{background:#f8fafc}.oc-count-v{font-size:22px;font-weight:950}.oc-count-k{font-size:8px;font-weight:950;text-transform:uppercase;letter-spacing:.08em;color:#64748b}.oc-result-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin-top:12px}.oc-result{border-radius:14px;border:1px solid #e2e8f0;padding:9px;background:#f8fafc}.oc-result.better{background:#dcfce7;border-color:#4ade80;box-shadow:inset 0 0 0 1px rgba(22,163,74,.08)}.oc-result.worse{background:#fee2e2;border-color:#fb7185;box-shadow:inset 0 0 0 1px rgba(225,29,72,.08)}.oc-result.on{background:#f8fafc;border-color:#cbd5e1}.oc-result-h{display:flex;justify-content:space-between;gap:6px;align-items:center;font-size:9px;font-weight:950}.oc-result-main{display:flex;align-items:end;justify-content:space-between;gap:7px;margin-top:5px}.oc-result-actual{font-size:25px;font-weight:950;line-height:1}.oc-result-target{font-size:8px;color:#64748b;text-align:right}.oc-result-delta{font-size:9px;font-weight:950;margin-top:5px}.oc-result.better .oc-result-delta{color:#15803d}.oc-result.worse .oc-result-delta{color:#be123c}.oc-result.on .oc-result-delta{color:#64748b}.oc-legend{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:9px;font-weight:900;color:#64748b}.oc-dot{display:inline-block;width:9px;height:9px;border-radius:3px;margin-right:4px;vertical-align:-1px}.oc-dot.good{background:#86efac}.oc-dot.bad{background:#fda4af}.oc-dot.on{background:#cbd5e1}
-        @media(max-width:430px){.oc-score-totals{grid-template-columns:1fr 1fr}.oc-nine-card.total{grid-column:1/-1}.oc-result-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-stat-v{font-size:16px}.oc-gross{font-size:82px}.oc-current{min-height:42vh}.oc-advice{font-size:12px}.oc-caddie-head{font-size:20px}.oc-next-grid{grid-template-columns:1fr}.oc-scorebar{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}.oc-stat{padding:6px 3px}}
+        @media(max-width:430px){.oc-ladder{grid-template-columns:repeat(3,minmax(0,1fr))}.oc-target-suggestion{grid-template-columns:1fr 1fr}.oc-score-totals{grid-template-columns:1fr 1fr}.oc-nine-card.total{grid-column:1/-1}.oc-result-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.oc-stat-v{font-size:16px}.oc-gross{font-size:82px}.oc-current{min-height:42vh}.oc-advice{font-size:12px}.oc-caddie-head{font-size:20px}.oc-next-grid{grid-template-columns:1fr}.oc-scorebar{grid-template-columns:repeat(5,minmax(0,1fr));gap:4px}.oc-stat{padding:6px 3px}}
       `}</style>
 
       <div className="oc-wrap">
@@ -18787,6 +18960,46 @@ function WP_OnCourseMode({
                   : `Need ${liveResult.requiredRate.toFixed(2)} pts/hole from here to reach ${liveResult.liveTarget}.`)
               : 'Round complete.'}</div>
           </div>
+
+          {!roundComplete?<div className="oc-intel">
+            <div className="oc-intel-head">
+              <div>
+                <div className="oc-intel-k">LIVE TARGET INTELLIGENCE</div>
+                <div className="oc-intel-v">{knownCourse?`${courseMemory.rounds} previous round${courseMemory.rounds===1?'':'s'} here`:"FIRST / LOW-HISTORY COURSE"} · Confidence {confidence}</div>
+              </div>
+              <div style={{fontSize:20,fontWeight:950,color:"#047857"}}>{prob}</div>
+            </div>
+
+            {liveLadder.length?<div className="oc-ladder">
+              {liveLadder.map(x=><div key={x.target} className={`oc-ladder-cell ${Number(x.target)===Number(liveResult.liveTarget)?'current':''}`}>
+                <div className="oc-ladder-t">{liveMode==='gross'?`${x.target} OR BETTER`:`${x.target}+ PTS`}</div>
+                <div className="oc-ladder-p">{WP_probPctText(x.prob)}</div>
+              </div>)}
+            </div>:null}
+
+            <div className="oc-target-suggestion">
+              <div className="oc-target-box stretch">
+                <b>{liveResult.liveStretchTarget
+                  ? (liveMode==='gross'?`${liveResult.liveStretchTarget.target} gross`:`${liveResult.liveStretchTarget.target} pts`)
+                  : '—'}</b>
+                <div>STRETCH OPPORTUNITY{liveResult.liveStretchTarget?` · ${WP_probPctText(liveResult.liveStretchTarget.prob)}`:''}</div>
+              </div>
+              <div className="oc-target-box safe">
+                <b>{liveResult.liveSafeTarget
+                  ? (liveMode==='gross'?`${liveResult.liveSafeTarget.target} gross`:`${liveResult.liveSafeTarget.target} pts`)
+                  : (liveMode==='gross'?`${liveResult.liveTarget} gross`:`${liveResult.liveTarget} pts`)}</b>
+                <div>HIGHER-CONFIDENCE ROUTE{liveResult.liveSafeTarget?` · ${WP_probPctText(liveResult.liveSafeTarget.prob)}`:''}</div>
+              </div>
+            </div>
+
+            <div className="oc-memory">
+              {knownCourse
+                ? <><strong>Course memory:</strong> {Number.isFinite(courseMemory.bestGross)?`best ${Math.round(courseMemory.bestGross)} · `:''}{Number.isFinite(courseMemory.typicalGross)?`typical ${Math.round(courseMemory.typicalGross)} · `:''}
+                    {courseMemory.strong.length?`strong H${courseMemory.strong.slice(0,2).map(x=>x.hole).join('/')} · `:''}
+                    {courseMemory.danger.length?`respect H${courseMemory.danger.slice(0,2).map(x=>x.hole).join('/')}`:''}</>
+                : <><strong>New-course mode:</strong> predictions are based on your Par, SI, yardage, handicap and broader scoring history rather than pretending the app knows these exact holes.</>}
+            </div>
+          </div>:null}
 
           {!roundComplete?<div className={`oc-caddie ${mobileCaddie.tone||'normal'}`}>
             <div className="oc-caddie-mode">SCORING CADDIE · {mobileCaddie.mode}</div>
@@ -18858,6 +19071,20 @@ function WP_OnCourseMode({
                   </div>
                 </div>
               </div>
+
+              {postIntel?<div className="oc-postintel">
+                <div className="oc-intel-k">POST-ROUND INTELLIGENCE</div>
+                <div className="oc-post-title">{postIntel.headline}</div>
+                <div className="oc-post-copy">{postIntel.takeaway}</div>
+                <div className="oc-post-grid">
+                  <div className="oc-post-stat"><b>{postIntel.parOrBetter}</b><div>Par or better holes</div></div>
+                  <div className="oc-post-stat"><b>{postIntel.damageHoles.length}</b><div>2+ shot damage holes</div></div>
+                  <div className="oc-post-stat"><b>{Number.isFinite(postIntel.sixteenHoleEquivalent)?Math.round(postIntel.sixteenHoleEquivalent):'—'}</b><div>Score minus worst 2 route losses</div></div>
+                </div>
+                {postIntel.worst?.length?<div className="oc-leaks">
+                  {postIntel.worst.map(x=><span key={x.hole} className="oc-leak">H{x.hole}: {x.actualGross} vs route {x.targetGross} ({x.lossGross>0?'+':''}{x.lossGross})</span>)}
+                </div>:null}
+              </div>:null}
 
               <div className="oc-history-save">
                 <div className="oc-history-save-title">PERFORMANCE HISTORY</div>
@@ -19060,12 +19287,13 @@ function WP_MobileOnCourseSetup({
   onResumeIntent,onFreshIntent
 }){
   const [step,setStep]=React.useState(0);
-  const [latestPlan,setLatestPlan]=React.useState(()=>WP_loadLatestPreRoundPlanSnapshot());
+  const [latestPlan,setLatestPlan]=React.useState(()=>WP_loadLatestPreRoundPlanSnapshot(players));
   const [latestLive,setLatestLive]=React.useState(()=>WP_findLatestLiveRound(players));
   const [playerSearch,setPlayerSearch]=React.useState("");
 
   React.useEffect(()=>{
     setLatestLive(WP_findLatestLiveRound(players));
+    setLatestPlan(WP_loadLatestPreRoundPlanSnapshot(players));
   },[players]);
 
   const playerName=selectedPlayers.length===1?String(selectedPlayers[0]||""):"";
@@ -19103,8 +19331,14 @@ function WP_MobileOnCourseSetup({
   const target=liveScoringMode==='gross'?Number(customGross):Number(customPoints);
   const canStart=!!playerName&&!!courseKey&&!!selectedDbTee&&!!planningEvent&&Number.isFinite(target);
 
-  const applyPlan=(r,{resume=false}={})=>{
+  const discardPreRoundPlan=()=>{
+    WP_clearPreRoundPlanSnapshot();
+    setLatestPlan(null);
+  };
+
+  const applyPlan=(r,{resume=false,consumePlan=false}={})=>{
     if(!r)return;
+    if(consumePlan)discardPreRoundPlan();
     if(resume)onResumeIntent?.(); else onFreshIntent?.();
     if(r.playerName)setSelectedPlayers([String(r.playerName)]);
     if(r.courseKey)setCourseKey(String(r.courseKey));
@@ -19144,7 +19378,6 @@ function WP_MobileOnCourseSetup({
     setStep(1);
   };
 
-  const recentPlanToday=latestPlan&&latestPlan.date===new Date().toISOString().slice(0,10);
   const stepTitle=step===0?"Ready to play?"
     :step===1?"Who is playing?"
     :step===2?"Where are you playing?"
@@ -19161,7 +19394,7 @@ function WP_MobileOnCourseSetup({
       .mq-card{border:1px solid #dbe5ee;background:#fff;border-radius:25px;padding:16px;box-shadow:0 14px 34px rgba(15,23,42,.08)}
       .mq-progress{display:flex;gap:5px;margin-bottom:14px}.mq-dot{height:5px;flex:1;border-radius:999px;background:#e2e8f0}.mq-dot.on{background:#10b981}
       .mq-k{font-size:9px;font-weight:950;letter-spacing:.13em;text-transform:uppercase;color:#64748b}.mq-title{font-size:29px;font-weight:950;line-height:1.02;letter-spacing:-.035em;margin-top:4px}.mq-sub{font-size:12px;color:#64748b;line-height:1.4;margin-top:6px}
-      .mq-stack{display:flex;flex-direction:column;gap:10px;margin-top:15px}.mq-big{width:100%;min-height:68px;border-radius:19px;border:1px solid #cbd5e1;background:#fff;padding:13px 14px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:950;touch-action:manipulation}.mq-big.primary{border:2px solid #6ee7b7;background:linear-gradient(145deg,#ecfdf5,#fff)}.mq-big.resume{border:2px solid #c4b5fd;background:linear-gradient(145deg,#f5f3ff,#fff)}.mq-big-title{font-size:17px;font-weight:950}.mq-big-sub{font-size:10px;font-weight:700;color:#64748b;margin-top:3px;line-height:1.3}.mq-arrow{font-size:25px;color:#64748b}
+      .mq-stack{display:flex;flex-direction:column;gap:10px;margin-top:15px}.mq-saved-plan-wrap{display:flex;flex-direction:column;gap:4px}.mq-discard-plan{align-self:flex-end;border:0;background:transparent;padding:5px 8px;font-size:9px;font-weight:950;color:#be123c;text-decoration:underline}.mq-big{width:100%;min-height:68px;border-radius:19px;border:1px solid #cbd5e1;background:#fff;padding:13px 14px;text-align:left;display:flex;align-items:center;justify-content:space-between;gap:12px;font-weight:950;touch-action:manipulation}.mq-big.primary{border:2px solid #6ee7b7;background:linear-gradient(145deg,#ecfdf5,#fff)}.mq-big.resume{border:2px solid #c4b5fd;background:linear-gradient(145deg,#f5f3ff,#fff)}.mq-big-title{font-size:17px;font-weight:950}.mq-big-sub{font-size:10px;font-weight:700;color:#64748b;margin-top:3px;line-height:1.3}.mq-arrow{font-size:25px;color:#64748b}
       .mq-label{font-size:9px;font-weight:950;text-transform:uppercase;letter-spacing:.1em;color:#64748b;margin:14px 0 5px}.mq-select,.mq-number{width:100%;min-height:56px;border:2px solid #cbd5e1;border-radius:16px;background:#fff;padding:0 14px;font-size:17px;font-weight:950;color:#0f172a}
       .mq-search{width:100%;min-height:52px;border:2px solid #cbd5e1;border-radius:16px;background:#fff;padding:0 14px;font-size:16px;font-weight:800;color:#0f172a;outline:none}.mq-search:focus{border-color:#6ee7b7;box-shadow:0 0 0 3px rgba(16,185,129,.10)}
       .mq-player-list{display:flex;flex-direction:column;gap:8px;margin-top:10px;max-height:50vh;overflow:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px}
@@ -19194,9 +19427,12 @@ function WP_MobileOnCourseSetup({
             {latestLive?<button className="mq-big resume" onClick={()=>applyPlan(latestLive,{resume:true})}>
               <div><div className="mq-big-title">▶ Resume saved round</div><div className="mq-big-sub">{latestLive.playerName} · {latestLive.courseName||latestLive.courseKey} · {latestLive.__completed}/18 holes completed</div></div><div className="mq-arrow">→</div>
             </button>:null}
-            {latestPlan?<button className="mq-big primary" onClick={()=>applyPlan(latestPlan,{resume:false})}>
-              <div><div className="mq-big-title">{recentPlanToday?"✓ Use today's pre-round plan":"Use latest pre-round plan"}</div><div className="mq-big-sub">{latestPlan.playerName} · {latestPlan.courseName||latestPlan.courseKey} · {latestPlan.target} {latestPlan.liveMode==='gross'?'gross':'pts'}{latestPlan.teeName?` · ${latestPlan.teeName}`:''}</div></div><div className="mq-arrow">→</div>
-            </button>:null}
+            {latestPlan?<div className="mq-saved-plan-wrap">
+              <button className="mq-big primary" onClick={()=>applyPlan(latestPlan,{resume:false,consumePlan:true})}>
+                <div><div className="mq-big-title">✓ Use today's pre-round plan</div><div className="mq-big-sub">{latestPlan.playerName} · {latestPlan.courseName||latestPlan.courseKey} · {latestPlan.target} {latestPlan.liveMode==='gross'?'gross':'pts'}{latestPlan.teeName?` · ${latestPlan.teeName}`:''}</div></div><div className="mq-arrow">→</div>
+              </button>
+              <button type="button" className="mq-discard-plan" onClick={discardPreRoundPlan}>Discard this plan</button>
+            </div>:null}
             <button className="mq-big" onClick={newRound}>
               <div><div className="mq-big-title">＋ Start a different round</div><div className="mq-big-sub">Quickly choose player, course, tee and target.</div></div><div className="mq-arrow">→</div>
             </button>
@@ -20117,8 +20353,16 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     setMobileResumeRequested(false);
     if(activeLivePlayerName&&courseKey){
       // Clear every start-hole/scoring-mode slot for this golfer/course.
-      // This prevents an old saved slot from reappearing after "Clear round".
       WP_clearAllLiveRoundsForPlayerCourse(activeLivePlayerName,courseKey);
+
+      // "Clear round" also clears the transient pre-round plan for this same
+      // golfer/course, but never touches permanent player_round_history.
+      const savedPlan=WP_loadLatestPreRoundPlanSnapshot();
+      if(savedPlan &&
+         WP_norm(savedPlan.playerName)===WP_norm(activeLivePlayerName) &&
+         String(savedPlan.courseKey||"")===String(courseKey||"")){
+        WP_clearPreRoundPlanSnapshot();
+      }
     }
     setLiveScores(Array(18).fill(""));
     setSavedLiveRound(null);
