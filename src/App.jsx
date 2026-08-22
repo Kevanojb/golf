@@ -17518,22 +17518,35 @@ function WP_loadLatestPreRoundPlanSnapshot(){
     return r&&r.version===1?r:null;
   }catch(e){ return null; }
 }
-function WP_findLatestLiveRound(){
+function WP_findLatestLiveRound(validPlayers=[]){
   try{
     if(typeof window==='undefined'||!window.localStorage)return null;
+    const validSet=new Set((validPlayers||[]).map(p=>WP_norm(typeof p==="string"?p:p?.name)).filter(Boolean));
     let best=null,bestMs=-1;
+    const stale=[];
     for(let i=0;i<window.localStorage.length;i++){
       const key=window.localStorage.key(i);
       if(!String(key||'').startsWith("den-live-round:v1:"))continue;
       try{
         const r=JSON.parse(window.localStorage.getItem(key));
-        const ms=new Date(r?.savedAt||0).getTime();
+        const pkey=WP_norm(r?.playerName);
         const completed=(r?.scores||[]).filter(v=>Number(v)>0).length;
+
+        // Remove impossible/stale cards:
+        // - golfer no longer exists in current roster/history
+        // - completed rounds should not remain resumable
+        if((validSet.size && !validSet.has(pkey)) || completed>=18){
+          stale.push(key);
+          continue;
+        }
+
+        const ms=new Date(r?.savedAt||0).getTime();
         if(r?.version===1&&completed>0&&completed<18&&Number.isFinite(ms)&&ms>bestMs){
           best={...r,__completed:completed,__storageKey:key};bestMs=ms;
         }
-      }catch{}
+      }catch{stale.push(key);}
     }
+    stale.forEach(k=>{try{window.localStorage.removeItem(k);}catch{}});
     return best;
   }catch(e){ return null; }
 }
@@ -18283,6 +18296,88 @@ function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mod
 
 // Pre-Round planner: if data is not loaded, scan ALL stored games and return to this view.
 
+
+function WP_historyRowToSeasonRound(row){
+  try{
+    const holes=Array.isArray(row?.holes)?row.holes:[];
+    const byHole=new Map(holes.map(h=>[Number(h?.hole),h]));
+    const scores=Array.isArray(row?.scores)?row.scores.slice(0,18):Array.from({length:18},(_,i)=>Number(byHole.get(i+1)?.gross)||NaN);
+    const pars=Array.from({length:18},(_,i)=>Number(byHole.get(i+1)?.par));
+    const sis=Array.from({length:18},(_,i)=>Number(byHole.get(i+1)?.si));
+    const yards=Array.from({length:18},(_,i)=>Number(byHole.get(i+1)?.yards));
+    const pts=Array.from({length:18},(_,i)=>Number(byHole.get(i+1)?.stableford));
+    const date=String(row?.played_date||"");
+    const dateMs=date?new Date(`${date}T12:00:00`).getTime():NaN;
+    const playerName=String(row?.player_name||"").trim();
+    if(!playerName||scores.filter(x=>Number(x)>0).length<9)return null;
+
+    const tee={
+      teeName:String(row?.tee_name||""),
+      pars,si:sis,yards,
+      rating:Number(row?.course_rating),
+      slope:Number(row?.course_slope)
+    };
+    const player={
+      name:playerName,
+      points:Number.isFinite(Number(row?.stableford_total))?Number(row.stableford_total):pts.reduce((s,v)=>s+(Number.isFinite(v)?v:0),0),
+      perHole:pts,
+      grossPerHole:scores.map(Number),
+      playingHcap:Number(row?.course_handicap),
+      handicap:Number(row?.course_handicap),
+      hcap:Number(row?.course_handicap),
+      handicapIndex:Number(row?.handicap_index),
+      teeLabel:String(row?.tee_name||""),
+      pars,sis,yards
+    };
+    return {
+      file:`live_caddie:${String(row?.id||Math.random())}`,
+      date,dateMs,
+      source:"live_caddie",
+      isIndividualHistorical:true,
+      roundType:"individual",
+      parsed:{
+        dateMs,
+        date,
+        courseName:String(row?.course_name||row?.course_key||""),
+        courseKey:String(row?.course_key||""),
+        isIndividualHistorical:true,
+        roundType:"individual",
+        courseTees:[tee],
+        players:[player]
+      }
+    };
+  }catch(e){
+    console.warn("Could not convert performance-history row",e);
+    return null;
+  }
+}
+function WP_historyRowsToSeasonRounds(rows){
+  return (Array.isArray(rows)?rows:[]).map(WP_historyRowToSeasonRound).filter(Boolean);
+}
+function WP_loadLocalPerformanceHistory(){
+  const rows=[];
+  try{
+    if(typeof window==="undefined"||!window.localStorage)return rows;
+    for(let i=0;i<window.localStorage.length;i++){
+      const k=window.localStorage.key(i);
+      if(!String(k||"").startsWith("den-live-history:v1:"))continue;
+      try{
+        const r=JSON.parse(window.localStorage.getItem(k));
+        if(r?.performance_history!==false)rows.push(r);
+      }catch{}
+    }
+  }catch{}
+  return rows;
+}
+function WP_mergePerformanceHistoryRows(remoteRows,localRows){
+  const byId=new Map();
+  for(const r of [...(localRows||[]),...(remoteRows||[])]){
+    const id=String(r?.id||"").trim();
+    if(id)byId.set(id,r);
+  }
+  return Array.from(byId.values()).sort((a,b)=>String(a?.played_date||"").localeCompare(String(b?.played_date||"")));
+}
+
 function WP_liveHistoryRoundId({playerName,courseKey,teeId,date,scores}){
   const raw=[WP_norm(playerName),String(courseKey||''),String(teeId||''),String(date||''),(scores||[]).map(x=>Math.round(Number(x)||0)).join('-')].join('|');
   let h=2166136261;for(let i=0;i<raw.length;i++){h^=raw.charCodeAt(i);h=Math.imul(h,16777619);}
@@ -18496,6 +18591,11 @@ function WP_OnCourseMode({
     try{
       const record=WP_buildLiveHistoryRecord({player,event,courseKey,teeId,teeName,layout:liveResult.layout,liveResult,liveScores,tempHI,tempMode,weatherContext});
       const result=await WP_saveLiveRoundToHistory(record);
+
+      // A permanent saved round is no longer resumable. Remove every temporary
+      // autosave slot for this player/course so old "Resume" cards cannot linger.
+      WP_clearAllLiveRoundsForPlayerCourse(player?.name,courseKey);
+
       setHistorySaveState({status:'saved',message:result.duplicate?'This round is already in performance history.':(result.warning||'Saved to permanent performance history.')});
       onHistorySaved?.(record,result);
     }catch(e){setHistorySaveState({status:'error',message:String(e?.message||e||'Could not save round.')});}
@@ -18834,8 +18934,12 @@ function WP_MobileOnCourseSetup({
 }){
   const [step,setStep]=React.useState(0);
   const [latestPlan,setLatestPlan]=React.useState(()=>WP_loadLatestPreRoundPlanSnapshot());
-  const [latestLive,setLatestLive]=React.useState(()=>WP_findLatestLiveRound());
+  const [latestLive,setLatestLive]=React.useState(()=>WP_findLatestLiveRound(players));
   const [playerSearch,setPlayerSearch]=React.useState("");
+
+  React.useEffect(()=>{
+    setLatestLive(WP_findLatestLiveRound(players));
+  },[players]);
 
   const playerName=selectedPlayers.length===1?String(selectedPlayers[0]||""):"";
   const selectedPlayer=(players||[]).find(p=>String(p?.name||"")===playerName)||null;
@@ -24129,6 +24233,9 @@ const [manualPlayers,setManualPlayers] = useState(()=>{
     return Array.isArray(arr)?arr:[];
   }catch{return [];}
 });
+const [performanceHistoryRows,setPerformanceHistoryRows]=useState(()=>WP_loadLocalPerformanceHistory());
+const [performanceHistoryRevision,setPerformanceHistoryRevision]=useState(0);
+
 const [hiddenPlayerKeys, setHiddenPlayerKeys] = useState(() => {
   try {
     const raw = localStorage.getItem(VIS_LS_KEY);
@@ -24155,6 +24262,37 @@ const handleAdminPassword = React.useCallback((pw) => {
   setPlayersAdminOpen(true);
   toast("Admin unlocked ✓");
 }, []);
+
+
+React.useEffect(()=>{
+  const refresh=()=>setPerformanceHistoryRevision(v=>v+1);
+  window.addEventListener("den_player_history_changed",refresh);
+  return ()=>window.removeEventListener("den_player_history_changed",refresh);
+},[]);
+
+React.useEffect(()=>{
+  let cancelled=false;
+  (async()=>{
+    const localRows=WP_loadLocalPerformanceHistory();
+    if(!client){
+      if(!cancelled)setPerformanceHistoryRows(WP_mergePerformanceHistoryRows([],localRows));
+      return;
+    }
+    try{
+      const {data,error}=await client
+        .from("player_round_history")
+        .select("id,source,competition,performance_history,player_name,course_key,course_name,tee_id,tee_name,played_date,handicap_mode,handicap_input,handicap_index,course_handicap,gross_total,stableford_total,scores,holes,weather,created_at")
+        .eq("performance_history",true)
+        .order("played_date",{ascending:true});
+      if(error)throw error;
+      if(!cancelled)setPerformanceHistoryRows(WP_mergePerformanceHistoryRows(data||[],localRows));
+    }catch(e){
+      console.warn("Could not load player_round_history; using local history",e);
+      if(!cancelled)setPerformanceHistoryRows(WP_mergePerformanceHistoryRows([],localRows));
+    }
+  })();
+  return ()=>{cancelled=true;};
+},[client,performanceHistoryRevision]);
 
         // V2: scroll-reveal for anything with [data-reveal]
                 useEffect(() => {
@@ -24267,15 +24405,47 @@ const handleAdminPassword = React.useCallback((pw) => {
           return _filterSeasonRounds(Array.isArray(seasonRounds) ? seasonRounds : [], seasonYear, seasonLimit);
         }, [seasonRounds, seasonYear, seasonLimit]);
 
+        // App-115 PERFORMANCE MODEL ONLY:
+        // imported/Squabbit history + permanent Live Caddie history.
+        // This is deliberately NOT used by League, Eclectic or standings.
+        const liveCaddiePerformanceRounds=React.useMemo(
+          ()=>WP_historyRowsToSeasonRounds(performanceHistoryRows),
+          [performanceHistoryRows]
+        );
+        const performanceRoundsAll=React.useMemo(
+          ()=>[...(Array.isArray(seasonRounds)?seasonRounds:[]),...liveCaddiePerformanceRounds],
+          [seasonRounds,liveCaddiePerformanceRounds]
+        );
+        const performanceRoundsFiltered=React.useMemo(
+          ()=>_filterSeasonRounds(performanceRoundsAll,seasonYear,seasonLimit),
+          [performanceRoundsAll,seasonYear,seasonLimit]
+        );
+        const performanceModel=React.useMemo(()=>{
+          try{return buildSeasonPlayerModel(performanceRoundsFiltered,{hiddenKeys:hiddenKeySet});}
+          catch(e){console.error("Performance model build failed",e);return seasonModel;}
+        },[performanceRoundsFiltered,hiddenPlayerKeys]);
+        const performanceModelAllYears=React.useMemo(()=>{
+          try{return buildSeasonPlayerModel(_filterSeasonRounds(performanceRoundsAll,"All","All"),{hiddenKeys:hiddenKeySet});}
+          catch(e){console.error("All-years performance model build failed",e);return null;}
+        },[performanceRoundsAll,hiddenPlayerKeys]);
+
+        React.useEffect(()=>{
+          const ps=performanceModel?.players||[];
+          if(!ps.length)return;
+          if(!seasonPlayer||!ps.some(p=>String(p?.name||"")===String(seasonPlayer))){
+            setSeasonPlayer(String(ps[0]?.name||""));
+          }
+        },[performanceModel,seasonPlayer]);
+
+
         // Pre-Round Intelligence deliberately ignores the Season Analysis year/window.
         // It uses every stored round from every year, while player handicaps are
         // sourced separately from the current calendar-year handicap export logic.
         const preRoundModelAllYears = React.useMemo(() => {
           try {
-            const all = _filterSeasonRounds(Array.isArray(seasonRounds) ? seasonRounds : [], "All", "All");
-            return buildSeasonPlayerModel(all, { hiddenKeys: hiddenKeySet });
+            return performanceModelAllYears || buildSeasonPlayerModel(_filterSeasonRounds(performanceRoundsAll,"All","All"), { hiddenKeys: hiddenKeySet });
           } catch (e) { return null; }
-        }, [seasonRounds, hiddenPlayerKeys]);
+        }, [performanceModelAllYears,performanceRoundsAll,hiddenPlayerKeys]);
 
         const preRoundModelWithManualPlayers = React.useMemo(()=>{
           const base=preRoundModelAllYears
@@ -27036,7 +27206,7 @@ if (res.error) toast("Error: " + res.error.message);
   <PreRoundPlannerView
     seasonModel={preRoundModelWithManualPlayers}
     manualPlayers={manualPlayers}
-    seasonRoundsAllYears={seasonRounds}
+    seasonRoundsAllYears={performanceRoundsAll}
     currentYear={new Date().getFullYear()}
     setView={setView}
     runSeasonAnalysis={loadAllGamesAndBuildPlayerModel}
@@ -27045,7 +27215,7 @@ if (res.error) toast("Error: " + res.error.message);
 
 {view === "player_progress" && (
   <PlayerProgressView
-    seasonModel={seasonModel}
+    seasonModel={performanceModel||seasonModel}
                   seasonFiles={seasonFiles}
     reportNextHcapMode={reportNextHcapMode}
     setReportNextHcapMode={setReportNextHcapMode}
