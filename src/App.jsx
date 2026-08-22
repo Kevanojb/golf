@@ -16343,12 +16343,18 @@ function WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,tempMode=
   //    b) FIXED mode: use the entered number directly as the playing handicap,
   //       with no Slope/Rating conversion (useful for society/corporate games
   //       where a fixed handicap is issued outside the Den Society).
-  const denHandicap=WP_latestPlayerHcap(p,handicapMap);
+  const denHandicap=WP_playerStoredDen(p,handicapMap);
+  const storedWHS=WP_playerStoredWHS(p);
   const overrideRaw=String(tempHI??"").trim();
   const override=overrideRaw==="" ? NaN : Number(overrideRaw);
   const temporaryHI=Number.isFinite(override)&&override>=0;
-  const temporaryMode=String(tempMode||"whs").toLowerCase()==="fixed" ? "fixed" : "whs";
-  const hi=temporaryHI ? override : denHandicap;
+  const requestedMode=String(tempMode||"den").toLowerCase();
+  const temporaryMode=requestedMode==="fixed"?"fixed":requestedMode==="whs"?"whs":"den";
+  const hasDen=Number.isFinite(denHandicap);
+  const hasStoredWHS=Number.isFinite(storedWHS);
+  const useStoredWHS=!temporaryHI && !hasDen && hasStoredWHS;
+  const effectiveMode=temporaryHI?temporaryMode:(useStoredWHS?"whs":"den");
+  const hi=temporaryHI ? override : (useStoredWHS?storedWHS:denHandicap);
   const slope=WP_num(base?.teeSlope,base?.slope,base?.slopeRating,base?.courseSlope);
   const rating=WP_num(base?.teeRating,base?.rating,base?.courseRating);
 
@@ -16357,37 +16363,33 @@ function WP_layoutForPlayer(model,event,p,courseKey,handicapMap,tempHI,tempMode=
   let handicapMethodLabel="Den Society fixed handicap";
   let usedWHSFallback=false;
 
-  if(temporaryHI){
-    if(temporaryMode==="fixed"){
-      handicapMethod="TEMP_FIXED";
-      handicapMethodLabel="Temporary fixed playing handicap";
-      ch=Math.round(override);
-    }else{
-      handicapMethod="TEMP_WHS";
-      handicapMethodLabel="Temporary HI → WHS Course Handicap";
-      try{
-        if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0&&typeof WHS_courseHandicap==="function"){
-          ch=WHS_courseHandicap(hi,slope,rating,parTotal);
-        }
-      }catch(_){ }
-      // If the course does not contain enough WHS tee data, preserve usability but
-      // make the fallback explicit in the generated plan.
-      if(!Number.isFinite(ch)){
-        usedWHSFallback=true;
-        ch=Math.round(WP_num(base?.courseHandicap,base?.playingHcap,base?.hcap,hi,0));
+  if(effectiveMode==="fixed" && temporaryHI){
+    handicapMethod="TEMP_FIXED";
+    handicapMethodLabel="Temporary fixed playing handicap";
+    ch=Math.round(override);
+  }else if(effectiveMode==="whs"){
+    handicapMethod=useStoredWHS?"ROSTER_WHS":"TEMP_WHS";
+    handicapMethodLabel=useStoredWHS?"Stored WHS Index → Course Handicap":"Temporary HI → WHS Course Handicap";
+    try{
+      if(Number.isFinite(hi)&&Number.isFinite(slope)&&slope>0&&Number.isFinite(rating)&&parTotal>0&&typeof WHS_courseHandicap==="function"){
+        ch=WHS_courseHandicap(hi,slope,rating,parTotal);
       }
+    }catch(_){ }
+    if(!Number.isFinite(ch)){
+      usedWHSFallback=true;
+      ch=Math.round(WP_num(base?.courseHandicap,base?.playingHcap,base?.hcap,hi,0));
     }
   }else{
-    // Den Society mode: the exported/current Den handicap IS the playing handicap.
-    // Only round here because SI allocation requires a whole number of strokes.
+    handicapMethod="DEN_FIXED";
+    handicapMethodLabel="Den Society fixed handicap";
     ch=Math.round(WP_num(denHandicap,base?.playingHcap,base?.hcap,0));
   }
 
   ch=Math.max(0,Math.round(ch||0));
   return {
     round:base,pars:ps,si:sis,yards:ys,parTotal,
-    hi,denHandicap,ch,teeName:WP_tee(base),slope,rating,temporaryHI,temporaryMode,
-    handicapMethod,handicapMethodLabel,usedWHSFallback,
+    hi,denHandicap,storedWHS,ch,teeName:WP_tee(base),slope,rating,temporaryHI,temporaryMode:effectiveMode,
+    handicapMethod,handicapMethodLabel,usedWHSFallback,isDenSociety:hasDen,rosterOnly:!WP_playerHasHistory(p),
     layoutSource:(overrideRound&&WP_roundHasLayout(overrideRound))?"SUPABASE_TEE":"HISTORY"
   };
 }
@@ -18002,11 +18004,11 @@ function WP_liveScoringCaddie(plan){
   };
 }
 
-function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,tempMode="whs",liveMode="stableford",startHole=1,actualGross=[],eventOverride=null,layoutOverride=null,weatherContext=null}){
+function WP_generateLiveReplanHTML({model,courseKey,playerName,handicapMap,target,tempHI,tempMode="whs",liveMode="stableford",startHole=1,actualGross=[],eventOverride=null,layoutOverride=null,weatherContext=null,playerOverride=null}){
   try{
     const event=eventOverride||WP_findLatestEventAtCourse(model,courseKey);
     if(!event) return {ok:false,error:'Choose a course and tee before starting Live Replan.'};
-    const p=(Array.isArray(model?.players)?model.players:[]).find(x=>String(x?.name||'')===String(playerName||''));
+    const p=WP_resolvePlanningPlayer(model,playerName,playerOverride?[playerOverride]:[]);
     if(!p) return {ok:false,error:'Choose one player for Live Replan.'};
 
     const scores=(actualGross||[]).map(Number);
@@ -18113,12 +18115,26 @@ function WP_weatherGeometryHTML(ctx){
   if(!rows.length)return '';
   return `<div style="margin-top:9px"><div style="font-size:8px;font-weight:950;color:#0369a1;text-transform:uppercase;letter-spacing:.08em">Hole-by-hole wind geometry · forecast follows expected round time</div><div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin-top:5px">${rows.join('')}</div></div>`;
 }
-function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mode='winning',customTarget,tempHandicaps={},tempHandicapModes={},weatherContext=null,eventOverride=null,layoutOverride=null}){
+function WP_resolvePlanningPlayer(model,name,playerOverrides=[]){
+  const wanted=WP_norm(name);
+  return (Array.isArray(model?.players)?model.players:[]).find(p=>WP_norm(p?.name)===wanted)
+    || (Array.isArray(playerOverrides)?playerOverrides:[]).find(p=>WP_norm(p?.name)===wanted)
+    || null;
+}
+function WP_playerHasHistory(p){ try{return WP_series(p).length>0;}catch{return false;} }
+function WP_playerStoredWHS(p){ return WP_num(p?.handicapIndex,p?.handicap_index,p?.whs,p?.hi,p?.index); }
+function WP_playerStoredDen(p,handicapMap){
+  const x=handicapMap?.get?.(WP_norm(p?.name));
+  if(Number.isFinite(Number(x?.newHI)))return Number(x.newHI);
+  return WP_num(p?.denHandicap,p?.den_handicap,p?.hcap,p?.metrics?.avgHcap);
+}
+
+function WP_generateWinningPlanHTML({model,courseKey,playerNames,handicapMap,mode='winning',customTarget,tempHandicaps={},tempHandicapModes={},weatherContext=null,eventOverride=null,layoutOverride=null,playerOverrides=[]}){
   try{
     const historicEvent=WP_findLatestEventAtCourse(model,courseKey);
     const event=eventOverride||historicEvent;
     if(!event)return{ok:false,error:"Choose a course and tee first."};
-    const players=(Array.isArray(model?.players)?model.players:[]).filter(p=>(playerNames||[]).includes(String(p?.name||"")));
+    const players=(playerNames||[]).map(name=>WP_resolvePlanningPlayer(model,name,playerOverrides)).filter(Boolean);
     if(!players.length)return{ok:false,error:"Choose at least one player."};
     if(mode==='winning' && !historicEvent){
       return {ok:false,error:"This course has no previous Den competition result, so there is no evidence-based winning score yet. Choose Target Stableford Points or Target Gross Score instead."};
@@ -18765,9 +18781,14 @@ function WP_MobileOnCourseSetup({
 
   const playerName=selectedPlayers.length===1?String(selectedPlayers[0]||""):"";
   const selectedPlayer=(players||[]).find(p=>String(p?.name||"")===playerName)||null;
-  const storedMode=String(tempHandicapModes?.[playerName]||"den").toLowerCase();
+  const hasRosterDen=Number.isFinite(Number(selectedPlayer?.denHandicap??selectedPlayer?.den_handicap??selectedPlayer?.hcap));
+  const hasRosterWHS=Number.isFinite(Number(selectedPlayer?.handicapIndex??selectedPlayer?.handicap_index));
+  const defaultRosterMode=!hasRosterDen&&hasRosterWHS?"whs":"den";
+  const storedMode=String(tempHandicapModes?.[playerName]||defaultRosterMode).toLowerCase();
   const handicapMode=(storedMode==="whs"||storedMode==="fixed")?storedMode:"den";
-  const enteredHandicap=String(tempHandicaps?.[playerName]??"").trim();
+  const enteredHandicapRaw=String(tempHandicaps?.[playerName]??"").trim();
+  const storedRosterWHS=Number(selectedPlayer?.handicapIndex??selectedPlayer?.handicap_index);
+  const enteredHandicap=(enteredHandicapRaw===""&&handicapMode==="whs"&&!hasRosterDen&&Number.isFinite(storedRosterWHS))?String(storedRosterWHS):enteredHandicapRaw;
   const filteredPlayers=(players||[]).filter(p=>{
     const n=String(p?.name||"");
     return !playerSearch.trim() || n.toLowerCase().includes(playerSearch.trim().toLowerCase());
@@ -18914,6 +18935,14 @@ function WP_MobileOnCourseSetup({
                 className={`mq-player ${selected?'on':''}`}
                 onClick={()=>{
                   setSelectedPlayers([name]);
+                  const den=Number(p?.denHandicap??p?.den_handicap??p?.hcap);
+                  const whs=Number(p?.handicapIndex??p?.handicap_index);
+                  if(!Number.isFinite(den)&&Number.isFinite(whs)){
+                    setTempHandicapModes(prev=>({...prev,[name]:"whs"}));
+                    setTempHandicaps(prev=>({...prev,[name]:String(whs)}));
+                  }else if(Number.isFinite(den)){
+                    setTempHandicapModes(prev=>({...prev,[name]:"den"}));
+                  }
                   try{window.localStorage?.setItem("den-mobile-last-player",name);}catch{}
                 }}
               >
@@ -18969,17 +18998,19 @@ function WP_MobileOnCourseSetup({
         </>:null}
 
         {step===3?<>
-          <div className="mq-sub">Den Society is the default. Change it only if today's round is using a temporary WHS Index or a fixed playing handicap.</div>
+          <div className="mq-sub">{hasRosterDen
+            ?"Den Society is the default. Change it only if today's round is using a temporary WHS Index or a fixed playing handicap."
+            :"This golfer is not a Den Society handicap player. Use their WHS Index (recommended) or enter a fixed playing handicap for today's event."}</div>
 
           <div className="mq-stack">
-            <button type="button" className={`mq-big ${handicapMode==='den'?'primary':''}`} onClick={()=>{
-              if(!playerName)return;
+            <button type="button" disabled={!hasRosterDen} style={!hasRosterDen?{opacity:.45}:undefined} className={`mq-big ${handicapMode==='den'?'primary':''}`} onClick={()=>{
+              if(!playerName||!hasRosterDen)return;
               setTempHandicapModes(prev=>({...prev,[playerName]:"den"}));
               setTempHandicaps(prev=>{const n={...prev};delete n[playerName];return n;});
             }}>
               <div>
                 <div className="mq-big-title">DEN SOCIETY HANDICAP</div>
-                <div className="mq-big-sub">{Number.isFinite(storedDenHandicap)?`Use ${storedDenHandicap.toFixed(1)} directly as the playing handicap.`:"Use the latest stored Den handicap."}</div>
+                <div className="mq-big-sub">{hasRosterDen?(Number.isFinite(storedDenHandicap)?`Use ${storedDenHandicap.toFixed(1)} directly as the playing handicap.`:"Use the latest stored Den handicap."):"Not available for this golfer."}</div>
               </div>
               <div className="mq-player-check">{handicapMode==='den'?'✓':'›'}</div>
             </button>
@@ -19194,15 +19225,31 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     for(const mp of (manualPlayers||[])){
       const name=String(mp?.name||"").trim(),key=WP_norm(name);
       if(!name||!key)continue;
-      if(byKey.has(key))continue;
+      const denH=Number(mp?.den_handicap), whsH=Number(mp?.handicap_index);
+      if(byKey.has(key)){
+        const existing=byKey.get(key);
+        byKey.set(key,{
+          ...existing,
+          denHandicap:Number.isFinite(denH)?denH:Number(existing?.denHandicap),
+          handicapIndex:Number.isFinite(whsH)?whsH:Number(existing?.handicapIndex),
+          isDenSociety:Number.isFinite(denH)||existing?.isDenSociety===true,
+          manualRoster:true,
+          manualId:mp?.id||mp?.manual_id||existing?.manualId||null
+        });
+        continue;
+      }
       byKey.set(key,{
         name,
         series:[],roundSeries:[],
-        hcap:Number.isFinite(Number(mp?.den_handicap))?Number(mp.den_handicap):NaN,
-        handicapIndex:Number.isFinite(Number(mp?.handicap_index))?Number(mp.handicap_index):NaN,
+        hcap:Number.isFinite(denH)?denH:NaN,
+        denHandicap:Number.isFinite(denH)?denH:NaN,
+        handicapIndex:Number.isFinite(whsH)?whsH:NaN,
         gender:String(mp?.gender||""),
         manualRoster:true,noHistory:true,
-        metrics:{avgHcap:Number.isFinite(Number(mp?.den_handicap))?Number(mp.den_handicap):NaN}
+        isDenSociety:Number.isFinite(denH),
+        planningOnly:!Number.isFinite(denH),
+        manualId:mp?.id||mp?.manual_id||null,
+        metrics:{avgHcap:Number.isFinite(denH)?denH:NaN}
       });
     }
     return Array.from(byKey.values())
@@ -19549,6 +19596,13 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
 
   const togglePlayer = (name) => {
+    const p=players.find(x=>String(x?.name||"")===String(name));
+    const den=Number(p?.denHandicap??p?.den_handicap??p?.hcap);
+    const whs=Number(p?.handicapIndex??p?.handicap_index);
+    if(!selectedPlayers.includes(name)&&!Number.isFinite(den)&&Number.isFinite(whs)){
+      setTempHandicapModes(prev=>({...prev,[name]:"whs"}));
+      setTempHandicaps(prev=>({...prev,[name]:String(whs)}));
+    }
     setSelectedPlayers(prev => {
       if(planMode==="live") return prev.includes(name) ? [] : [name];
       return prev.includes(name) ? prev.filter(x => x !== name) : [...prev, name];
@@ -19676,7 +19730,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
           model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
           target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],
           tempMode:tempHandicapModes?.[selectedPlayers[0]]||"den",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores,eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null,
-          weatherContext:(weatherEnabled&&courseWeather)?{...courseWeather,date:weatherDate,teeTime:weatherTeeTime,location:weatherLocation,geometryByHole}:null
+          weatherContext:(weatherEnabled&&courseWeather)?{...courseWeather,date:weatherDate,teeTime:weatherTeeTime,location:weatherLocation,geometryByHole}:null,
+          playerOverride:livePlayer
         });
         if(r?.ok){
           window.__dslSeasonReportParams={
@@ -19731,7 +19786,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
           model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
           target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],tempMode:tempHandicapModes?.[selectedPlayers[0]]||"den",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores,
           eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null,
-          weatherContext:(weatherEnabled&&courseWeather)?{...courseWeather,date:weatherDate,teeTime:weatherTeeTime,location:weatherLocation,geometryByHole}:null
+          weatherContext:(weatherEnabled&&courseWeather)?{...courseWeather,date:weatherDate,teeTime:weatherTeeTime,location:weatherLocation,geometryByHole}:null,
+          playerOverride:livePlayer
         });
         if(!r?.ok){ alert(r?.error||"Could not build live replan."); return; }
         window.__dslSeasonReportParams={
@@ -19748,7 +19804,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         model:seasonModel,courseKey,playerNames:selectedPlayers,handicapMap,
         mode:planMode,customTarget:target,tempHandicaps,tempHandicapModes,
         weatherContext:(weatherEnabled&&courseWeather)?{...courseWeather,date:weatherDate,teeTime:weatherTeeTime,location:weatherLocation,geometryByHole}:null,
-        eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null
+        eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null,
+        playerOverrides:players
       });
       if (!r?.ok) { alert(r?.error || "Could not build winning plan."); return; }
       if(selectedPlayers.length===1){
