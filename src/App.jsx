@@ -18973,7 +18973,8 @@ function WP_MobileOnCourseSetup({
         </>:null}
 
         {step===1?<>
-          <div className="mq-sub">Tap your name. No fiddly dropdown — one big button per golfer. Handicap details stay automatic unless you use Advanced.</div>
+          <div className="mq-sub">Tap your name. The list combines Den history players with manually added non-Den players.</div>
+          {playersLoading?<div style={{marginTop:8,fontSize:10,fontWeight:850,color:"#0369a1"}}><span className="mq-spinner"></span>Adding Den history players…</div>:null}
           {(players||[]).length>8?<><div className="mq-label">Find golfer</div><input
             className="mq-search"
             type="search"
@@ -19004,7 +19005,14 @@ function WP_MobileOnCourseSetup({
                   try{window.localStorage?.setItem("den-mobile-last-player",name);}catch{}
                 }}
               >
-                <div className="mq-player-name">{name}</div>
+                <div>
+                  <div className="mq-player-name">{name}</div>
+                  <div style={{fontSize:8,fontWeight:900,color:"#64748b",marginTop:2}}>
+                    {p?.manualRoster && WP_playerHasHistory(p) ? "DEN HISTORY + ROSTER" :
+                     p?.manualRoster ? (p?.planningOnly ? "NON-DEN PLAYER" : "ROSTER PLAYER") :
+                     "DEN HISTORY"}
+                  </div>
+                </div>
                 <div className="mq-player-check">{selected?'✓':'›'}</div>
               </button>;
             })}
@@ -19022,7 +19030,7 @@ function WP_MobileOnCourseSetup({
               </>}
             </div>:null}
           </div>
-          <button className="mq-next" disabled={!playerName||playersLoading} onClick={()=>setStep(2)}>{playersLoading?'LOADING GOLFERS…':'NEXT · COURSE & TEE →'}</button>
+          <button className="mq-next" disabled={!playerName} onClick={()=>setStep(2)}>NEXT · COURSE & TEE →</button>
         </>:null}
 
         {step===2?<>
@@ -19370,12 +19378,13 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
   const reloadMobilePlayers=React.useCallback(async()=>{
     if(typeof runSeasonAnalysis!=="function"||mobilePlayersLoading)return;
+    mobilePlayersLoadRef.current=false;
     setMobilePlayersLoading(true);
     try{
       try{window.__WP_START_MODE="live";window.__WP_MOBILE_SETUP=true;}catch{}
       await runSeasonAnalysis({afterView:"pre_round"});
     }catch(e){
-      console.error("Could not load golfers for mobile setup",e);
+      console.error("Could not load golfer history for mobile setup",e);
     }finally{
       setMobilePlayersLoading(false);
     }
@@ -19383,11 +19392,20 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
 
   React.useEffect(()=>{
     if(!mobileQuickSetup||planMode!=="live")return;
-    if(players.length>0){
+
+    // App-113: manual roster players and historical Den players are TWO sources.
+    // Do not treat "3 manual players exist" as meaning the historical player
+    // model has loaded. We must still load season history so Den golfers are
+    // merged into the same list.
+    const historyPlayerCount=Array.isArray(seasonModel?.players)?seasonModel.players.length:0;
+    const historyReady=historyPlayerCount>0;
+
+    if(historyReady){
       mobilePlayersLoadRef.current=false;
       setMobilePlayersLoading(false);
       return;
     }
+
     if(mobilePlayersLoadRef.current)return;
     mobilePlayersLoadRef.current=true;
     setMobilePlayersLoading(true);
@@ -19396,9 +19414,9 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       typeof runSeasonAnalysis==="function"
         ? runSeasonAnalysis({afterView:"pre_round"})
         : null
-    ).catch(e=>console.error("Automatic golfer load failed",e))
+    ).catch(e=>console.error("Automatic golfer history load failed",e))
      .finally(()=>setMobilePlayersLoading(false));
-  },[mobileQuickSetup,planMode,players.length,runSeasonAnalysis]);
+  },[mobileQuickSetup,planMode,seasonModel,runSeasonAnalysis]);
 
   React.useEffect(() => {
     if (!courseKey && courses.length) setCourseKey(courses[0].key);
