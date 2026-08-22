@@ -18974,6 +18974,9 @@ function WP_MobileOnCourseSetup({
 
         {step===1?<>
           <div className="mq-sub">Tap your name. The list combines Den history players with manually added non-Den players.</div>
+          <div style={{marginTop:6,fontSize:9,fontWeight:900,color:"#64748b"}}>
+            {players.length} golfer{players.length===1?'':'s'} available · {(players||[]).filter(p=>WP_playerHasHistory(p)).length} with playing history · {(players||[]).filter(p=>p?.manualRoster&&!WP_playerHasHistory(p)).length} roster-only
+          </div>
           {playersLoading?<div style={{marginTop:8,fontSize:10,fontWeight:850,color:"#0369a1"}}><span className="mq-spinner"></span>Adding Den history players…</div>:null}
           {(players||[]).length>8?<><div className="mq-label">Find golfer</div><input
             className="mq-search"
@@ -19192,7 +19195,28 @@ function WP_MobileOnCourseSetup({
 }
 
 function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, setView, runSeasonAnalysis, manualPlayers=[] }) {
-  const historicCourses = React.useMemo(() => WP_courseOptionsFromModel(seasonModel), [seasonModel]);
+  // App-114: never rely on the already-merged seasonModel to tell us whether
+  // real historical golfers exist. Build a clean history-only model directly
+  // from the all-years rounds supplied by the parent.
+  const directHistoryModel=React.useMemo(()=>{
+    try{
+      const rounds=Array.isArray(seasonRoundsAllYears)?seasonRoundsAllYears:[];
+      return rounds.length?buildSeasonPlayerModel(rounds):null;
+    }catch(e){
+      console.error("Could not build direct all-years player history",e);
+      return null;
+    }
+  },[seasonRoundsAllYears]);
+
+  const effectiveHistoryModel=React.useMemo(()=>{
+    const directCount=(directHistoryModel?.players||[]).filter(p=>WP_playerHasHistory(p)).length;
+    if(directCount>0)return directHistoryModel;
+    const suppliedHistory=(seasonModel?.players||[]).filter(p=>WP_playerHasHistory(p));
+    if(suppliedHistory.length)return {...seasonModel,players:suppliedHistory};
+    return directHistoryModel||null;
+  },[directHistoryModel,seasonModel]);
+
+  const historicCourses = React.useMemo(() => WP_courseOptionsFromModel(effectiveHistoryModel||seasonModel), [effectiveHistoryModel,seasonModel]);
   const [dbCourses,setDbCourses]=React.useState([]);
   const [dbTees,setDbTees]=React.useState([]);
   const [courseGeometry,setCourseGeometry]=React.useState([]);
@@ -19282,12 +19306,22 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   },[dbCourses,historicCourses]);
   const players = React.useMemo(() => {
     const byKey=new Map();
-    for(const p of (Array.isArray(seasonModel?.players)?seasonModel.players:[])){
+
+    // FIRST: genuine all-years scoring history.
+    for(const p of (Array.isArray(effectiveHistoryModel?.players)?effectiveHistoryModel.players:[])){
       const name=String(p?.name||"").trim(),key=WP_norm(name);
       if(name&&key)byKey.set(key,p);
     }
-    // Mobile setup must not depend on score-history having already loaded.
-    // Supabase/manual roster golfers are valid choices immediately.
+
+    // SECOND: any supplied model players not already present. This protects
+    // compatibility with older/imported player shapes.
+    for(const p of (Array.isArray(seasonModel?.players)?seasonModel.players:[])){
+      const name=String(p?.name||"").trim(),key=WP_norm(name);
+      if(name&&key&&!byKey.has(key))byKey.set(key,p);
+    }
+
+    // THIRD: Supabase/manual roster golfers. These are additive; they must
+    // never replace or suppress a golfer who has scoring history.
     for(const mp of (manualPlayers||[])){
       const name=String(mp?.name||"").trim(),key=WP_norm(name);
       if(!name||!key)continue;
@@ -19321,7 +19355,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     return Array.from(byKey.values())
       .filter(p=>p&&String(p?.name||"").trim())
       .sort((a,b)=>String(a.name).localeCompare(String(b.name)));
-  },[seasonModel,manualPlayers]);
+  },[effectiveHistoryModel,seasonModel,manualPlayers]);
   const [courseKey, setCourseKey] = React.useState("");
   const [selectedPlayers, setSelectedPlayers] = React.useState([]);
   const [planMode, setPlanMode] = React.useState(() => {
@@ -19397,7 +19431,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     // Do not treat "3 manual players exist" as meaning the historical player
     // model has loaded. We must still load season history so Den golfers are
     // merged into the same list.
-    const historyPlayerCount=Array.isArray(seasonModel?.players)?seasonModel.players.length:0;
+    const historyPlayerCount=(effectiveHistoryModel?.players||[]).filter(p=>WP_playerHasHistory(p)).length;
     const historyReady=historyPlayerCount>0;
 
     if(historyReady){
@@ -19416,7 +19450,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         : null
     ).catch(e=>console.error("Automatic golfer history load failed",e))
      .finally(()=>setMobilePlayersLoading(false));
-  },[mobileQuickSetup,planMode,seasonModel,runSeasonAnalysis]);
+  },[mobileQuickSetup,planMode,effectiveHistoryModel,runSeasonAnalysis]);
 
   React.useEffect(() => {
     if (!courseKey && courses.length) setCourseKey(courses[0].key);
@@ -19786,7 +19820,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
   // entering On-Course Mode and causes React to blank the page.
   if(onCourseMode && planMode==="live" && selectedPlayers.length===1 && livePlayer && planningEvent){
     return <WP_OnCourseMode
-      model={seasonModel}
+      model={effectiveHistoryModel||seasonModel}
       event={planningEvent}
       courseKey={courseKey}
       player={livePlayer}
@@ -19806,7 +19840,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       onExit={()=>setOnCourseMode(false)}
       onViewFull={()=>{
         const r=WP_generateLiveReplanHTML({
-          model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
+          model:(effectiveHistoryModel||seasonModel),courseKey,playerName:selectedPlayers[0],handicapMap,
           target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],
           tempMode:tempHandicapModes?.[selectedPlayers[0]]||"den",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores,eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null,
           weatherContext:(weatherEnabled&&courseWeather)?{...courseWeather,date:weatherDate,teeTime:weatherTeeTime,location:weatherLocation,geometryByHole}:null,
@@ -19862,7 +19896,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       if(planMode==="live"){
         if(selectedPlayers.length!==1){ alert("Choose exactly one player for Live Replan."); return; }
         const r=WP_generateLiveReplanHTML({
-          model:seasonModel,courseKey,playerName:selectedPlayers[0],handicapMap,
+          model:(effectiveHistoryModel||seasonModel),courseKey,playerName:selectedPlayers[0],handicapMap,
           target:liveScoringMode==="gross"?Number(customGross):Number(customPoints),tempHI:tempHandicaps?.[selectedPlayers[0]],tempMode:tempHandicapModes?.[selectedPlayers[0]]||"den",liveMode:liveScoringMode,startHole:liveStartHole,actualGross:liveScores,
           eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null,
           weatherContext:(weatherEnabled&&courseWeather)?{...courseWeather,date:weatherDate,teeTime:weatherTeeTime,location:weatherLocation,geometryByHole}:null,
@@ -19880,7 +19914,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       }
 
       const r = WP_generateWinningPlanHTML({
-        model:seasonModel,courseKey,playerNames:selectedPlayers,handicapMap,
+        model:(effectiveHistoryModel||seasonModel),courseKey,playerNames:selectedPlayers,handicapMap,
         mode:planMode,customTarget:target,tempHandicaps,tempHandicapModes,
         weatherContext:(weatherEnabled&&courseWeather)?{...courseWeather,date:weatherDate,teeTime:weatherTeeTime,location:weatherLocation,geometryByHole}:null,
         eventOverride:planningEvent,layoutOverride:selectedDbTee?.round||null,
