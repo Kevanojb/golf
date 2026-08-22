@@ -915,7 +915,15 @@ function AdminPasswordModal({ open, onClose, onSubmit }) {
   );
 }
 
-function PlayerVisibilitySheet({ open, onClose, isAdmin, players, hiddenKeys, onSave, manualPlayers=[], onAddPlayer, onDeleteManualPlayer }) {
+
+function DG_optionalNumber(v){
+  if(v===null||v===undefined)return NaN;
+  if(typeof v==="string" && v.trim()==="")return NaN;
+  const n=Number(v);
+  return Number.isFinite(n)?n:NaN;
+}
+
+function PlayerVisibilitySheet({ open, onClose, isAdmin, players, hiddenKeys, onSave, manualPlayers=[], onAddPlayer, onUpdatePlayer, onDeleteManualPlayer }) {
   const [q, setQ] = React.useState("");
   const [draftHidden, setDraftHidden] = React.useState([]);
   const [addOpen,setAddOpen] = React.useState(false);
@@ -925,6 +933,14 @@ function PlayerVisibilitySheet({ open, onClose, isAdmin, players, hiddenKeys, on
   const [newGender,setNewGender] = React.useState("M");
   const [addBusy,setAddBusy] = React.useState(false);
   const [addMsg,setAddMsg] = React.useState("");
+  const [editKey,setEditKey]=React.useState("");
+  const [editName,setEditName]=React.useState("");
+  const [editDen,setEditDen]=React.useState("");
+  const [editWHS,setEditWHS]=React.useState("");
+  const [editGender,setEditGender]=React.useState("M");
+  const [editManualId,setEditManualId]=React.useState(null);
+  const [editBusy,setEditBusy]=React.useState(false);
+  const [editMsg,setEditMsg]=React.useState("");
   const fileRef = React.useRef(null);
 
   React.useEffect(() => {
@@ -933,6 +949,8 @@ function PlayerVisibilitySheet({ open, onClose, isAdmin, players, hiddenKeys, on
     setDraftHidden(Array.isArray(hiddenKeys) ? hiddenKeys.slice() : []);
     setAddOpen(false);
     setAddMsg("");
+    setEditKey("");
+    setEditMsg("");
   }, [open, hiddenKeys]);
 
   React.useEffect(() => {
@@ -953,10 +971,10 @@ function PlayerVisibilitySheet({ open, onClose, isAdmin, players, hiddenKeys, on
         return {
           name,key,
           source:String(p?.source||"history"),
-          denHandicap:Number.isFinite(Number(p?.den_handicap))?Number(p.den_handicap):NaN,
-          handicapIndex:Number.isFinite(Number(p?.handicap_index))?Number(p.handicap_index):NaN,
+          denHandicap:DG_optionalNumber(p?.den_handicap ?? p?.denHandicap),
+          handicapIndex:DG_optionalNumber(p?.handicap_index ?? p?.handicapIndex),
           gender:String(p?.gender||""),
-          manualId:p?.manual_id||p?.id||null
+          manualId:p?.manual_id||p?.manualId||p?.id||null
         };
       })
       .filter(r => r.name && r.key);
@@ -1029,6 +1047,55 @@ async function onImportFile(e) {
   }
 }
 
+
+  function beginEditPlayer(r){
+    setEditKey(r.key);
+    setEditName(r.name);
+    setEditDen(Number.isFinite(r.denHandicap)?String(r.denHandicap):"");
+    setEditWHS(Number.isFinite(r.handicapIndex)?String(r.handicapIndex):"");
+    setEditGender(String(r.gender||"M"));
+    setEditManualId(r.manualId||null);
+    setEditMsg("");
+  }
+
+  async function saveEditedPlayer(){
+    const name=String(editName||"").trim();
+    if(!name){setEditMsg("Player name is missing.");return;}
+    const denRaw=String(editDen??"").trim();
+    const whsRaw=String(editWHS??"").trim();
+    const den=denRaw===""?null:Number(denRaw);
+    const whs=whsRaw===""?null:Number(whsRaw);
+
+    if(den!==null&&(!Number.isFinite(den)||den<0||den>54)){
+      setEditMsg("Enter a valid Den handicap between 0 and 54, or leave it blank.");
+      return;
+    }
+    if(whs!==null&&(!Number.isFinite(whs)||whs<0||whs>54)){
+      setEditMsg("Enter a valid WHS Handicap Index between 0 and 54, or leave it blank.");
+      return;
+    }
+
+    setEditBusy(true);setEditMsg("");
+    try{
+      if(typeof onUpdatePlayer!=="function")throw new Error("Edit Player is not connected.");
+      const result=await onUpdatePlayer({
+        manual_id:editManualId,
+        name,
+        den_handicap:den,
+        handicap_index:whs,
+        gender:String(editGender||""),
+        source:"manual"
+      });
+      if(result?.ok===false)throw new Error(result.error||"Could not save player profile.");
+      setEditKey("");
+      setEditMsg("");
+    }catch(e){
+      setEditMsg(e?.message||String(e));
+    }finally{
+      setEditBusy(false);
+    }
+  }
+
   // App-88 referenced this handler in the JSX but did not actually define it.
   // That caused Manage Players to crash to a blank screen as soon as the modal rendered.
   async function submitManualPlayer(){
@@ -1087,7 +1154,7 @@ async function onImportFile(e) {
               <div className="text-xs font-black tracking-widest uppercase text-neutral-400">Admin</div>
               <div className="text-xl font-black text-neutral-900">Manage Players</div>
               <div className="text-xs text-neutral-600 mt-1">
-                Add golfers who are not in Squabbit, and control who appears in leaderboards and reports.
+                Add non-Den golfers, edit player profiles and control visibility. Historical rounds are never deleted by editing a profile.
               </div>
             </div>
             <button className="chip border-neutral-200 bg-white text-neutral-700 hover:opacity-90" onClick={onClose}>Close</button>
@@ -1142,31 +1209,61 @@ async function onImportFile(e) {
             <div className="space-y-2">
               {filtered.map((r) => {
                 const included = !hiddenSet.has(r.key);
+                const editing=editKey===r.key;
                 return (
-                  <label key={r.key} className="flex items-center justify-between gap-3 rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <div className="font-extrabold text-neutral-900 truncate">{r.name}</div>
-                        <span className={`text-[8px] font-black uppercase tracking-wider rounded-full px-2 py-0.5 ${r.source==="manual"?"bg-emerald-100 text-emerald-800":r.source==="both"?"bg-blue-100 text-blue-800":"bg-neutral-200 text-neutral-600"}`}>
-                          {r.source==="manual"?"Supabase":r.source==="both"?"Supabase + History":"History"}
-                        </span>
+                  <div key={r.key} className="rounded-2xl border border-neutral-200 bg-neutral-50 px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <div className="font-extrabold text-neutral-900 truncate">{r.name}</div>
+                          <span className={`text-[8px] font-black uppercase tracking-wider rounded-full px-2 py-0.5 ${r.source==="manual"?"bg-emerald-100 text-emerald-800":r.source==="both"?"bg-blue-100 text-blue-800":"bg-neutral-200 text-neutral-600"}`}>
+                            {r.source==="manual"?"Supabase":r.source==="both"?"Supabase + History":"History"}
+                          </span>
+                        </div>
+                        <div className="text-xs text-neutral-600 mt-0.5">
+                          {included ? "Included" : "Excluded"}
+                          {Number.isFinite(r.denHandicap)?` · Den ${r.denHandicap.toFixed(1)}`:" · Den —"}
+                          {Number.isFinite(r.handicapIndex)?` · WHS ${r.handicapIndex.toFixed(1)}`:" · WHS —"}
+                        </div>
+                        {r.source==="history"?<div className="mt-1 text-[9px] font-bold text-neutral-500">Historical rounds are protected. Editing creates a profile for this same golfer; it does not delete or detach history.</div>:null}
                       </div>
-                      <div className="text-xs text-neutral-600 mt-0.5">
-                        {included ? "Included" : "Excluded"}
-                        {Number.isFinite(r.denHandicap)?` · Den ${r.denHandicap.toFixed(1)}`:""}
-                        {Number.isFinite(r.handicapIndex)?` · WHS ${r.handicapIndex.toFixed(1)}`:""}
+                      <div className="flex items-center gap-3">
+                        <button type="button" className="text-[10px] font-black text-blue-700 underline" onClick={(e)=>{e.preventDefault();e.stopPropagation();editing?setEditKey(""):beginEditPlayer(r);}}>{editing?"Cancel":"Edit"}</button>
+                        {(r.source==="manual"||r.source==="both")&&r.manualId?<button type="button" className="text-[10px] font-black text-rose-600 underline" onClick={async(e)=>{e.preventDefault();e.stopPropagation();if(window.confirm(`Remove ${r.name} from the manual Supabase roster? Historical rounds will remain.`)) await onDeleteManualPlayer?.(r.manualId);}}>Remove</button>:null}
+                        <input
+                          type="checkbox"
+                          checked={included}
+                          onChange={(e) => toggleInclude(r.key, e.target.checked)}
+                          className="h-5 w-5"
+                        />
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      {(r.source==="manual"||r.source==="both")&&r.manualId?<button type="button" className="text-[10px] font-black text-rose-600 underline" onClick={async(e)=>{e.preventDefault();e.stopPropagation();if(window.confirm(`Remove ${r.name} from the manual Supabase roster? Historical rounds will remain.`)) await onDeleteManualPlayer?.(r.manualId);}}>Remove</button>:null}
-                      <input
-                        type="checkbox"
-                        checked={included}
-                        onChange={(e) => toggleInclude(r.key, e.target.checked)}
-                        className="h-5 w-5"
-                      />
-                    </div>
-                  </label>
+
+                    {editing?<div className="mt-3 rounded-xl border border-blue-200 bg-white p-3">
+                      <div className="text-[10px] font-black uppercase tracking-wider text-blue-700">Player profile</div>
+                      <div className="mt-1 text-[11px] text-neutral-600">
+                        Name is locked to preserve the link to existing round history.
+                      </div>
+                      <div className="mt-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-neutral-500 mb-1">Den handicap</label>
+                          <input className="w-full rounded-xl border border-neutral-200 px-3 py-2" inputMode="decimal" placeholder="Blank if non-Den" value={editDen} onChange={e=>setEditDen(e.target.value)} />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-neutral-500 mb-1">WHS Index</label>
+                          <input className="w-full rounded-xl border border-neutral-200 px-3 py-2" inputMode="decimal" placeholder="e.g. 6.4" value={editWHS} onChange={e=>setEditWHS(e.target.value)} />
+                        </div>
+                        <div>
+                          <label className="block text-[9px] font-black uppercase text-neutral-500 mb-1">Gender</label>
+                          <select className="w-full rounded-xl border border-neutral-200 px-3 py-2 bg-white" value={editGender} onChange={e=>setEditGender(e.target.value)}>
+                            <option value="M">Male</option><option value="F">Female</option><option value="">Not set</option>
+                          </select>
+                        </div>
+                      </div>
+                      {editMsg?<div className="mt-2 text-xs font-bold text-rose-600">{editMsg}</div>:null}
+                      <button type="button" className="btn-primary mt-3 w-full" disabled={editBusy} onClick={saveEditedPlayer}>{editBusy?"Saving…":"Save Player Profile"}</button>
+                    </div>:null}
+                  </div>
                 );
               })}
             </div>
@@ -18128,6 +18225,30 @@ function WP_weatherGeometryHTML(ctx){
   if(!rows.length)return '';
   return `<div style="margin-top:9px"><div style="font-size:8px;font-weight:950;color:#0369a1;text-transform:uppercase;letter-spacing:.08em">Hole-by-hole wind geometry · forecast follows expected round time</div><div style="display:grid;grid-template-columns:repeat(6,1fr);gap:4px;margin-top:5px">${rows.join('')}</div></div>`;
 }
+
+function WP_playerNamesDirectFromRounds(rounds){
+  const byKey=new Map();
+  for(const r of (Array.isArray(rounds)?rounds:[])){
+    const parsed=r?.parsed||r||{};
+    for(const p of (Array.isArray(parsed?.players)?parsed.players:[])){
+      const name=String(p?.name||"").replace(/\u00A0/g," ").replace(/\s+/g," ").trim();
+      const key=WP_norm(name);
+      if(!name||!key)continue;
+      if(typeof isTeamLike==="function" && isTeamLike(name))continue;
+      if(!byKey.has(key)){
+        byKey.set(key,{
+          name,
+          series:[],roundSeries:[],
+          directHistoryIdentity:true,
+          noHistory:false,
+          metrics:{avgHcap:NaN}
+        });
+      }
+    }
+  }
+  return Array.from(byKey.values());
+}
+
 function WP_resolvePlanningPlayer(model,name,playerOverrides=[]){
   const wanted=WP_norm(name);
   return (Array.isArray(model?.players)?model.players:[]).find(p=>WP_norm(p?.name)===wanted)
@@ -19079,7 +19200,7 @@ function WP_MobileOnCourseSetup({
         {step===1?<>
           <div className="mq-sub">Tap your name. The list combines Den history players with manually added non-Den players.</div>
           <div style={{marginTop:6,fontSize:9,fontWeight:900,color:"#64748b"}}>
-            {players.length} golfer{players.length===1?'':'s'} available · {(players||[]).filter(p=>WP_playerHasHistory(p)).length} with playing history · {(players||[]).filter(p=>p?.manualRoster&&!WP_playerHasHistory(p)).length} roster-only
+            {players.length} golfer{players.length===1?'':'s'} available · {(players||[]).filter(p=>WP_playerHasHistory(p)||p?.directHistoryIdentity).length} from stored history · {(players||[]).filter(p=>p?.manualRoster&&!WP_playerHasHistory(p)).length} roster-only
           </div>
           {playersLoading?<div style={{marginTop:8,fontSize:10,fontWeight:850,color:"#0369a1"}}><span className="mq-spinner"></span>Adding Den history players…</div>:null}
           {(players||[]).length>8?<><div className="mq-label">Find golfer</div><input
@@ -19117,6 +19238,7 @@ function WP_MobileOnCourseSetup({
                   <div style={{fontSize:8,fontWeight:900,color:"#64748b",marginTop:2}}>
                     {p?.manualRoster && WP_playerHasHistory(p) ? "DEN HISTORY + ROSTER" :
                      p?.manualRoster ? (p?.planningOnly ? "NON-DEN PLAYER" : "ROSTER PLAYER") :
+                     p?.directHistoryIdentity ? "STORED HISTORY" :
                      "DEN HISTORY"}
                   </div>
                 </div>
@@ -19320,6 +19442,15 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     return directHistoryModel||null;
   },[directHistoryModel,seasonModel]);
 
+  // App-117: identity and analytics are separate concerns.
+  // Even if a round cannot yet be fully modelled, a golfer found in raw stored
+  // rounds must still remain selectable. This prevents historical golfers
+  // disappearing when manual/non-Den players are added.
+  const directHistoryIdentities=React.useMemo(
+    ()=>WP_playerNamesDirectFromRounds(seasonRoundsAllYears),
+    [seasonRoundsAllYears]
+  );
+
   const historicCourses = React.useMemo(() => WP_courseOptionsFromModel(effectiveHistoryModel||seasonModel), [effectiveHistoryModel,seasonModel]);
   const [dbCourses,setDbCourses]=React.useState([]);
   const [dbTees,setDbTees]=React.useState([]);
@@ -19417,19 +19548,26 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
       if(name&&key)byKey.set(key,p);
     }
 
-    // SECOND: any supplied model players not already present. This protects
+    // SECOND: raw identities found directly in every stored round.
+    // This is deliberately independent of buildSeasonPlayerModel.
+    for(const p of (directHistoryIdentities||[])){
+      const name=String(p?.name||"").trim(),key=WP_norm(name);
+      if(name&&key&&!byKey.has(key))byKey.set(key,p);
+    }
+
+    // THIRD: any supplied model players not already present. This protects
     // compatibility with older/imported player shapes.
     for(const p of (Array.isArray(seasonModel?.players)?seasonModel.players:[])){
       const name=String(p?.name||"").trim(),key=WP_norm(name);
       if(name&&key&&!byKey.has(key))byKey.set(key,p);
     }
 
-    // THIRD: Supabase/manual roster golfers. These are additive; they must
+    // FOURTH: Supabase/manual roster golfers. These are additive; they must
     // never replace or suppress a golfer who has scoring history.
     for(const mp of (manualPlayers||[])){
       const name=String(mp?.name||"").trim(),key=WP_norm(name);
       if(!name||!key)continue;
-      const denH=Number(mp?.den_handicap), whsH=Number(mp?.handicap_index);
+      const denH=DG_optionalNumber(mp?.den_handicap), whsH=DG_optionalNumber(mp?.handicap_index);
       if(byKey.has(key)){
         const existing=byKey.get(key);
         byKey.set(key,{
@@ -19459,7 +19597,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     return Array.from(byKey.values())
       .filter(p=>p&&String(p?.name||"").trim())
       .sort((a,b)=>String(a.name).localeCompare(String(b.name)));
-  },[effectiveHistoryModel,seasonModel,manualPlayers]);
+  },[effectiveHistoryModel,directHistoryIdentities,seasonModel,manualPlayers]);
   const [courseKey, setCourseKey] = React.useState("");
   const [selectedPlayers, setSelectedPlayers] = React.useState([]);
   const [planMode, setPlanMode] = React.useState(() => {
@@ -19500,8 +19638,8 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     for(const mp of (manualPlayers||[])){
       const key=WP_norm(mp?.name);
       if(!key||map.has(key)) continue; // current-year Squabbit/export remains authoritative once history exists
-      const den=Number(mp?.den_handicap);
-      const whs=Number(mp?.handicap_index);
+      const den=DG_optionalNumber(mp?.den_handicap);
+      const whs=DG_optionalNumber(mp?.handicap_index);
       const h=Number.isFinite(den)?den:(Number.isFinite(whs)?whs:NaN);
       if(Number.isFinite(h)){
         map.set(key,{
@@ -19535,7 +19673,9 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
     // Do not treat "3 manual players exist" as meaning the historical player
     // model has loaded. We must still load season history so Den golfers are
     // merged into the same list.
-    const historyPlayerCount=(effectiveHistoryModel?.players||[]).filter(p=>WP_playerHasHistory(p)).length;
+    const modelHistoryCount=(effectiveHistoryModel?.players||[]).filter(p=>WP_playerHasHistory(p)).length;
+    const rawHistoryCount=(directHistoryIdentities||[]).length;
+    const historyPlayerCount=Math.max(modelHistoryCount,rawHistoryCount);
     const historyReady=historyPlayerCount>0;
 
     if(historyReady){
@@ -19554,7 +19694,7 @@ function PreRoundPlannerView({ seasonModel, seasonRoundsAllYears, currentYear, s
         : null
     ).catch(e=>console.error("Automatic golfer history load failed",e))
      .finally(()=>setMobilePlayersLoading(false));
-  },[mobileQuickSetup,planMode,effectiveHistoryModel,runSeasonAnalysis]);
+  },[mobileQuickSetup,planMode,effectiveHistoryModel,directHistoryIdentities,runSeasonAnalysis]);
 
   React.useEffect(() => {
     if (!courseKey && courses.length) setCourseKey(courses[0].key);
@@ -24448,8 +24588,9 @@ React.useEffect(()=>{
             if(!name||!key||hiddenKeySet.has(key)) continue;
             if(byKey.has(key)){
               const p=byKey.get(key);
-              if(!Number.isFinite(Number(p?.hcap)) && Number.isFinite(Number(mp?.den_handicap))) p.hcap=Number(mp.den_handicap);
-              if(!Number.isFinite(Number(p?.handicapIndex)) && Number.isFinite(Number(mp?.handicap_index))) p.handicapIndex=Number(mp.handicap_index);
+              const md=DG_optionalNumber(mp?.den_handicap), mw=DG_optionalNumber(mp?.handicap_index);
+              if(!Number.isFinite(Number(p?.hcap)) && Number.isFinite(md)) p.hcap=md;
+              if(!Number.isFinite(Number(p?.handicapIndex)) && Number.isFinite(mw)) p.handicapIndex=mw;
               p.manualRoster=true;
               continue;
             }
@@ -24457,12 +24598,12 @@ React.useEffect(()=>{
               name,
               series:[],
               roundSeries:[],
-              hcap:Number.isFinite(Number(mp?.den_handicap))?Number(mp.den_handicap):NaN,
-              handicapIndex:Number.isFinite(Number(mp?.handicap_index))?Number(mp.handicap_index):NaN,
+              hcap:DG_optionalNumber(mp?.den_handicap),
+              handicapIndex:DG_optionalNumber(mp?.handicap_index),
               gender:String(mp?.gender||""),
               manualRoster:true,
               noHistory:true,
-              metrics:{avgHcap:Number.isFinite(Number(mp?.den_handicap))?Number(mp.den_handicap):NaN}
+              metrics:{avgHcap:DG_optionalNumber(mp?.den_handicap)}
             };
             base.players.push(p); byKey.set(key,p);
           }
@@ -25849,8 +25990,8 @@ async function addManualPlayer(input){
     manual_id:(typeof crypto!=="undefined"&&crypto.randomUUID)?crypto.randomUUID():`manual-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
     name,
     normalized_name:key,
-    den_handicap:input?.den_handicap==null?null:Number(input.den_handicap),
-    handicap_index:input?.handicap_index==null?null:Number(input.handicap_index),
+    den_handicap:Number.isFinite(DG_optionalNumber(input?.den_handicap))?DG_optionalNumber(input.den_handicap):null,
+    handicap_index:Number.isFinite(DG_optionalNumber(input?.handicap_index))?DG_optionalNumber(input.handicap_index):null,
     gender:String(input?.gender||""),
     source:"manual",
     created_at:new Date().toISOString()
@@ -25859,6 +26000,56 @@ async function addManualPlayer(input){
   const res=await persistManualPlayers(next,client);
   if(res.ok) toast(`${name} added to Supabase roster ✓`);
   else toast("Player save failed: "+res.error);
+  return res;
+}
+
+
+async function upsertManualPlayerProfile(input){
+  const name=String(input?.name||"").trim();
+  const key=normalizeName(name);
+  if(!name||!key)return {ok:false,error:"Player name is required."};
+
+  const den=DG_optionalNumber(input?.den_handicap);
+  const whs=DG_optionalNumber(input?.handicap_index);
+  const denValue=Number.isFinite(den)?den:null;
+  const whsValue=Number.isFinite(whs)?whs:null;
+
+  const existingIndex=(manualPlayers||[]).findIndex(p=>{
+    if(input?.manual_id && String(p?.manual_id)===String(input.manual_id))return true;
+    return normalizeName(p?.name)===key;
+  });
+
+  let next;
+  if(existingIndex>=0){
+    next=(manualPlayers||[]).map((p,i)=>i===existingIndex?{
+      ...p,
+      name,
+      normalized_name:key,
+      den_handicap:denValue,
+      handicap_index:whsValue,
+      gender:String(input?.gender||p?.gender||""),
+      source:"manual",
+      updated_at:new Date().toISOString()
+    }:p);
+  }else{
+    // A history-only player gets a profile row with the same normalised name.
+    // Their historical rounds remain untouched and will merge as HISTORY + PROFILE.
+    next=[...(manualPlayers||[]),{
+      manual_id:(typeof crypto!=="undefined"&&crypto.randomUUID)?crypto.randomUUID():`manual-${Date.now()}-${Math.random().toString(36).slice(2,8)}`,
+      name,
+      normalized_name:key,
+      den_handicap:denValue,
+      handicap_index:whsValue,
+      gender:String(input?.gender||""),
+      source:"manual",
+      created_at:new Date().toISOString()
+    }];
+  }
+
+  next=next.slice().sort((a,b)=>String(a?.name||"").localeCompare(String(b?.name||"")));
+  const res=await persistManualPlayers(next,client);
+  if(res.ok)toast(`${name} profile saved ✓`);
+  else toast("Player profile save failed: "+res.error);
   return res;
 }
 
@@ -27163,6 +27354,7 @@ if (res.error) toast("Error: " + res.error.message);
                 hiddenKeys={hiddenPlayerKeys}
                 onSave={savePlayerVisibility}
                 onAddPlayer={addManualPlayer}
+                onUpdatePlayer={upsertManualPlayerProfile}
                 onDeleteManualPlayer={deleteManualPlayer}
               />
               <BottomStatusBar statusMsg={statusMsg} courseName={courseName} />
